@@ -196,3 +196,14 @@ stderr; the last good diagnostics stay published.
   enables phase 3 and reports a resolution error; overlay content
   overrides disk; memoization observed via a scan counter hook is NOT
   asserted (implementation detail) — only snapshot equivalence.
+- OfflineChecker, against a *real* cache (`-tags devdb`): the unit
+  tests above hand-build the catalog and the `Desc`s, so they cannot
+  catch the checker and the pipeline drifting apart in how they read
+  what a real server wrote. `TestLSPWarmCacheAgreesWithPipeline` runs a
+  cold `cli.Run` against a live PostgreSQL, then points the
+  OfflineChecker at the resulting committed cache with an unreachable
+  DSN, and asserts the two produce the **same diagnostic codes** on the
+  same workspace — the executable form of "`resolvedChecks` is the
+  single shared catalog-dependent pass; extend it, don't fork it". It
+  then evicts one oracle entry and asserts the query's catalog-
+  dependent pass is skipped wholesale (all-or-nothing).
