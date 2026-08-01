@@ -36,6 +36,11 @@ regression test.
 ## Go toolchain policy (v0.5)
 
 - The module requires **go1.27rc2** (bump to 1.27.0 when released).
+  A `go 1.26` directive + `toolchain go1.27rc2` split (keeping
+  consumers on 1.26) was considered and rejected 2026-08: it would
+  need a build-tagged v1 fallback for the LSP's json/v2 decode path
+  plus a 1.26 CI leg to test it — not worth it, and GOTOOLCHAIN=auto
+  makes the 1.27 requirement transparent for most consumers anyway.
   Released golangci-lint binaries are built with the previous stable
   Go and refuse newer targets: build it from source with the module's
   toolchain (`GOTOOLCHAIN=go1.27rc2 go install .../golangci-lint@latest`);
