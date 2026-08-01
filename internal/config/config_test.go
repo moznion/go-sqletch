@@ -72,7 +72,7 @@ func TestLoad_Validation(t *testing.T) {
 		want string // message fragment
 	}{
 		{"missing version", strings.Replace(validYAML, "version: 1\n", "", 1), "version"},
-		{"wrong dialect", strings.Replace(validYAML, "dialect: postgres", "dialect: mysql", 1), "dialect"},
+		{"wrong dialect", strings.Replace(validYAML, "dialect: postgres", "dialect: oracle", 1), "dialect"},
 		{"missing server_version", strings.Replace(validYAML, "server_version: \"16\"\n", "", 1), "server_version"},
 		{"missing schema", strings.Replace(validYAML, "schema:\n  files: [db/schema.sql]\n", "", 1), "schema.files"},
 		{"missing queries", strings.Replace(validYAML, "queries: [queries/*.sql]\n", "", 1), "queries"},

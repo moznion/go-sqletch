@@ -112,8 +112,8 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	if cfg.Version != 1 {
 		invalid("version must be 1 (got %d)", cfg.Version)
 	}
-	if cfg.Dialect != "postgres" {
-		invalid("dialect must be %q in v0.1 (got %q)", "postgres", cfg.Dialect)
+	if cfg.Dialect != "postgres" && cfg.Dialect != "mysql" {
+		invalid("dialect must be \"postgres\" or \"mysql\" (got %q)", cfg.Dialect)
 	}
 	if cfg.ServerVersion == "" {
 		invalid("server_version is required (it pins the oracle and keys the cache)")

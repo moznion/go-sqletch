@@ -11,9 +11,7 @@ import (
 
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/devdb"
 	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
 )
@@ -156,7 +154,8 @@ func printBare(w io.Writer, diags []diagnostics.Diagnostic, jsonFormat bool) {
 const enumerateCap = 4096
 
 func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Writer) int {
-	profile := postgres.Profile{}
+	drv := driverFor(cfg)
+	profile := drv.profile
 	paths, err := cfg.ExpandGlobs(cfg.Queries)
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
@@ -183,7 +182,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 			if len(want) > 0 && !want[q.Name] {
 				continue
 			}
-			keys, truncated := shape.Enumerate(q, enumerateCap)
+			keys, truncated := shape.EnumerateExpand(q, enumerateCap, drv.expandIn)
 			for _, k := range keys {
 				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
@@ -210,7 +209,8 @@ const analyzeCap = 64
 // explainAnalyze runs EXPLAIN (GENERIC_PLAN) for every enumerable
 // shape against the dev database and prints the plans.
 func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, out, errW io.Writer) int {
-	profile := postgres.Profile{}
+	drv := driverFor(cfg)
+	profile := drv.profile
 	schemaPaths, err := cfg.ExpandGlobs(cfg.Schema.Files)
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
@@ -225,17 +225,17 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		}
 		schemaSQL = append(schemaSQL, string(content))
 	}
-	conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
-		DSN:           cfg.Database.DSN,
-		ServerVersion: cfg.ServerVersion,
-		SchemaSQL:     schemaSQL,
-	})
+	o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
 		return ExitEnvironment
 	}
 	defer cleanup()
-	oracle := postgres.NewOracle(conn)
+	oracle, ok := o.(planTexter)
+	if !ok {
+		fmt.Fprintf(errW, "sqletch: %s oracle does not support explain --analyze\n", cfg.Dialect)
+		return ExitEnvironment
+	}
 
 	paths, err := cfg.ExpandGlobs(cfg.Queries)
 	if err != nil {
@@ -263,7 +263,7 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 			if len(want) > 0 && !want[q.Name] {
 				continue
 			}
-			keys, truncated := shape.Enumerate(q, analyzeCap)
+			keys, truncated := shape.EnumerateExpand(q, analyzeCap, drv.expandIn)
 			for _, k := range keys {
 				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
@@ -310,7 +310,7 @@ func Fmt(configPath string, check bool, out, errW io.Writer) int {
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
 			return ExitEnvironment
 		}
-		formatted, fdiags := template.Format(postgres.Profile{}, p, src)
+		formatted, fdiags := template.Format(driverFor(cfg).profile, p, src)
 		if diagnostics.HasErrors(fdiags) {
 			printBare(errW, fdiags, false)
 			return ExitDiagnostics

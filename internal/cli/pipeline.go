@@ -16,10 +16,8 @@ import (
 	"github.com/moznion/sqletch/internal/cache"
 	"github.com/moznion/sqletch/internal/codegen"
 	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/devdb"
 	"github.com/moznion/sqletch/internal/diagnostics"
 	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
 	"github.com/moznion/sqletch/internal/nullability"
 	"github.com/moznion/sqletch/internal/rules"
 	"github.com/moznion/sqletch/internal/shape"
@@ -60,8 +58,9 @@ type compiledQuery struct {
 // return is environmental (unreadable files, DB unreachable).
 func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	res := &Result{Sources: map[string][]byte{}}
-	profile := postgres.Profile{}
-	frontend := postgres.Frontend{}
+	drv := driverFor(cfg)
+	profile := drv.profile
+	frontend := drv.frontend
 
 	// ---- schema fingerprint (offline) -----------------------------------
 	schemaPaths, err := cfg.ExpandGlobs(cfg.Schema.Files)
@@ -149,16 +148,12 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if oracle != nil {
 			return oracle, nil
 		}
-		conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
-			DSN:           cfg.Database.DSN,
-			ServerVersion: cfg.ServerVersion,
-			SchemaSQL:     schemaSQL,
-		})
+		o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
 		if err != nil {
 			return nil, err
 		}
 		oracleCleanup = cleanup
-		oracle = postgres.NewOracle(conn)
+		oracle = o
 		return oracle, nil
 	}
 	defer func() {
@@ -207,12 +202,16 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		}
 		cq.maxTree = tree
 		res.Diags = append(res.Diags, rules.CheckResolved(cq.q, cq.rs[0], tree, cat)...)
-		res.Diags = append(res.Diags, rules.CheckTypeAgreement(cq.q, cq.rs, cq.descs)...)
-		types, d := rules.ResolveParamTypes(cq.q, cq.rs, cq.descs)
-		res.Diags = append(res.Diags, d...)
 		cq.paramTypes = map[string]dialect.TypeRef{}
-		for _, pt := range types {
-			cq.paramTypes[pt.Name] = pt.Type
+		if !drv.annotationsRequired {
+			// Tier 1: the oracle types parameters; agreement is checked
+			// across renderings.
+			res.Diags = append(res.Diags, rules.CheckTypeAgreement(cq.q, cq.rs, cq.descs)...)
+			types, d := rules.ResolveParamTypes(cq.q, cq.rs, cq.descs)
+			res.Diags = append(res.Diags, d...)
+			for _, pt := range types {
+				cq.paramTypes[pt.Name] = pt.Type
+			}
 		}
 		// `-- @param` hints override (Tier 1) or supply (Tier 2) the
 		// oracle's parameter types.
@@ -222,13 +221,29 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 					hint.Span, "@param hint for unknown parameter %q", name))
 				continue
 			}
-			tr, ok := (postgres.TypeMap{}).TypeByName(hint.SQLType)
+			tr, ok := drv.typeByName(hint.SQLType)
 			if !ok {
 				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
 					hint.Span, "unknown SQL type %q in @param hint", hint.SQLType))
 				continue
 			}
 			cq.paramTypes[name] = tr
+		}
+		if drv.annotationsRequired {
+			// Tier 2: the protocol does not type parameters; every
+			// non-control parameter needs its annotation.
+			for _, name := range cq.q.ParamOrder {
+				if _, ok := cq.paramTypes[name]; ok {
+					continue
+				}
+				if isControlOnlyParam(cq.q, name) {
+					continue
+				}
+				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+					paramSpan(cq.q, name),
+					"parameter %q needs a `-- @param %s: <type>` annotation (the %s protocol does not type parameters)",
+					name, name, cfg.Dialect))
+			}
 		}
 		nullable, err := nullability.AnalyzeAll(frontend, cq.rs, cq.descs, cat, cfg.NullOverridesFor(cq.q.Name))
 		if err != nil {
@@ -247,7 +262,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 			return nil, err
 		}
 		for _, cq := range queries {
-			keys, truncated := shape.Enumerate(cq.q, 4096)
+			keys, truncated := shape.EnumerateExpand(cq.q, 4096, drv.expandIn)
 			if truncated {
 				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeTooManyGuards,
 					cq.q.HeaderSpan, "%s exceeds the exhaustive-check cap of 4096 shapes", cq.q.Name))
@@ -301,11 +316,17 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 						"%s uses @filter-tree, whose tree space is unbounded; it cannot be statically expanded (its audit surface is the predicate vocabulary and caps)", cq.q.Name))
 					break
 				}
+				if _, hasIn := it.(*template.InExpr); hasIn && drv.expandIn {
+					res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeExpansionLarge,
+						cq.q.HeaderSpan,
+						"%s uses @in, whose arity space is unbounded on %s; it cannot be statically expanded", cq.q.Name, cfg.Dialect))
+					break
+				}
 			}
 			if diagnostics.HasErrors(res.Diags) {
 				continue
 			}
-			shapes, d := expandShapes(cq.q, frags, cfg.Expansion.MaxShapes)
+			shapes, d := expandShapes(cq.q, frags, cfg.Expansion.MaxShapes, drv.style)
 			res.Diags = append(res.Diags, d...)
 			if shapes != nil {
 				in.ExpandedShapes = shapes
@@ -324,7 +345,8 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	files, diags := codegen.Generate(codegen.Options{
 		Package:  cfg.Output.Package,
 		TreeCaps: runtime.TreeCaps{MaxNodes: cfg.TreeCaps.MaxNodes, MaxDepth: cfg.TreeCaps.MaxDepth},
-	}, postgres.TypeMap{}, inputs)
+		Style:    drv.style,
+	}, drv.typemap, inputs)
 	res.Diags = append(res.Diags, diags...)
 	if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {
 		return res, nil
@@ -402,7 +424,7 @@ func descToEntry(fp, sql string, d dialect.Desc) *cache.OracleEntry {
 // composer generated code uses, so the expansion is byte-identical to
 // what hybrid composition would produce.
 func expandShapes(q *template.QueryTemplate, frags []runtime.Frag,
-	maxShapes int) (map[string]runtime.Expanded, []diagnostics.Diagnostic) {
+	maxShapes int, style runtime.Style) (map[string]runtime.Expanded, []diagnostics.Diagnostic) {
 
 	keys, truncated := shape.Enumerate(q, maxShapes)
 	if truncated {
@@ -413,10 +435,25 @@ func expandShapes(q *template.QueryTemplate, frags []runtime.Frag,
 	}
 	out := make(map[string]runtime.Expanded, len(keys))
 	for _, k := range keys {
-		sqlText, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
+		sqlText, argIdx := runtime.ComposeStyle(style, frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
 		out[k.String()] = runtime.Expanded{SQL: sqlText, ArgIdx: argIdx}
 	}
 	return out, nil
+}
+
+// isControlOnlyParam reports a parameter with no bind occurrences —
+// pure @when/@choose/@order-by/@filter-tree control, never sent to the
+// database.
+func isControlOnlyParam(q *template.QueryTemplate, name string) bool {
+	p := q.Params[name]
+	return p == nil || len(p.Occurrences) == 0
+}
+
+func paramSpan(q *template.QueryTemplate, name string) diagnostics.Span {
+	if p := q.Params[name]; p != nil && len(p.Occurrences) > 0 {
+		return p.Occurrences[0].Span
+	}
+	return q.HeaderSpan
 }
 
 // writeExpandedFiles materializes the audit surface: one .sql file per
@@ -461,8 +498,9 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	drv := driverFor(cfg)
 	for _, cq := range queries {
-		d := explainData{Name: cq.q.Name, ShapeCount: shape.Count(cq.q).String(), MaximalSQL: cq.rs[0].SQL}
+		d := explainData{Name: cq.q.Name, ShapeCount: shape.CountExpand(cq.q, drv.expandIn).String(), MaximalSQL: cq.rs[0].SQL}
 		for i, g := range cq.q.GuardAtoms {
 			d.Guards = append(d.Guards, fmt.Sprintf("bit %d: %s", i, g.Param))
 		}
