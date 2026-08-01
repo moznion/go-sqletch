@@ -74,6 +74,14 @@ func main() {
 	root.AddCommand(fmtCmd)
 
 	root.AddCommand(&cobra.Command{
+		Use:   "lsp",
+		Short: "run the language server over stdio (diagnostics, go-to-definition; offline)",
+		Run: func(cmd *cobra.Command, args []string) {
+			os.Exit(cli.LSP(configPath, os.Stdin, os.Stdout, os.Stderr))
+		},
+	})
+
+	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "print the sqletch version",
 		Run: func(cmd *cobra.Command, args []string) {

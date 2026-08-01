@@ -63,7 +63,11 @@ internal/devdb      P4  DSN or testcontainers; DISPOSABLE by contract
 internal/nullability P5 skeleton-only narrowing discipline
 internal/codegen    P6  BuildFrags + Go emission
 runtime/            P6  PUBLIC package: Compose mirrors ast.Render
-internal/config,cli P7  sqletch.yaml + generate/check/explain pipeline
+internal/config,cli P7  sqletch.yaml + generate/check/explain pipeline;
+                        OfflineChecker = the LSP's analysis seam
+internal/lsp        —   language server (doc 10): JSON-RPC framing,
+                        LSP subset, UTF-16 positions; stdlib only,
+                        checker injected via the Workspace interface
 cmd/sqletch         P7  cobra wiring only
 ```
 
@@ -146,6 +150,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   Transport is the socket-FILE pump (.s.PGSQL.5432.in/.out), not CMA;
   session bootstrap must CREATE SCHEMA public (template1 lacks it).
   Revisit when upstream libpglite ships official bindings.
+- LSP (`sqletch lsp`, doc 10): STRICTLY offline — never opens a DB;
+  catalog-dependent checks run only when the committed cache holds the
+  catalog AND every rendering of the query (any miss skips the query's
+  pass wholesale). Per-file scan/lexical/R1 memoized by content hash;
+  duplicate-name check uses sorted-path first-wins like the pipeline.
+  `cli.resolvedChecks` is the single shared catalog-dependent pass for
+  pipeline.Run and OfflineChecker — extend it, don't fork it. Broken
+  config ⇒ degraded server (showMessage once), never a crash loop.
+  internal/lsp stays stdlib-only; positions are UTF-16 code units.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

@@ -156,6 +156,8 @@ Mechanical extensions of existing paths (conjunct machinery; the
   server wraps `check` incrementally (per-file scan is already
   independent; oracle hits cache). tree-sitter grammar for the
   template constructs layered over SQL highlighting.
+- Full design: doc 10 (`sqletch lsp`, `internal/lsp` +
+  `cli.OfflineChecker`). Grammars remain unscheduled.
 
 ## Beyond 1.0 (recorded, unscheduled)
 
