@@ -73,6 +73,15 @@ const (
 	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
 )
 
+// Oracle-phase codes (see docs/design/04-type-oracle.md).
+const (
+	CodeServerVersionMismatch Code = "SQLETCH200" // pinned version != connected server
+	CodeIndeterminateParam    Code = "SQLETCH201" // undetermined parameter type (add a cast)
+	CodeOracleFailure         Code = "SQLETCH202" // prepare/describe failed
+	CodeColumnAgreement       Code = "SQLETCH210" // renderings disagree on result columns
+	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
+)
+
 type Diagnostic struct {
 	Code     Code
 	Severity Severity
