@@ -54,6 +54,11 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+          # goinstall builds the linter with the module's own toolchain
+          # (go.mod pins a 1.27 rc; released golangci-lint binaries are
+          # built with the previous stable Go and refuse newer targets).
+          # Drop this once golangci-lint ships go1.27-built binaries.
+          install-mode: goinstall
           args: --build-tags devdb
 
   fuzz-smoke:
