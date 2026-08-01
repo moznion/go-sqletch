@@ -44,6 +44,18 @@ func (e *OracleError) Error() string {
 	return fmt.Sprintf("oracle error (%s) at %d: %s", e.SQLState, e.Pos, e.Msg)
 }
 
+// GoTypeRef is a Go type for a database type, plus the import it needs
+// ("" for builtins).
+type GoTypeRef struct {
+	Name   string
+	Import string
+}
+
+// TypeMap translates database types to Go types for codegen.
+type TypeMap interface {
+	GoType(oid uint32) (GoTypeRef, bool)
+}
+
 // Oracle is the type oracle: it answers what the database itself knows
 // about a rendering. Backends (server, embedded engine, native
 // inference) implement the same interface — see the Oracle backends

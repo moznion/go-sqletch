@@ -82,6 +82,12 @@ const (
 	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
 )
 
+// Codegen/config codes.
+const (
+	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
+	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
+)
+
 type Diagnostic struct {
 	Code     Code
 	Severity Severity

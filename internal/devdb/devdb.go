@@ -36,6 +36,19 @@ func (e *VersionMismatchError) Error() string {
 	return fmt.Sprintf("connected server is PostgreSQL %s but sqletch.yaml pins server_version %s", e.Actual, e.Pinned)
 }
 
+// AcquireDSN starts (or reuses) the dev database, verifies the version
+// pin, applies the schema, and returns the DSN — for callers that need
+// to hand the database to a subprocess. cleanup is never nil.
+func AcquireDSN(ctx context.Context, cfg Config) (string, func(), error) {
+	conn, cleanup, err := Acquire(ctx, cfg)
+	if err != nil {
+		return "", cleanup, err
+	}
+	dsn := conn.Config().ConnString()
+	_ = conn.Close(ctx)
+	return dsn, cleanup, nil
+}
+
 // Acquire connects to (or starts) the dev database, verifies the
 // version pin, and applies the schema. The returned cleanup is never
 // nil and terminates the container (when one was started) after
