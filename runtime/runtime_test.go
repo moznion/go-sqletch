@@ -63,6 +63,42 @@ func TestCompose_Shapes(t *testing.T) {
 	}
 }
 
+func TestComposeStyle_Question(t *testing.T) {
+	frags := testFrags()
+
+	// Question style: one '?' per occurrence; the shared :a binds twice.
+	sql, argIdx := ComposeStyle(StyleQuestion, frags, ShapeKey{Guards: 0b11, Choices: []uint8{0}})
+	if strings.Contains(sql, "$") {
+		t.Errorf("dollar placeholder leaked into question style:\n%s", sql)
+	}
+	for _, want := range []string{"AND (t.a = ?)", "AND (t.b = ? AND t.c = ?)", "ORDER BY t.x", "LIMIT ?"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("question-style shape missing %q:\n%s", want, sql)
+		}
+	}
+	want := []int16{0, 1, 0, 2}
+	if len(argIdx) != len(want) {
+		t.Fatalf("argIdx = %v, want %v", argIdx, want)
+	}
+	for i := range want {
+		if argIdx[i] != want[i] {
+			t.Fatalf("argIdx = %v, want %v", argIdx, want)
+		}
+	}
+
+	// The cache path composes with the same style.
+	c := NewComposedCache(8)
+	cSQL, cIdx := c.GetStyle(StyleQuestion, "Q", frags, ShapeKey{Guards: 0b11, Choices: []uint8{0}})
+	if cSQL != sql || len(cIdx) != len(argIdx) {
+		t.Errorf("cache composed differently:\n%s\nvs\n%s", cSQL, sql)
+	}
+	// Warm hit returns the identical plan.
+	cSQL2, _ := c.GetStyle(StyleQuestion, "Q", frags, ShapeKey{Guards: 0b11, Choices: []uint8{0}})
+	if cSQL2 != cSQL {
+		t.Error("cache hit differs from miss")
+	}
+}
+
 func TestCompose_Deterministic(t *testing.T) {
 	frags := testFrags()
 	k := ShapeKey{Guards: 1, Choices: []uint8{1}}

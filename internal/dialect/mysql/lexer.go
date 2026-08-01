@@ -11,7 +11,13 @@ import (
 
 type Profile struct{}
 
-var _ dialect.LexerProfile = Profile{}
+var (
+	_ dialect.LexerProfile = Profile{}
+	_ dialect.Placeholders = Profile{}
+)
+
+// PlaceholderStyle declares MySQL's '?' per-occurrence binding.
+func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.PlaceholderQuestion }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }

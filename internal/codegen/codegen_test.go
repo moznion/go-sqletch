@@ -8,6 +8,7 @@ import (
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/diagnostics"
 	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/sqletch/internal/dialect/mysql"
 	"github.com/moznion/sqletch/internal/dialect/postgres"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
@@ -59,13 +60,8 @@ func scanOne(t *testing.T, src string) *template.QueryTemplate {
 	return f.Queries[0]
 }
 
-// TestComposeConformance is the load-bearing test of the whole design:
-// for every enumerable shape, the runtime composer over the generated
-// fragment table must produce byte-identical SQL to the verification
-// renderer, and identical parameter binding order.
-func TestComposeConformance(t *testing.T) {
-	corpus := []string{useCase1,
-		`-- name: ListAuditLogs :many
+var conformanceCorpus = []string{useCase1,
+	`-- name: ListAuditLogs :many
 SELECT a.id, a.action FROM audit_logs AS a
 WHERE a.tenant_id = :tenant_id
 @if-present(after_id)
@@ -74,7 +70,7 @@ WHERE a.tenant_id = :tenant_id
 ORDER BY a.id DESC
 LIMIT :limit;
 `,
-		`-- name: SharedParam :many
+	`-- name: SharedParam :many
 SELECT t.id FROM t
 WHERE t.a = :v
 @if-present(x)
@@ -82,7 +78,7 @@ WHERE t.a = :v
 @endif
 ;
 `,
-		`-- name: UpdateUserProfile :one
+	`-- name: UpdateUserProfile :one
 UPDATE users
 SET
     updated_at = now()
@@ -95,7 +91,7 @@ SET
 WHERE id = :id
 RETURNING id, email, nickname, updated_at;
 `,
-		`-- name: CreateUser :one
+	`-- name: CreateUser :one
 INSERT INTO users (
     email
 @if-present(nickname)
@@ -109,7 +105,7 @@ INSERT INTO users (
 )
 RETURNING id;
 `,
-		`-- name: WhenAndHaving :many
+	`-- name: WhenAndHaving :many
 SELECT t.user_id, sum(t.amount) AS total FROM t
 WHERE TRUE
 @when(include_all = false)
@@ -122,7 +118,7 @@ HAVING TRUE
 @endif
 ;
 `,
-		`-- name: OrderedUsers :many
+	`-- name: OrderedUsers :many
 SELECT u.id, u.email FROM users AS u
 WHERE TRUE
 @if-present(status)
@@ -138,7 +134,7 @@ ORDER BY u.id ASC
 @end
 LIMIT :limit;
 `,
-		`-- name: SignupsByBucket :many
+	`-- name: SignupsByBucket :many
 SELECT
 @choose(bucket)
 @case(daily)
@@ -153,17 +149,39 @@ WHERE u.created_at >= :since
 GROUP BY 1
 ORDER BY 1;
 `,
-	}
-	for _, src := range corpus {
-		q := scanOne(t, src)
-		frags := BuildFrags(postgres.Profile{}, q)
+}
+
+// TestComposeConformance is the load-bearing test of the whole design:
+// for every enumerable shape, the runtime composer over the generated
+// fragment table must produce byte-identical SQL to the verification
+// renderer, and identical parameter binding order.
+func TestComposeConformance(t *testing.T) {
+	conformanceOver(t, postgres.Profile{}, runtime.StyleDollar)
+}
+
+// TestComposeConformance_QuestionStyle runs the same corpus under the
+// MySQL profile: '?' per occurrence, repeated binds repeated in the
+// arg plan.
+func TestComposeConformance_QuestionStyle(t *testing.T) {
+	conformanceOver(t, mysql.Profile{}, runtime.StyleQuestion)
+}
+
+func conformanceOver(t *testing.T, profile dialect.LexerProfile, style runtime.Style) {
+	t.Helper()
+	for _, src := range conformanceCorpus {
+		f, diags := template.NewScanner(profile).ScanFile("t.sql", []byte(src))
+		if len(diags) != 0 {
+			t.Fatalf("scan: %+v", diags)
+		}
+		q := f.Queries[0]
+		frags := BuildFrags(profile, q)
 		keys, _ := shape.Enumerate(q, 0)
 		for _, k := range keys {
-			want, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
+			want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
+			got, argIdx := runtime.ComposeStyle(style, frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
 			if got != want.SQL {
 				t.Fatalf("%s shape %s:\nruntime:\n%q\nrenderer:\n%q", q.Name, k, got, want.SQL)
 			}

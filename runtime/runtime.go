@@ -127,6 +127,19 @@ func (k ShapeKey) String() string {
 	return b.String()
 }
 
+// Style is the dialect placeholder emission mode of a generated query,
+// fixed at generation time.
+type Style uint8
+
+const (
+	// StyleDollar: $1, $2, … numbered in first-occurrence order with
+	// reuse per bind source (PostgreSQL).
+	StyleDollar Style = iota
+	// StyleQuestion: one '?' per occurrence; repeated references to a
+	// bind source repeat the bind (MySQL, SQLite).
+	StyleQuestion
+)
+
 // Bind is one entry of a shape's bind plan: the placeholder $(i+1)
 // takes vals[Idx] (struct source) or treeArgs[Idx] (tree source).
 // Plans contain positions only — never values — so they are cacheable.
@@ -157,7 +170,12 @@ func ResolveArgs(binds []Bind, vals, treeArgs []any) []any {
 // in first-occurrence order per shape. Queries with a @filter-tree
 // use ComposeTree instead.
 func Compose(frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := ComposeTree(frags, key, nil, DefaultTreeCaps)
+	return ComposeStyle(StyleDollar, frags, key)
+}
+
+// ComposeStyle is Compose with an explicit placeholder style.
+func ComposeStyle(style Style, frags []Frag, key ShapeKey) (string, []int16) {
+	sql, binds, err := ComposeTreeStyle(style, frags, key, nil, DefaultTreeCaps)
 	if err != nil {
 		// Without a tree the composer has no failure modes; a non-nil
 		// error here is a generated-code bug.
@@ -179,11 +197,21 @@ type bindKey struct {
 // block. tree may be nil (renders TRUE); a nil tree with a required
 // block is rejected by the generated code before reaching here.
 func ComposeTree(frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+	return ComposeTreeStyle(StyleDollar, frags, key, tree, caps)
+}
+
+// ComposeTreeStyle is ComposeTree with an explicit placeholder style.
+func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
 	var b strings.Builder
 	assigned := map[bindKey]int{}
 	var binds []Bind
 
 	place := func(k bindKey) {
+		if style == StyleQuestion {
+			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx})
+			b.WriteByte('?')
+			return
+		}
 		n, ok := assigned[k]
 		if !ok {
 			n = len(binds) + 1
@@ -425,7 +453,12 @@ func NewComposedCache(capacity int) *ComposedCache {
 }
 
 func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := c.get(queryName, frags, key, nil, DefaultTreeCaps)
+	return c.GetStyle(StyleDollar, queryName, frags, key)
+}
+
+// GetStyle is Get with an explicit placeholder style.
+func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []int16) {
+	sql, binds, err := c.get(style, queryName, frags, key, nil, DefaultTreeCaps)
 	if err != nil {
 		panic(err) // no failure modes without a tree
 	}
@@ -439,11 +472,16 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 // GetTree is the @filter-tree variant: the tree's structural encoding
 // becomes part of the cache key (values never do).
 func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
-	key.Trees = []string{tree.Encode()}
-	return c.get(queryName, frags, key, tree, caps)
+	return c.GetTreeStyle(StyleDollar, queryName, frags, key, tree, caps)
 }
 
-func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+// GetTreeStyle is GetTree with an explicit placeholder style.
+func (c *ComposedCache) GetTreeStyle(style Style, queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+	key.Trees = []string{tree.Encode()}
+	return c.get(style, queryName, frags, key, tree, caps)
+}
+
+func (c *ComposedCache) get(style Style, queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
 	mapKey := queryName + "|" + key.String()
 	c.mu.Lock()
 	if el, ok := c.m[mapKey]; ok {
@@ -461,7 +499,7 @@ func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *
 	}
 	c.mu.Unlock()
 
-	sql, binds, err := ComposeTree(frags, key, tree, caps)
+	sql, binds, err := ComposeTreeStyle(style, frags, key, tree, caps)
 	if err != nil {
 		return "", nil, err
 	}

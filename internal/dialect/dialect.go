@@ -45,6 +45,34 @@ type LexerProfile interface {
 	NextToken(src []byte, pos int) (Token, error)
 }
 
+// PlaceholderStyle is how a dialect binds parameters in prepared SQL.
+type PlaceholderStyle int
+
+const (
+	// PlaceholderDollar: $1, $2, … numbered in first-occurrence order;
+	// repeated references to one bind source reuse the number
+	// (PostgreSQL).
+	PlaceholderDollar PlaceholderStyle = iota
+	// PlaceholderQuestion: '?', one placeholder per occurrence;
+	// repeated references repeat the bind (MySQL, SQLite).
+	PlaceholderQuestion
+)
+
+// Placeholders is implemented by lexer profiles to declare their
+// dialect's bind-placeholder style. Profiles that do not implement it
+// default to PlaceholderDollar.
+type Placeholders interface {
+	PlaceholderStyle() PlaceholderStyle
+}
+
+// StyleOf resolves a profile's placeholder style.
+func StyleOf(profile LexerProfile) PlaceholderStyle {
+	if p, ok := profile.(Placeholders); ok {
+		return p.PlaceholderStyle()
+	}
+	return PlaceholderDollar
+}
+
 // LexError is returned for unterminated strings/comments; the scanner
 // converts it into a diagnostic at Pos.
 type LexError struct {

@@ -187,7 +187,11 @@ func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
 func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection) (Rendering, error) {
 
-	r := &renderer{profile: profile, paramNum: map[string]int{}}
+	r := &renderer{
+		profile:  profile,
+		paramNum: map[string]int{},
+		question: dialect.StyleOf(profile) == dialect.PlaceholderQuestion,
+	}
 	chooseIdx, orderIdx := 0, 0
 	for _, it := range q.Items {
 		switch v := it.(type) {
@@ -311,20 +315,32 @@ type renderer struct {
 	frags    []FragRange
 	paramSeq []string
 	paramNum map[string]int
+	question bool // '?' per occurrence (Tier 2) vs numbered $n with reuse
 }
 
 func (r *renderer) len() int { return r.sb.Len() }
 
-// emitParamRef emits a placeholder for a parameter that has no :name
-// token in the template text (construct-owned bindings like @in).
-func (r *renderer) emitParamRef(name string, anchorTOff int) {
+// placeholder returns the next placeholder token for name and records
+// it in ParamsSeq. Dollar style dedups by name; question style appends
+// one entry per occurrence.
+func (r *renderer) placeholder(name string) string {
+	if r.question {
+		r.paramSeq = append(r.paramSeq, name)
+		return "?"
+	}
 	n, ok := r.paramNum[name]
 	if !ok {
 		n = len(r.paramSeq) + 1
 		r.paramNum[name] = n
 		r.paramSeq = append(r.paramSeq, name)
 	}
-	ph := fmt.Sprintf("$%d", n)
+	return fmt.Sprintf("$%d", n)
+}
+
+// emitParamRef emits a placeholder for a parameter that has no :name
+// token in the template text (construct-owned bindings like @in).
+func (r *renderer) emitParamRef(name string, anchorTOff int) {
+	ph := r.placeholder(name)
 	r.segs = append(r.segs, Seg{ROff: r.sb.Len(), RLen: len(ph), TOff: anchorTOff, Synth: true})
 	r.sb.WriteString(ph)
 }
@@ -361,14 +377,7 @@ func (r *renderer) emitVerbatim(text string, tOff int) error {
 		}
 		if tok.Kind == dialect.KindParamRef {
 			flushRun(tok.Start)
-			name := tok.Text[1:]
-			n, ok := r.paramNum[name]
-			if !ok {
-				n = len(r.paramSeq) + 1
-				r.paramNum[name] = n
-				r.paramSeq = append(r.paramSeq, name)
-			}
-			ph := fmt.Sprintf("$%d", n)
+			ph := r.placeholder(tok.Text[1:])
 			r.segs = append(r.segs, Seg{
 				ROff: r.sb.Len(), RLen: len(ph), TOff: tOff + tok.Start, Synth: true,
 			})
