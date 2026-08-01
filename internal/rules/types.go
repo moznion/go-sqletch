@@ -150,6 +150,18 @@ func ResolveParamTypes(q *template.QueryTemplate, rs []ast.Rendering,
 }
 
 func caseSpan(q *template.QueryTemplate, r ast.Rendering) diagnostics.Span {
+	if r.Kind == ast.RenderOrderDefault {
+		idx := 0
+		for _, it := range q.Items {
+			if o, ok := it.(*template.OrderBy); ok {
+				if idx == r.OrderIdx && o.Default != nil {
+					return o.Default.Span
+				}
+				idx++
+			}
+		}
+		return q.HeaderSpan
+	}
 	if r.Kind != ast.RenderCase {
 		return q.HeaderSpan
 	}

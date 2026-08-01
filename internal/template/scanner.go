@@ -296,7 +296,7 @@ func (fs *fileScan) recordParam(q *QueryTemplate, name string, span diagnostics.
 var constructVocab = map[string]bool{
 	"if-present": true, "endif": true,
 	"choose": true, "case": true, "default": true, "end": true,
-	"when": true,
+	"when": true, "order-by": true, "key": true,
 }
 
 // matchConstruct reports whether src[pos:] starts a template construct.
@@ -337,6 +337,8 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 		return fs.parseWhen(pos, nameEnd)
 	case "choose":
 		return fs.parseChoose(pos, nameEnd)
+	case "order-by":
+		return fs.parseOrderBy(pos, nameEnd)
 	default:
 		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
 			"unmatched @%s", name)
@@ -447,7 +449,13 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 					fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd), "unmatched @%s", name)
 					pos = nameEnd
 					continue
-				case "case", "default":
+				case "order-by":
+					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
+						fs.span(pos, nameEnd), "constructs do not nest (R5)"))
+					stack = append(stack, "end")
+					pos = nameEnd
+					continue
+				case "case", "default", "key":
 					if len(stack) == 0 && terminators[name] {
 						return pos, name
 					}
@@ -777,6 +785,114 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 	return endPos
 }
 
+// parseOrderBy parses `@order-by(param) @key(name) expr … [@default
+// clause] @end`.
+func (fs *fileScan) parseOrderBy(pos, nameEnd int) int {
+	qb := fs.qb
+	args, afterArgs, ok := fs.parseArgList("order-by", pos, nameEnd)
+	if !ok || len(args) != 1 {
+		if ok {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, afterArgs),
+				"@order-by takes exactly one parameter")
+		}
+		return afterArgs
+	}
+	if qb.depth > 0 {
+		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
+			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
+	}
+	if qb.ctx == ctxProjection || qb.ctx == ctxNone {
+		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, afterArgs),
+			"@order-by is not allowed in the %s position; it replaces the statement-level ORDER BY clause", qb.ctx)
+	}
+
+	qb.flushSkeleton(fs, pos)
+
+	item := &OrderBy{Param: args[0]}
+	keyNames := map[string]bool{}
+	terminators := map[string]bool{"key": true, "default": true, "end": true}
+	p := afterArgs
+
+	lead := fs.skipTrivia(p)
+	if lead < len(fs.src) && fs.src[lead] != '@' {
+		fs.errorf(diagnostics.CodeChooseStructure, fs.span(lead, lead+1),
+			"@order-by: expected @key before any content")
+	}
+
+	endPos := p
+	sawDefault := false
+	for {
+		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, true)
+		if term == "" {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
+				"unterminated @order-by: missing @end")
+			endPos = bodyEnd
+			break
+		}
+		_, markerEnd := matchConstruct(fs.src, bodyEnd)
+		switch term {
+		case "end":
+			endPos = markerEnd
+		case "key":
+			if sawDefault {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(bodyEnd, markerEnd),
+					"@default must be the last entry of an @order-by")
+			}
+			names, afterKey, ok := fs.parseArgList("key", bodyEnd, markerEnd)
+			if !ok || len(names) != 1 {
+				if ok {
+					fs.errorf(diagnostics.CodeConstructGrammar, fs.span(bodyEnd, afterKey),
+						"@key takes exactly one name")
+				}
+				p = afterKey
+				continue
+			}
+			if keyNames[names[0]] {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(bodyEnd, afterKey),
+					"@order-by: duplicate key %q", names[0])
+			}
+			keyNames[names[0]] = true
+			keyBodyEnd, _ := fs.peekBodyEnd(afterKey, terminators)
+			body, bodyOff := trimEdges(fs.src, afterKey, keyBodyEnd)
+			if body == "" {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(afterKey, afterKey+1),
+					"@key body must be a non-empty sort expression")
+			}
+			item.Keys = append(item.Keys, OrderKey{Name: names[0], Body: body,
+				Span: fs.span(bodyOff, bodyOff+len(body))})
+			p = afterKey
+			continue
+		case "default":
+			if sawDefault {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(bodyEnd, markerEnd),
+					"@order-by: duplicate @default")
+			}
+			sawDefault = true
+			caseBodyEnd, _ := fs.peekBodyEnd(markerEnd, terminators)
+			body, bodyOff := trimEdges(fs.src, markerEnd, caseBodyEnd)
+			if body != "" && fs.clauseKeywordOf(body) != "ORDER" {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(bodyOff, bodyOff+len(body)),
+					"the @order-by @default body must be a whole `ORDER BY …` clause (or empty)")
+			}
+			item.Default = &ChooseCase{Body: body, Span: fs.span(bodyOff, bodyOff+len(body))}
+			p = markerEnd
+			continue
+		}
+		break
+	}
+
+	if len(item.Keys) == 0 {
+		fs.errorf(diagnostics.CodeChooseStructure, fs.span(pos, endPos),
+			"@order-by needs at least one @key")
+	}
+
+	item.Span = fs.span(pos, endPos)
+	qb.q.Items = append(qb.q.Items, item)
+	qb.ctx = ctxOrderBy
+	qb.skelStart = endPos
+	return endPos
+}
+
 // classifyChoose determines the block's slot from its position and
 // case bodies, and validates the cases against that slot:
 //   - projection position: every body (incl. @default) is a non-empty
@@ -868,7 +984,7 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					stack = append(stack, "endif")
 					pos = nameEnd
 					continue
-				case "choose", "when":
+				case "choose", "when", "order-by":
 					stack = append(stack, "end")
 					pos = nameEnd
 					continue
@@ -891,7 +1007,7 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					}
 					pos = nameEnd
 					continue
-				case "case", "default":
+				case "case", "default", "key":
 					if len(stack) == 0 && terminators[name] {
 						return pos, name
 					}

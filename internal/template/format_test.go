@@ -92,6 +92,19 @@ GROUP BY t.a
 @end
 ;
 `,
+		`-- name: O :many
+SELECT t.id FROM t
+WHERE TRUE
+@order-by(sort)
+@key(id)
+t.id
+@key(name)
+t.name
+@default
+ORDER BY t.id
+@end
+;
+`,
 	}
 	for i, src := range sources {
 		once := format(t, src)

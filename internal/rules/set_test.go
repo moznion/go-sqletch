@@ -78,7 +78,7 @@ func TestUpdateShapesParse(t *testing.T) {
 	}
 	fe := postgres.Frontend{}
 	for _, k := range keys {
-		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection())
+		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
 		if err != nil {
 			t.Fatal(err)
 		}

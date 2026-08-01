@@ -24,6 +24,7 @@ const (
 	Skel Kind = iota
 	Guarded
 	Choose
+	OrderBy
 )
 
 type Sep uint8
@@ -54,15 +55,22 @@ type Frag struct {
 	GuardMask  uint64  // Guarded: all these bits must be set
 	Sep        Sep
 	Cases      []Case // Choose: named cases, then the default (if any)
+	// OrderBy: the keys
+	Default *Case // OrderBy: the @default clause body (may be nil)
 }
 
 // ShapeKey identifies one concrete query shape.
 type ShapeKey struct {
 	Guards  uint64
 	Choices []uint8
+	// Orders holds one key sequence per @order-by block (elements are
+	// key<<1|desc). nil inner = maximal/all keys (verification only);
+	// empty = default-or-omit.
+	Orders [][]uint8
 }
 
-// String is the canonical encoding (matches the compiler's shape.Key).
+// String is the canonical encoding (byte-identical to the compiler's
+// shape.Key encoding).
 func (k ShapeKey) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "g=%x", k.Guards)
@@ -73,6 +81,32 @@ func (k ShapeKey) String() string {
 				b.WriteByte(',')
 			}
 			b.WriteString(strconv.Itoa(int(c)))
+		}
+	}
+	if len(k.Orders) > 0 {
+		b.WriteString(";o=")
+		for i, seq := range k.Orders {
+			if i > 0 {
+				b.WriteByte('|')
+			}
+			switch {
+			case seq == nil:
+				b.WriteByte('*')
+			case len(seq) == 0:
+				b.WriteByte('-')
+			default:
+				for j, e := range seq {
+					if j > 0 {
+						b.WriteByte(',')
+					}
+					b.WriteString(strconv.Itoa(int(e >> 1)))
+					if e&1 == 1 {
+						b.WriteByte('d')
+					} else {
+						b.WriteByte('a')
+					}
+				}
+			}
 		}
 	}
 	return b.String()
@@ -105,11 +139,44 @@ func Compose(frags []Frag, key ShapeKey) (string, []int16) {
 		b.WriteString(text[last:])
 	}
 
-	chooseSeen := 0
+	chooseSeen, orderSeen := 0, 0
 	for _, f := range frags {
 		switch f.Kind {
 		case Skel:
 			emit(f.Text, f.ParamSpans, f.ParamIdx)
+		case OrderBy:
+			var seq []uint8 // nil = maximal (all keys)
+			if key.Orders != nil && orderSeen < len(key.Orders) {
+				seq = key.Orders[orderSeen]
+			}
+			orderSeen++
+			b.WriteByte('\n')
+			switch {
+			case seq == nil:
+				b.WriteString("ORDER BY ")
+				for i, c := range f.Cases {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					emit(c.Text, c.ParamSpans, c.ParamIdx)
+				}
+			case len(seq) == 0:
+				if f.Default != nil && f.Default.Text != "" {
+					emit(f.Default.Text, f.Default.ParamSpans, f.Default.ParamIdx)
+				}
+			default:
+				b.WriteString("ORDER BY ")
+				for i, e := range seq {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					c := f.Cases[e>>1]
+					emit(c.Text, c.ParamSpans, c.ParamIdx)
+					if e&1 == 1 {
+						b.WriteString(" DESC")
+					}
+				}
+			}
 		case Guarded:
 			if key.Guards&f.GuardMask != f.GuardMask {
 				continue
@@ -160,6 +227,31 @@ func ChooseOrdinal(v, numNamed int, hasDefault bool) (uint8, error) {
 	default:
 		return 0, fmt.Errorf("sqletch: @choose enum value %d out of range", v)
 	}
+}
+
+// ErrOrderKey is returned when an @order-by selection references a key
+// out of range or repeats a key.
+var ErrOrderKey = errors.New("sqletch: invalid @order-by key selection")
+
+// OrderSeq converts a generated sort-key slice into the composer's
+// sequence, validating range and rejecting duplicate keys (the same
+// key in both directions makes no sense either).
+func OrderSeq[T ~int](vals []T, numKeys int) ([]uint8, error) {
+	seq := make([]uint8, 0, len(vals))
+	var seen uint32
+	for _, v := range vals {
+		e := int(v)
+		k := e >> 1
+		if e < 0 || k >= numKeys {
+			return nil, fmt.Errorf("%w: value %d out of range", ErrOrderKey, e)
+		}
+		if seen&(1<<uint(k)) != 0 {
+			return nil, fmt.Errorf("%w: key %d selected twice", ErrOrderKey, k)
+		}
+		seen |= 1 << uint(k)
+		seq = append(seq, uint8(e))
+	}
+	return seq, nil
 }
 
 // BuildArgs selects the bind values for a shape from the flattened

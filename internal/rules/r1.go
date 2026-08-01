@@ -48,6 +48,8 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 			}
 		case *template.Choose:
 			diags = append(diags, probeChooseCases(profile, fe, v)...)
+		case *template.OrderBy:
+			diags = append(diags, probeOrderKeys(profile, fe, v)...)
 		}
 	}
 
@@ -97,6 +99,52 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 			continue
 		}
 		diags = append(diags, checkOrderByContainment(trees[i], r)...)
+	}
+
+	// @order-by clause-coupling restrictions (review fixes F2/F1a of
+	// the spec cycle): DISTINCT ON is prefix-order-sensitive, and
+	// WITH TIES makes ORDER BY mandatory.
+	for _, it := range q.Items {
+		o, ok := it.(*template.OrderBy)
+		if !ok {
+			continue
+		}
+		if maxTree.HasDistinctOn() {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeOrderByDistinct, o.Span,
+				"@order-by cannot be combined with DISTINCT ON: its ORDER BY validity depends on key order and prefix, which breaks the subset/permutation argument").
+				WithHint("use @choose with whole ORDER BY clauses instead"))
+		}
+		if maxTree.HasFetchWithTies() && o.Default == nil {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeOrderByNeedsDflt, o.Span,
+				"FETCH FIRST … WITH TIES makes ORDER BY mandatory; declare an @order-by @default so the clause can never vanish"))
+		}
+	}
+	return diags
+}
+
+func probeOrderKeys(profile dialect.LexerProfile, fe dialect.Frontend,
+	o *template.OrderBy) []diagnostics.Diagnostic {
+
+	var diags []diagnostics.Diagnostic
+	for _, k := range o.Keys {
+		if k.Body == "" {
+			continue // scanner already reported
+		}
+		if !balanced(profile, k.Body) {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, k.Span,
+				"@key body has unbalanced parentheses (R1)"))
+			continue
+		}
+		if err := fe.ProbeOrderByKey(rewriteParams(profile, k.Body)); err != nil {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, k.Span,
+				"@key body must be exactly one sort key (R1): %s", probeMsg(err)))
+		}
+	}
+	if o.Default != nil && o.Default.Body != "" {
+		if err := fe.ProbeOrderBy(rewriteParams(profile, o.Default.Body)); err != nil {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, o.Default.Span,
+				"the @order-by @default body must be exactly one ORDER BY clause (R1): %s", probeMsg(err)))
+		}
 	}
 	return diags
 }
@@ -237,21 +285,28 @@ func checkJoinMembership(maxTree dialect.Tree, v *template.IfPresent,
 }
 
 func checkOrderByContainment(tree dialect.Tree, r ast.Rendering) []diagnostics.Diagnostic {
-	var chooseFr *ast.FragRange
+	var ownerFr *ast.FragRange
+	var ownerSpan diagnostics.Span
 	for i := range r.Frags {
-		if c, ok := r.Frags[i].Item.(*template.Choose); ok && c.Slot == template.SlotOrderBy {
-			chooseFr = &r.Frags[i]
+		switch v := r.Frags[i].Item.(type) {
+		case *template.Choose:
+			if v.Slot == template.SlotOrderBy {
+				ownerFr, ownerSpan = &r.Frags[i], v.Span
+			}
+		case *template.OrderBy:
+			ownerFr, ownerSpan = &r.Frags[i], v.Span
+		}
+		if ownerFr != nil {
 			break
 		}
 	}
-	if chooseFr == nil {
+	if ownerFr == nil {
 		return nil
 	}
-	c := chooseFr.Item.(*template.Choose)
 	for _, loc := range tree.OrderByLocs() {
-		if loc < chooseFr.Start || loc >= chooseFr.End {
-			return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, c.Span,
-				"a sort key outside the @choose block coexists with the @choose ORDER BY (R1); "+
+		if loc < ownerFr.Start || loc >= ownerFr.End {
+			return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, ownerSpan,
+				"a sort key outside the construct coexists with its ORDER BY (R1); "+
 					"the statement may have only one ORDER BY owner")}
 		}
 	}

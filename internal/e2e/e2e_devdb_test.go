@@ -181,6 +181,23 @@ HAVING TRUE
 @endif
 ORDER BY a.tenant_id;
 `,
+	"order_by_users": `-- name: OrderedUsers :many
+SELECT u.id, u.email, u.created_at
+FROM users AS u
+WHERE TRUE
+@if-present(status)
+  AND u.status = :status
+@endif
+@order-by(sort)
+@key(created_at)
+u.created_at
+@key(email)
+u.email
+@default
+ORDER BY u.id ASC
+@end
+LIMIT :limit;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u
@@ -233,7 +250,7 @@ func TestPropertyAllShapesPrepareAndPlan(t *testing.T) {
 				t.Fatalf("corpus template exceeds the test cap")
 			}
 			for _, k := range keys {
-				r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection())
+				r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
 				if err != nil {
 					t.Fatalf("shape %s: render: %v", k, err)
 				}

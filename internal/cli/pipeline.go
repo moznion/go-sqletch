@@ -238,7 +238,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 				continue
 			}
 			for _, k := range keys {
-				r, err := ast.RenderShape(profile, cq.q, k.Guards, k.Selection())
+				r, err := ast.RenderShape(profile, cq.q, k.Guards, k.Selection(), k.OrderSelection())
 				if err != nil {
 					return nil, err
 				}
@@ -383,7 +383,7 @@ func expandShapes(q *template.QueryTemplate, frags []runtime.Frag,
 	}
 	out := make(map[string]runtime.Expanded, len(keys))
 	for _, k := range keys {
-		sqlText, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices})
+		sqlText, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
 		out[k.String()] = runtime.Expanded{SQL: sqlText, ArgIdx: argIdx}
 	}
 	return out, nil

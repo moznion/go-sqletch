@@ -90,6 +90,9 @@ type Tree interface {
 	OrderByLocs() []int
 	HasDistinctOn() bool
 	HasLockingClause() bool
+	// HasFetchWithTies reports FETCH FIRST … WITH TIES, which makes
+	// the ORDER BY clause mandatory (@order-by then needs a @default).
+	HasFetchWithTies() bool
 }
 
 // ParseError reports a dialect parse failure at a byte offset into the
@@ -109,6 +112,7 @@ type Frontend interface {
 	ProbeExpr(expr string) error
 	ProbeJoinItem(item string) error
 	ProbeOrderBy(clause string) error
+	ProbeOrderByKey(expr string) error
 	ProbeGroupBy(clause string) error
 	ProbeSetItem(item string) error
 	ProbeInsertValue(expr string) error

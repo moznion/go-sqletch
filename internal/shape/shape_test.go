@@ -82,7 +82,7 @@ func TestAllShapesParse(t *testing.T) {
 	keys, _ := Enumerate(q, 0)
 	fe := postgres.Frontend{}
 	for _, k := range keys {
-		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection())
+		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
 		if err != nil {
 			t.Fatalf("shape %s: render: %v", k, err)
 		}
@@ -96,7 +96,7 @@ func TestAllShapesParse(t *testing.T) {
 // keeps it valid, and inactive params vanish from the placeholder set.
 func TestRenderShape_Minimal(t *testing.T) {
 	q := scanOne(t, useCase1)
-	r, err := ast.RenderShape(postgres.Profile{}, q, 0, ast.CaseSelection{0: 3})
+	r, err := ast.RenderShape(postgres.Profile{}, q, 0, ast.CaseSelection{0: 3}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

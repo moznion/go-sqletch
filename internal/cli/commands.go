@@ -181,7 +181,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 			}
 			keys, truncated := shape.Enumerate(q, enumerateCap)
 			for _, k := range keys {
-				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection())
+				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
 				if err != nil {
 					fmt.Fprintf(errW, "sqletch: %v\n", err)
 					return ExitEnvironment

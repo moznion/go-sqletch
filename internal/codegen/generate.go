@@ -88,6 +88,11 @@ type chooseMeta struct {
 	numNamed int
 }
 
+type orderMeta struct {
+	o        *template.OrderBy
+	typeName string
+}
+
 type field struct{ name, typ, comment string }
 
 func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnostics.Diagnostic) {
@@ -107,13 +112,19 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		typeNames[name] = q.Name
 	}
 
-	// ---- choose metadata -------------------------------------------------
+	// ---- choose / order-by metadata --------------------------------------
 	var chooses []chooseMeta
+	var orders []orderMeta
 	for _, it := range q.Items {
-		if c, ok := it.(*template.Choose); ok {
+		switch c := it.(type) {
+		case *template.Choose:
 			cm := chooseMeta{c: c, enumName: q.Name + GoName(c.Param), numNamed: len(c.Cases)}
 			claimType(cm.enumName)
 			chooses = append(chooses, cm)
+		case *template.OrderBy:
+			om := orderMeta{o: c, typeName: q.Name + GoName(c.Param) + "Key"}
+			claimType(om.typeName)
+			orders = append(orders, om)
 		}
 	}
 
@@ -176,6 +187,16 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			paramFields = append(paramFields, field{goName, cm.enumName, comment})
 		}
 	}
+	for _, om := range orders {
+		goName := GoName(om.o.Param)
+		if claimField(goName, "@order-by("+om.o.Param+")") {
+			comment := " // key sequence; empty = @default"
+			if om.o.Default == nil {
+				comment = " // key sequence; empty omits ORDER BY"
+			}
+			paramFields = append(paramFields, field{goName, "[]" + om.typeName, comment})
+		}
+	}
 
 	// ---- row struct ------------------------------------------------------
 	rowName := q.Name + "Row"
@@ -213,9 +234,9 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	}
 
 	// ---- render ----------------------------------------------------------
-	// Imports must be complete before the header is written: the choose
-	// error path uses fmt.
-	if len(chooses) > 0 {
+	// Imports must be complete before the header is written: the
+	// choose/order error paths use fmt.
+	if len(chooses) > 0 || len(orders) > 0 {
 		g.imports["fmt"] = true
 	}
 	w := &g.b
@@ -231,6 +252,15 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		}
 		for _, cs := range cm.c.Cases {
 			fmt.Fprintf(w, "\t%s%s\n", cm.enumName, GoName(cs.Name))
+		}
+		fmt.Fprint(w, ")\n\n")
+	}
+	for _, om := range orders {
+		prefix := q.Name + GoName(om.o.Param)
+		fmt.Fprintf(w, "type %s int\n\nconst (\n", om.typeName)
+		for i, k := range om.o.Keys {
+			fmt.Fprintf(w, "\t%s%sAsc %s = %d\n", prefix, GoName(k.Name), om.typeName, i*2)
+			fmt.Fprintf(w, "\t%s%sDesc %s = %d\n", prefix, GoName(k.Name), om.typeName, i*2+1)
 		}
 		fmt.Fprint(w, ")\n\n")
 	}
@@ -254,7 +284,7 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	} else {
 		g.writeFragsVar(w)
 	}
-	sig := g.writeFunc(w, paramsName, rowName, chooses, rowFields)
+	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, rowFields)
 
 	return []byte(g.b.String()), sig, diags
 }
@@ -334,6 +364,17 @@ func (g *queryGen) writeFragsVar(w *strings.Builder) {
 				fmt.Fprintf(w, "\t\t{Text: %q%s},\n", c.Text, spanLits(c.ParamSpans, c.ParamIdx))
 			}
 			fmt.Fprint(w, "\t}},\n")
+		case runtime.OrderBy:
+			fmt.Fprint(w, "\t{Kind: runtime.OrderBy, Cases: []runtime.Case{\n")
+			for _, c := range f.Cases {
+				fmt.Fprintf(w, "\t\t{Text: %q%s},\n", c.Text, spanLits(c.ParamSpans, c.ParamIdx))
+			}
+			fmt.Fprint(w, "\t}")
+			if f.Default != nil {
+				fmt.Fprintf(w, ", Default: &runtime.Case{Text: %q%s}",
+					f.Default.Text, spanLits(f.Default.ParamSpans, f.Default.ParamIdx))
+			}
+			fmt.Fprint(w, "},\n")
 		}
 	}
 	fmt.Fprint(w, "}\n\n")
@@ -363,7 +404,7 @@ func spanLits(spans []runtime.Span, idx []int16) string {
 }
 
 func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
-	chooses []chooseMeta, rowFields []field) string {
+	chooses []chooseMeta, orders []orderMeta, rowFields []field) string {
 
 	q := g.in.Q
 	fragsVar := lowerCamel(q.Name) + "Frags"
@@ -418,6 +459,18 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
 		}
 		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
+	}
+	if len(orders) > 0 {
+		g.imports["fmt"] = true
+		var seqs []string
+		for i, om := range orders {
+			seq := fmt.Sprintf("oseq%d", i)
+			seqs = append(seqs, seq)
+			fmt.Fprintf(w, "\t%s, err := runtime.OrderSeq(arg.%s, %d)\n",
+				seq, GoName(om.o.Param), len(om.o.Keys))
+			fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
+		}
+		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
 	}
 
 	if g.in.ExpandedShapes != nil {

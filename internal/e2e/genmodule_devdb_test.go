@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -318,6 +318,25 @@ func main() {
 	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: gen.Ptr(int64(99))})
 	die(err)
 	expect(len(act) == 0, "HAVING conjunct filters the group out")
+
+	// @order-by: permutation + direction through the generated API.
+	ord, err := q.OrderedUsers(ctx, gen.OrderedUsersParams{
+		Sort:  []gen.OrderedUsersSortKey{gen.OrderedUsersSortEmailDesc, gen.OrderedUsersSortCreatedAtAsc},
+		Limit: 100,
+	})
+	die(err)
+	expect(len(ord) >= 5, "ordered users returned")
+	expect(ord[0].Email > ord[len(ord)-1].Email, "email DESC is the primary key sequence")
+	// Empty selection falls back to @default (ORDER BY u.id ASC).
+	ord, err = q.OrderedUsers(ctx, gen.OrderedUsersParams{Limit: 100})
+	die(err)
+	expect(ord[0].ID < ord[1].ID, "default sort by id")
+	// Duplicate key selection errors before touching the DB.
+	_, err = q.OrderedUsers(ctx, gen.OrderedUsersParams{
+		Sort:  []gen.OrderedUsersSortKey{gen.OrderedUsersSortEmailAsc, gen.OrderedUsersSortEmailDesc},
+		Limit: 1,
+	})
+	expect(err != nil, "duplicate order key rejected")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

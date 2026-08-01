@@ -137,6 +137,25 @@ type ChooseCase struct {
 	Span diagnostics.Span
 }
 
+// OrderBy is the @order-by construct: a closed key set the caller
+// orders at runtime (subset, permutation, per-key direction). The
+// maximal rendering lists all keys in declaration order; the @default
+// body is verified as an extra rendering.
+type OrderBy struct {
+	Param   string
+	Keys    []OrderKey
+	Default *ChooseCase // whole ORDER BY clause; may be empty
+	Span    diagnostics.Span
+}
+
+func (o *OrderBy) Raw() diagnostics.Span { return o.Span }
+
+type OrderKey struct {
+	Name string
+	Body string // one sort expression
+	Span diagnostics.Span
+}
+
 // Occurrence is one :name bind appearance of a parameter.
 type Occurrence struct {
 	Span         diagnostics.Span

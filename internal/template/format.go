@@ -53,6 +53,9 @@ func Format(profile dialect.LexerProfile, path string, src []byte) ([]byte, []di
 			case *Choose:
 				writeChoose(&b, v)
 				lastTok = "@construct"
+			case *OrderBy:
+				writeOrderBy(&b, v)
+				lastTok = "@construct"
 			}
 			pos = it.Raw().End
 		}
@@ -105,6 +108,27 @@ func writeChoose(b *strings.Builder, v *Choose) {
 		b.WriteString(cs.Name)
 		b.WriteString(")\n")
 		b.WriteString(cs.Body)
+		b.WriteString("\n")
+	}
+	if v.Default != nil {
+		b.WriteString("@default\n")
+		if v.Default.Body != "" {
+			b.WriteString(v.Default.Body)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("@end")
+}
+
+func writeOrderBy(b *strings.Builder, v *OrderBy) {
+	b.WriteString("@order-by(")
+	b.WriteString(v.Param)
+	b.WriteString(")\n")
+	for _, k := range v.Keys {
+		b.WriteString("@key(")
+		b.WriteString(k.Name)
+		b.WriteString(")\n")
+		b.WriteString(k.Body)
 		b.WriteString("\n")
 	}
 	if v.Default != nil {

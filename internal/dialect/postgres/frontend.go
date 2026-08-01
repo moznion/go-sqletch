@@ -96,6 +96,22 @@ func (f Frontend) ProbeOrderBy(clause string) error {
 	return nil
 }
 
+// ProbeOrderByKey checks that expr is exactly one sort key.
+func (f Frontend) ProbeOrderByKey(expr string) error {
+	res, err := pgquery.Parse("SELECT 1 ORDER BY " + expr + "\n")
+	if err != nil {
+		return toParseError(err)
+	}
+	sel := singleSelect(res)
+	if sel == nil || len(sel.SortClause) != 1 ||
+		sel.WhereClause != nil || len(sel.FromClause) != 0 ||
+		len(sel.GroupClause) != 0 || sel.LimitCount != nil ||
+		len(sel.LockingClause) != 0 {
+		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a single sort key"}
+	}
+	return nil
+}
+
 // ProbeGroupBy checks that clause is exactly one statement-level
 // GROUP BY clause and nothing more.
 func (f Frontend) ProbeGroupBy(clause string) error {
@@ -490,6 +506,11 @@ func (t *tree) HasDistinctOn() bool {
 func (t *tree) HasLockingClause() bool {
 	sel := t.sel()
 	return sel != nil && len(sel.LockingClause) > 0
+}
+
+func (t *tree) HasFetchWithTies() bool {
+	sel := t.sel()
+	return sel != nil && sel.LimitOption == pgquery.LimitOption_LIMIT_OPTION_WITH_TIES
 }
 
 // DebugString aids test failures.

@@ -18,7 +18,13 @@ type RenderKind int
 const (
 	RenderMaximal RenderKind = iota
 	RenderCase
+	RenderOrderDefault // an @order-by @default body substituted
 )
+
+// OrderSelection selects the emission of each @order-by block (by
+// block order): nil = maximal (all keys, declaration order), empty
+// non-nil = default-or-omit, else a sequence of key<<1|desc elements.
+type OrderSelection [][]uint8
 
 // FragRange records where a construct's emission landed in the
 // rendered SQL, including synthesized wrapping.
@@ -31,6 +37,7 @@ type Rendering struct {
 	Kind      RenderKind
 	ChooseIdx int // which @choose block differs from maximal (RenderCase)
 	CaseIdx   int // selected ordinal: 0..len(Cases)-1, len(Cases)=default
+	OrderIdx  int // which @order-by block (RenderOrderDefault)
 	SQL       string
 	ParamsSeq []string // template param name per placeholder ($1 = [0])
 	Frags     []FragRange
@@ -94,48 +101,72 @@ func caseBody(c *template.Choose, ord int) (body string, tOff int) {
 }
 
 // Renderings produces the full verified-rendering set: the maximal
-// rendering first (ordinal 0 everywhere), then one rendering per
-// remaining ordinal of each @choose block.
+// rendering first (ordinal 0 everywhere, all @order-by keys listed),
+// then one rendering per remaining @choose ordinal, then one per
+// @order-by @default body.
 func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rendering, error) {
 	max, err := Render(profile, q, nil)
 	if err != nil {
 		return nil, err
 	}
 	out := []Rendering{max}
-	chooseIdx := 0
+	chooseIdx, orderCount := 0, 0
 	for _, it := range q.Items {
-		c, ok := it.(*template.Choose)
+		switch c := it.(type) {
+		case *template.Choose:
+			for ord := 1; ord < maxOrdinal(c); ord++ {
+				r, err := Render(profile, q, CaseSelection{chooseIdx: ord})
+				if err != nil {
+					return nil, err
+				}
+				r.Kind = RenderCase
+				r.ChooseIdx = chooseIdx
+				r.CaseIdx = ord
+				out = append(out, r)
+			}
+			chooseIdx++
+		case *template.OrderBy:
+			orderCount++
+		}
+	}
+	orderIdx := 0
+	for _, it := range q.Items {
+		o, ok := it.(*template.OrderBy)
 		if !ok {
 			continue
 		}
-		for ord := 1; ord < maxOrdinal(c); ord++ {
-			r, err := Render(profile, q, CaseSelection{chooseIdx: ord})
+		if o.Default != nil {
+			orders := make(OrderSelection, orderCount)
+			orders[orderIdx] = []uint8{} // empty non-nil = default
+			r, err := renderCore(profile, q, allActive, nil, orders)
 			if err != nil {
 				return nil, err
 			}
-			r.Kind = RenderCase
-			r.ChooseIdx = chooseIdx
-			r.CaseIdx = ord
+			r.Kind = RenderOrderDefault
+			r.OrderIdx = orderIdx
 			out = append(out, r)
 		}
-		chooseIdx++
+		orderIdx++
 	}
 	return out, nil
 }
+
+func allActive(*template.IfPresent) bool { return true }
 
 // Render emits one rendering with every guard active and the given
 // case selection. This is the reference implementation of premise P2's
 // emission algorithm.
 func Render(profile dialect.LexerProfile, q *template.QueryTemplate, sel CaseSelection) (Rendering, error) {
-	return renderCore(profile, q, func(*template.IfPresent) bool { return true }, sel)
+	return renderCore(profile, q, allActive, sel, nil)
 }
 
 // RenderShape emits the SQL of one concrete shape: an @if-present
 // fragment is active iff every one of its guard atoms' bits is set in
-// guardMask (bit order = q.GuardAtoms). Used by shape enumeration,
+// guardMask (bit order = q.GuardAtoms); orders selects each @order-by
+// block's key sequence. Used by shape enumeration,
 // `check --exhaustive`, and the property test.
 func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
-	guardMask uint64, sel CaseSelection) (Rendering, error) {
+	guardMask uint64, sel CaseSelection, orders OrderSelection) (Rendering, error) {
 
 	bit := map[template.GuardAtom]int{}
 	for i, g := range q.GuardAtoms {
@@ -150,14 +181,14 @@ func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
 		}
 		return true
 	}
-	return renderCore(profile, q, active, sel)
+	return renderCore(profile, q, active, sel, orders)
 }
 
 func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
-	active func(*template.IfPresent) bool, sel CaseSelection) (Rendering, error) {
+	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection) (Rendering, error) {
 
 	r := &renderer{profile: profile, paramNum: map[string]int{}}
-	chooseIdx := 0
+	chooseIdx, orderIdx := 0, 0
 	for _, it := range q.Items {
 		switch v := it.(type) {
 		case *template.Skeleton:
@@ -195,6 +226,47 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			}
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 			chooseIdx++
+		case *template.OrderBy:
+			var seq []uint8 // nil = maximal (all keys)
+			if orders != nil && orderIdx < len(orders) {
+				seq = orders[orderIdx]
+			}
+			r.emitSynth("\n", v.Span.Start)
+			fragStart := r.len()
+			switch {
+			case seq == nil:
+				r.emitSynth("ORDER BY ", v.Span.Start)
+				for i, k := range v.Keys {
+					if i > 0 {
+						r.emitSynth(", ", v.Span.Start)
+					}
+					if err := r.emitVerbatim(k.Body, k.Span.Start); err != nil {
+						return Rendering{}, err
+					}
+				}
+			case len(seq) == 0:
+				if v.Default != nil && v.Default.Body != "" {
+					if err := r.emitVerbatim(v.Default.Body, v.Default.Span.Start); err != nil {
+						return Rendering{}, err
+					}
+				}
+			default:
+				r.emitSynth("ORDER BY ", v.Span.Start)
+				for i, e := range seq {
+					if i > 0 {
+						r.emitSynth(", ", v.Span.Start)
+					}
+					k := v.Keys[e>>1]
+					if err := r.emitVerbatim(k.Body, k.Span.Start); err != nil {
+						return Rendering{}, err
+					}
+					if e&1 == 1 {
+						r.emitSynth(" DESC", v.Span.Start)
+					}
+				}
+			}
+			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
+			orderIdx++
 		}
 	}
 	return Rendering{

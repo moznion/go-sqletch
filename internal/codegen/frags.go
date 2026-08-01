@@ -62,6 +62,19 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 				addCase(v.Default.Body)
 			}
 			frags = append(frags, f)
+		case *template.OrderBy:
+			f := runtime.Frag{Kind: runtime.OrderBy}
+			for _, k := range v.Keys {
+				c := runtime.Case{Text: k.Body}
+				c.ParamSpans, c.ParamIdx = paramSpans(profile, k.Body, paramIdx)
+				f.Cases = append(f.Cases, c)
+			}
+			if v.Default != nil && v.Default.Body != "" {
+				d := runtime.Case{Text: v.Default.Body}
+				d.ParamSpans, d.ParamIdx = paramSpans(profile, v.Default.Body, paramIdx)
+				f.Default = &d
+			}
+			frags = append(frags, f)
 		}
 	}
 	return frags

@@ -122,6 +122,22 @@ HAVING TRUE
 @endif
 ;
 `,
+		`-- name: OrderedUsers :many
+SELECT u.id, u.email FROM users AS u
+WHERE TRUE
+@if-present(status)
+  AND u.status = :status
+@endif
+@order-by(sort)
+@key(created_at)
+u.created_at
+@key(email)
+u.email
+@default
+ORDER BY u.id ASC
+@end
+LIMIT :limit;
+`,
 		`-- name: SignupsByBucket :many
 SELECT
 @choose(bucket)
@@ -143,11 +159,11 @@ ORDER BY 1;
 		frags := BuildFrags(postgres.Profile{}, q)
 		keys, _ := shape.Enumerate(q, 0)
 		for _, k := range keys {
-			want, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection())
+			want, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices})
+			got, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
 			if got != want.SQL {
 				t.Fatalf("%s shape %s:\nruntime:\n%q\nrenderer:\n%q", q.Name, k, got, want.SQL)
 			}

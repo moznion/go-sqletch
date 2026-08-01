@@ -128,9 +128,13 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 	var diags []diagnostics.Diagnostic
 
 	chooseParams := map[string]*template.Choose{}
+	orderParams := map[string]*template.OrderBy{}
 	for _, it := range q.Items {
-		if c, ok := it.(*template.Choose); ok {
+		switch c := it.(type) {
+		case *template.Choose:
 			chooseParams[c.Param] = c
+		case *template.OrderBy:
+			orderParams[c.Param] = c
 		}
 	}
 
@@ -146,6 +150,18 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 			if p.GuardBit >= 0 {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds, c.Span,
 					"%q cannot be both a @choose parameter and an @if-present guard (R9)", name))
+			}
+			continue
+		}
+		if o, isOrder := orderParams[name]; isOrder {
+			if len(p.Occurrences) > 0 {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds,
+					p.Occurrences[0].Span,
+					"%q is an @order-by control parameter; it selects sort keys and cannot also bind as a SQL value (R9)", ":"+name))
+			}
+			if p.GuardBit >= 0 {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds, o.Span,
+					"%q cannot be both an @order-by parameter and a guard (R9)", name))
 			}
 			continue
 		}
