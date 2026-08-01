@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/moznion/sqletch/internal/dialect"
@@ -86,6 +87,36 @@ var typesByName = map[string]dialect.TypeRef{
 	"timestamptz[]": {OID: 1185, Name: "_timestamptz"},
 	"uuid[]":        {OID: 2951, Name: "_uuid"},
 	"float8[]":      {OID: 1022, Name: "_float8"}, "double precision[]": {OID: 1022, Name: "_float8"},
+}
+
+// writableNames is the reverse of typesByName: the spelling to suggest
+// when a `-- @param` hint disagrees with the oracle (SQLETCH213). The
+// oracle's own name for an array is `_varchar`, which is not what an
+// author writes — `varchar[]` is. Built once, deterministically:
+// shortest spelling wins, ties broken lexicographically.
+var writableNames = func() map[uint32]string {
+	out := map[uint32]string{}
+	names := make([]string, 0, len(typesByName))
+	for n := range typesByName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		oid := typesByName[n].OID
+		if cur, ok := out[oid]; ok && len(cur) <= len(n) {
+			continue
+		}
+		out[oid] = n
+	}
+	return out
+}()
+
+// WritableName returns the `-- @param` spelling for an OID, so
+// diagnostics can show the compliant rewrite. False when the type has
+// no annotation spelling (it can then only be inferred).
+func (TypeMap) WritableName(oid uint32) (string, bool) {
+	n, ok := writableNames[oid]
+	return n, ok
 }
 
 // TypeByName resolves a SQL type name from a `-- @param` hint.

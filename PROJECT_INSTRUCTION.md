@@ -546,13 +546,19 @@ for every non-empty list (IN-list growth is parse-invariant) and arity
 0 is its own verified rendering, emitted as
 `IN (SELECT NULL FROM DUAL WHERE FALSE)` so the empty list is FALSE
 even for a NULL operand, exactly like `= ANY('{}')`. `-- @param name:
-type` annotations: on PostgreSQL optional explicit overrides; on Tier
-2 the mandatory source of parameter types (a missing annotation is a
-compile diagnostic naming the parameter; on expanding dialects the
-annotation gives the @in ELEMENT type). Type names are matched
-case-insensitively with length/precision arguments stripped
-(`varchar(16)` → `varchar`; `bigint unsigned` folds the modifier); an
-unknown parameter or type name is a compile diagnostic.
+type` annotations are **optional assertions on Tier 1 and the
+mandatory source of parameter types on Tier 2** (a missing annotation
+is a compile diagnostic naming the parameter; on expanding dialects
+the annotation gives the @in ELEMENT type, on PostgreSQL the ARRAY
+type). Where the oracle types parameters, an annotation may not
+*override* it: a disagreement is a compile diagnostic and the oracle's
+type wins. Overriding would let a bind be typed at something the query
+was never verified with, defeating P1 — and it is unobservable to
+every other phase, since the oracle types the rendered SQL and never
+sees the annotation. Type names are matched case-insensitively with
+length/precision arguments stripped (`varchar(16)` → `varchar`;
+`bigint unsigned` folds the modifier); an unknown parameter or type
+name is a compile diagnostic.
 
 ## Structural Rules
 

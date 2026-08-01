@@ -85,6 +85,7 @@ const (
 	CodeColumnAgreement       Code = "SQLETCH210" // renderings disagree on result columns
 	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
 	CodeOptionalInsertNotNull Code = "SQLETCH212" // optional NOT NULL column without default (warning)
+	CodeParamHintConflict     Code = "SQLETCH213" // `-- @param` hint disagrees with the oracle (Tier 1)
 )
 
 // Codegen/config codes.
