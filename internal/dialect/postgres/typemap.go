@@ -1,6 +1,10 @@
 package postgres
 
-import "github.com/moznion/sqletch/internal/dialect"
+import (
+	"strings"
+
+	"github.com/moznion/sqletch/internal/dialect"
+)
 
 // TypeMap maps PostgreSQL type OIDs to Go types for generated code.
 // Deliberately conservative: unmapped types are a compile error
@@ -32,9 +36,67 @@ var goTypes = map[uint32]dialect.GoTypeRef{
 	1700: {Name: "float64"},                   // numeric (documented lossy mapping)
 	2950: {Name: "string"},                    // uuid
 	3802: {Name: "[]byte"},                    // jsonb
+
+	// Array types (@in parameters and array columns).
+	1000: {Name: "[]bool"},                      // _bool
+	1005: {Name: "[]int16"},                     // _int2
+	1007: {Name: "[]int32"},                     // _int4
+	1016: {Name: "[]int64"},                     // _int8
+	1009: {Name: "[]string"},                    // _text
+	1014: {Name: "[]string"},                    // _bpchar
+	1015: {Name: "[]string"},                    // _varchar
+	1021: {Name: "[]float32"},                   // _float4
+	1022: {Name: "[]float64"},                   // _float8
+	1182: {Name: "[]time.Time", Import: "time"}, // _date
+	1115: {Name: "[]time.Time", Import: "time"}, // _timestamp
+	1185: {Name: "[]time.Time", Import: "time"}, // _timestamptz
+	1231: {Name: "[]float64"},                   // _numeric
+	2951: {Name: "[]string"},                    // _uuid
 }
 
 func (TypeMap) GoType(oid uint32) (dialect.GoTypeRef, bool) {
 	t, ok := goTypes[oid]
+	return t, ok
+}
+
+// typesByName resolves `-- @param name: sqltype` hints. Keys are
+// normalized (lowercased, length arguments stripped).
+var typesByName = map[string]dialect.TypeRef{
+	"text":    {OID: 25, Name: "text"},
+	"varchar": {OID: 1043, Name: "varchar"}, "character varying": {OID: 1043, Name: "varchar"},
+	"char": {OID: 1042, Name: "bpchar"}, "bpchar": {OID: 1042, Name: "bpchar"},
+	"bigint": {OID: 20, Name: "int8"}, "int8": {OID: 20, Name: "int8"},
+	"integer": {OID: 23, Name: "int4"}, "int": {OID: 23, Name: "int4"}, "int4": {OID: 23, Name: "int4"},
+	"smallint": {OID: 21, Name: "int2"}, "int2": {OID: 21, Name: "int2"},
+	"boolean": {OID: 16, Name: "bool"}, "bool": {OID: 16, Name: "bool"},
+	"timestamptz": {OID: 1184, Name: "timestamptz"}, "timestamp with time zone": {OID: 1184, Name: "timestamptz"},
+	"timestamp": {OID: 1114, Name: "timestamp"}, "timestamp without time zone": {OID: 1114, Name: "timestamp"},
+	"date":  {OID: 1082, Name: "date"},
+	"uuid":  {OID: 2950, Name: "uuid"},
+	"jsonb": {OID: 3802, Name: "jsonb"}, "json": {OID: 114, Name: "json"},
+	"double precision": {OID: 701, Name: "float8"}, "float8": {OID: 701, Name: "float8"},
+	"real": {OID: 700, Name: "float4"}, "float4": {OID: 700, Name: "float4"},
+	"numeric": {OID: 1700, Name: "numeric"}, "decimal": {OID: 1700, Name: "numeric"},
+	"bytea":  {OID: 17, Name: "bytea"},
+	"text[]": {OID: 1009, Name: "_text"}, "varchar[]": {OID: 1015, Name: "_varchar"},
+	"bigint[]": {OID: 1016, Name: "_int8"}, "int8[]": {OID: 1016, Name: "_int8"},
+	"integer[]": {OID: 1007, Name: "_int4"}, "int[]": {OID: 1007, Name: "_int4"}, "int4[]": {OID: 1007, Name: "_int4"},
+	"smallint[]": {OID: 1005, Name: "_int2"}, "int2[]": {OID: 1005, Name: "_int2"},
+	"boolean[]": {OID: 1000, Name: "_bool"}, "bool[]": {OID: 1000, Name: "_bool"},
+	"timestamptz[]": {OID: 1185, Name: "_timestamptz"},
+	"uuid[]":        {OID: 2951, Name: "_uuid"},
+	"float8[]":      {OID: 1022, Name: "_float8"}, "double precision[]": {OID: 1022, Name: "_float8"},
+}
+
+// TypeByName resolves a SQL type name from a `-- @param` hint.
+func (TypeMap) TypeByName(name string) (dialect.TypeRef, bool) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	// Strip length/precision arguments: varchar(16) -> varchar.
+	if i := strings.IndexByte(n, '('); i >= 0 {
+		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
+			n = strings.TrimSpace(n[:i] + n[i+j+1:])
+		}
+	}
+	t, ok := typesByName[n]
 	return t, ok
 }

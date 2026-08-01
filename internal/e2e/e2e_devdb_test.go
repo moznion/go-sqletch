@@ -213,6 +213,18 @@ u.email LIKE :scope_prefix || '%'
 ORDER BY u.id
 LIMIT :limit;
 `,
+	"in_list": `-- name: UsersInStatuses :many
+-- @param statuses: text[]
+SELECT u.id, u.email, u.status
+FROM users AS u
+WHERE u.tenant_id = :tenant_id
+  AND u.status @in(:statuses)
+@if-present(min_id)
+  AND u.id >= :min_id
+@endif
+ORDER BY u.id
+LIMIT :limit;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u

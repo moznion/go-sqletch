@@ -528,6 +528,18 @@ Rationale: on Tier 1 the author can simply write `= ANY(:ids)` by hand;
 `@in` exists so the *same need* is expressible on Tier 2 dialects,
 keeping the everyday dynamic-SQL vocabulary dialect-complete.
 
+Status (v0.4-1): implemented on PostgreSQL. `@in` is accepted at
+depth-0 WHERE/HAVING skeleton positions; inside guarded fragment bodies
+it is rejected with a diagnostic (on PostgreSQL, write `= ANY(:param)`
+directly there) — lifting that restriction is deferred until the
+arity-expansion machinery lands with the Tier 2 drivers. `-- @param
+name: type` annotations are likewise implemented: on PostgreSQL they
+are optional explicit overrides (useful where inference falls short);
+on Tier 2 they will be the mandatory source of parameter types. Type
+names are matched case-insensitively with length/precision arguments
+stripped (`varchar(16)` → `varchar`); an unknown parameter or type
+name is a compile diagnostic.
+
 ## Structural Rules
 
 -   **R1 — Structured slots.** Template constructs appear only at the

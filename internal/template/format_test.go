@@ -116,6 +116,7 @@ t.b = :b
 @end
 ;
 `,
+		inTemplate,
 	}
 	for i, src := range sources {
 		once := format(t, src)

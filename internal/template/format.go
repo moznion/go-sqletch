@@ -59,6 +59,11 @@ func Format(profile dialect.LexerProfile, path string, src []byte) ([]byte, []di
 			case *FilterTree:
 				writeFilterTree(&b, v)
 				lastTok = "@construct"
+			case *InExpr:
+				b.WriteString("@in(:")
+				b.WriteString(v.Param)
+				b.WriteString(")")
+				lastTok = "@construct"
 			}
 			pos = it.Raw().End
 		}

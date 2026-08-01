@@ -62,6 +62,10 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 				addCase(v.Default.Body)
 			}
 			frags = append(frags, f)
+		case *template.InExpr:
+			frags = append(frags, runtime.Frag{
+				Kind: runtime.InAny, ParamIdx: []int16{paramIdx[v.Param]},
+			})
 		case *template.FilterTree:
 			// Predicate ParamIdx values index the LEAF's argument list
 			// (the predicate's distinct params in order), not the

@@ -85,6 +85,12 @@ static_expansion:
 	}
 	genBefore := readFile(t, dir, "gen/search_users.sql.go")
 
+	// The @param hint fed the pipeline: the @in parameter is a plain
+	// slice in the generated params struct.
+	if inGen := readFile(t, dir, "gen/users_in_statuses.sql.go"); !strings.Contains(inGen, "Statuses []string") {
+		t.Errorf("@in param must generate a slice field:\n%s", inGen)
+	}
+
 	// Static expansion: the audit .sql files exist (8 shapes: 2 guards
 	// x 2 sort cases) and the generated code dispatches via the
 	// precomposed shape table instead of the composer.
@@ -199,6 +205,14 @@ ORDER BY u.email ASC
 ORDER BY u.id ASC
 @end
 
+LIMIT :limit;
+
+-- name: UsersInStatuses :many
+-- @param statuses: text[]
+SELECT u.id, u.email
+FROM users AS u
+WHERE u.status @in(:statuses)
+ORDER BY u.id
 LIMIT :limit;
 `
 

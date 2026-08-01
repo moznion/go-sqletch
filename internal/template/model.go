@@ -156,6 +156,17 @@ type OrderKey struct {
 	Span diagnostics.Span
 }
 
+// InExpr is the @in construct: `expr @in(:param)` — dialect-complete
+// variable-arity membership. On PostgreSQL it renders as a single
+// static `= ANY($n)`; expanding dialects (MySQL/SQLite) render
+// per-arity `IN (?, …)` lists.
+type InExpr struct {
+	Param string
+	Span  diagnostics.Span
+}
+
+func (i *InExpr) Raw() diagnostics.Span { return i.Span }
+
 // FilterTree is the @filter-tree construct: a closed predicate
 // vocabulary the caller combines at runtime with AND/OR trees.
 // Predicate parameters are constructor arguments, not struct fields.
@@ -212,6 +223,17 @@ type QueryTemplate struct {
 	// the maximal Describe implies positional alignment in every shape.
 	InsertColGuards []GuardedItem
 	InsertValGuards [][]GuardedItem
+	// TypeHints holds `-- @param name: sqltype` directives: explicit
+	// parameter types that override (Tier 1) or supply (Tier 2) the
+	// oracle's answer. Values are raw SQL type names resolved by the
+	// dialect.
+	TypeHints map[string]TypeHint
+}
+
+// TypeHint is one `-- @param` directive.
+type TypeHint struct {
+	SQLType string
+	Span    diagnostics.Span
 }
 
 type QueryFile struct {

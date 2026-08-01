@@ -19,6 +19,7 @@ func NewScanner(profile dialect.LexerProfile) *Scanner {
 }
 
 var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|many|exec|execrows)\s*$`)
+var paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // clause context, tracked at paren depth 0.
@@ -139,6 +140,14 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 			fs.finalize(file, tok.Start)
 			fs.startQuery(m[1], m[2], tok)
 			return
+		}
+		if m := paramHintRe.FindStringSubmatch(tok.Text); m != nil && fs.qb != nil {
+			q := fs.qb.q
+			if q.TypeHints == nil {
+				q.TypeHints = map[string]TypeHint{}
+			}
+			q.TypeHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
+			// fall through: the comment remains skeleton text.
 		}
 	}
 	if fs.qb == nil {
@@ -298,6 +307,7 @@ var constructVocab = map[string]bool{
 	"choose": true, "case": true, "default": true, "end": true,
 	"when": true, "order-by": true, "key": true,
 	"filter-tree": true, "predicate": true,
+	"in": true,
 }
 
 // matchConstruct reports whether src[pos:] starts a template construct.
@@ -342,6 +352,8 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 		return fs.parseOrderBy(pos, nameEnd)
 	case "filter-tree":
 		return fs.parseFilterTree(pos, nameEnd)
+	case "in":
+		return fs.parseIn(pos, nameEnd)
 	default:
 		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
 			"unmatched @%s", name)
@@ -456,6 +468,13 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
 						fs.span(pos, nameEnd), "constructs do not nest (R5)"))
 					stack = append(stack, "end")
+					pos = nameEnd
+					continue
+				case "in":
+					if len(stack) == 0 {
+						fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, nameEnd),
+							"@in inside guarded fragments is not supported yet; write the membership test directly (PostgreSQL: `= ANY(:param)`)")
+					}
 					pos = nameEnd
 					continue
 				case "case", "default", "key", "predicate":
@@ -1000,6 +1019,48 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 	return endPos
 }
 
+// parseIn parses the inline membership construct `@in(:param)`. On
+// PostgreSQL it renders as a single static `= ANY($n)`; expanding
+// dialects render per-arity IN lists.
+func (fs *fileScan) parseIn(pos, nameEnd int) int {
+	qb := fs.qb
+	p := nameEnd
+	if p >= len(fs.src) || fs.src[p] != '(' {
+		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, p),
+			"@in arguments must follow immediately: @in(:param)")
+		return p
+	}
+	p = fs.skipTrivia(p + 1)
+	tok := fs.lexAt(p)
+	if tok.Kind != dialect.KindParamRef {
+		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
+			"@in: expected a named parameter (:name)")
+		return tok.End
+	}
+	name := tok.Text[1:]
+	p = fs.skipTrivia(tok.End)
+	rp := fs.lexAt(p)
+	if rp.Kind != dialect.KindRParen {
+		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(rp.Start, rp.End),
+			"@in: expected ')'")
+		return rp.End
+	}
+	if qb.depth != 0 {
+		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, rp.End),
+			"@in may not appear inside parentheses or subqueries (v0.4)")
+	}
+	if qb.ctx != ctxWhere && qb.ctx != ctxHaving {
+		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, rp.End),
+			"@in is allowed in WHERE/HAVING expressions (e.g. `u.status @in(:statuses)`)")
+	}
+	fs.recordParam(qb.q, name, fs.span(tok.Start, tok.End), nil, false, false)
+
+	qb.flushSkeleton(fs, pos)
+	qb.q.Items = append(qb.q.Items, &InExpr{Param: name, Span: fs.span(pos, rp.End)})
+	qb.skelStart = rp.End
+	return rp.End
+}
+
 // distinctParams lists a body's :params in first-occurrence order —
 // the predicate constructor's argument order.
 func (fs *fileScan) distinctParams(body string) []string {
@@ -1138,6 +1199,9 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					if len(stack) == 0 && terminators[name] {
 						return pos, name
 					}
+					pos = nameEnd
+					continue
+				case "in":
 					pos = nameEnd
 					continue
 				}

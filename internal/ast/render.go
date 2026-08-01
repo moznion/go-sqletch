@@ -267,6 +267,13 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			}
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 			orderIdx++
+		case *template.InExpr:
+			// Inline membership (PostgreSQL rendering): `= ANY($n)`.
+			fragStart := r.len()
+			r.emitSynth("= ANY(", v.Span.Start)
+			r.emitParamRef(v.Param, v.Span.Start)
+			r.emitSynth(")", v.Span.Start)
+			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 		case *template.FilterTree:
 			// Inline emission (the construct follows an unconditional
 			// `AND ` in the skeleton). Maximal = all predicates
@@ -307,6 +314,20 @@ type renderer struct {
 }
 
 func (r *renderer) len() int { return r.sb.Len() }
+
+// emitParamRef emits a placeholder for a parameter that has no :name
+// token in the template text (construct-owned bindings like @in).
+func (r *renderer) emitParamRef(name string, anchorTOff int) {
+	n, ok := r.paramNum[name]
+	if !ok {
+		n = len(r.paramSeq) + 1
+		r.paramNum[name] = n
+		r.paramSeq = append(r.paramSeq, name)
+	}
+	ph := fmt.Sprintf("$%d", n)
+	r.segs = append(r.segs, Seg{ROff: r.sb.Len(), RLen: len(ph), TOff: anchorTOff, Synth: true})
+	r.sb.WriteString(ph)
+}
 
 func (r *renderer) emitSynth(text string, anchorTOff int) {
 	if text == "" {

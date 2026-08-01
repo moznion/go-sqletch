@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], corpus["in_list"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -363,6 +363,38 @@ func main() {
 	})
 	die(err)
 	expect(len(either) == 2, "banned OR alice*")
+
+	// @in: a slice parameter crosses as one array bind (= ANY($n)).
+	// Empty slice means "matches nothing", never "matches everything".
+	inBoth, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
+		TenantID: 1,
+		Statuses: []string{"active", "banned"},
+		Limit:    100,
+	})
+	die(err)
+	expect(len(inBoth) == 5, "both statuses match every tenant-1 user")
+	inBanned, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
+		TenantID: 1,
+		Statuses: []string{"banned"},
+		Limit:    100,
+	})
+	die(err)
+	expect(len(inBanned) == 1 && inBanned[0].Email == "carol@example.com", "single status")
+	inNone, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
+		TenantID: 1,
+		Statuses: []string{},
+		Limit:    100,
+	})
+	die(err)
+	expect(len(inNone) == 0, "empty list matches nothing")
+	inGuarded, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
+		TenantID: 1,
+		Statuses: []string{"active", "banned"},
+		MinID:    gen.Ptr(int64(3)),
+		Limit:    100,
+	})
+	die(err)
+	expect(len(inGuarded) == 3 && inGuarded[0].ID == 3, "@in composes with a guarded conjunct")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

@@ -26,6 +26,7 @@ const (
 	Choose
 	OrderBy
 	FilterTree
+	InAny // @in on PostgreSQL: `= ANY($n)`, ParamIdx[0] is the bind
 )
 
 type Sep uint8
@@ -300,6 +301,10 @@ func ComposeTree(frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string,
 				c := f.Cases[ord]
 				emit(c.Text, c.ParamSpans, c.ParamIdx)
 			}
+		case InAny:
+			b.WriteString("= ANY(")
+			place(bindKey{idx: f.ParamIdx[0]})
+			b.WriteByte(')')
 		case FilterTree:
 			if tree == nil {
 				b.WriteString("TRUE")

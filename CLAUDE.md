@@ -105,6 +105,19 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - `EXPLAIN (GENERIC_PLAN)` output must go through pgconn's raw simple
   query (pgx's Query/Exec layers reject bare $n placeholders).
 
+## Known v0.4 decisions and limits
+
+- `-- @param name: type` hints: parsed per query (the comment stays in
+  the skeleton verbatim); on PostgreSQL they act as explicit overrides
+  resolved via `postgres.TypeMap.TypeByName` (lowercased, length args
+  stripped); unknown param or type name → diagnostic. On Tier 2
+  dialects they will be mandatory.
+- `@in(:param)`: v0.4-1 supports depth-0 WHERE/HAVING skeleton
+  positions only; inside guarded bodies it is rejected with a
+  diagnostic pointing at the PostgreSQL workaround (`= ANY(:param)`).
+  PG rendering is `= ANY($n)` — one static shape, no arity dimension;
+  arity expansion arrives with the MySQL/SQLite drivers.
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

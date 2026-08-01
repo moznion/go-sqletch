@@ -214,6 +214,22 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		for _, pt := range types {
 			cq.paramTypes[pt.Name] = pt.Type
 		}
+		// `-- @param` hints override (Tier 1) or supply (Tier 2) the
+		// oracle's parameter types.
+		for name, hint := range cq.q.TypeHints {
+			if _, known := cq.q.Params[name]; !known {
+				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+					hint.Span, "@param hint for unknown parameter %q", name))
+				continue
+			}
+			tr, ok := (postgres.TypeMap{}).TypeByName(hint.SQLType)
+			if !ok {
+				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+					hint.Span, "unknown SQL type %q in @param hint", hint.SQLType))
+				continue
+			}
+			cq.paramTypes[name] = tr
+		}
 		nullable, err := nullability.AnalyzeAll(frontend, cq.rs, cq.descs, cat, cfg.NullOverridesFor(cq.q.Name))
 		if err != nil {
 			return nil, err
