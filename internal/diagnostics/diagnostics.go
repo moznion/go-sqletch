@@ -89,6 +89,7 @@ const (
 const (
 	CodeConfigParse     Code = "SQLETCH300" // sqletch.yaml unreadable/unknown keys
 	CodeConfigInvalid   Code = "SQLETCH301" // sqletch.yaml field validation
+	CodeExpansionLarge  Code = "SQLETCH302" // static expansion exceeds max_shapes
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
 )

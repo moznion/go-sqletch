@@ -176,6 +176,28 @@ func BuildArgs(argIdx []int16, vals []any) []any {
 	return out
 }
 
+// Expanded is one statically expanded shape: SQL and bind order were
+// precomputed at generate time (via Compose, so byte-identical to what
+// runtime composition would produce).
+type Expanded struct {
+	SQL    string
+	ArgIdx []int16
+}
+
+// ErrShapeNotExpanded is returned when a statically expanded query is
+// asked for a shape key absent from its table — impossible unless the
+// generated code is stale.
+var ErrShapeNotExpanded = errors.New("sqletch: shape missing from the static expansion table")
+
+// Lookup fetches a precomposed shape.
+func Lookup(shapes map[string]Expanded, key ShapeKey) (string, []int16, error) {
+	e, ok := shapes[key.String()]
+	if !ok {
+		return "", nil, ErrShapeNotExpanded
+	}
+	return e.SQL, e.ArgIdx, nil
+}
+
 // ComposedCache memoizes composed SQL per (query, shape), LRU-bounded.
 // Hits compare the full key, never just its string form.
 type ComposedCache struct {

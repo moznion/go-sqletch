@@ -22,6 +22,11 @@ type QueryInput struct {
 	ParamTypes map[string]dialect.TypeRef // pinned types (premise P1)
 	Columns    []dialect.ColumnDesc       // maximal Describe result
 	Nullable   []bool                     // per column (P5)
+	// ExpandedShapes, when non-nil, switches the query to strict static
+	// expansion: keys are canonical shape-key strings, precomputed by
+	// the pipeline via runtime.Compose. The function dispatches by
+	// lookup instead of composing.
+	ExpandedShapes map[string]runtime.Expanded
 }
 
 type Options struct {
@@ -235,10 +240,37 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		fmt.Fprint(w, "}\n\n")
 	}
 
-	g.writeFragsVar(w)
+	if g.in.ExpandedShapes != nil {
+		g.writeShapesVar(w)
+	} else {
+		g.writeFragsVar(w)
+	}
 	sig := g.writeFunc(w, paramsName, rowName, chooses, rowFields)
 
 	return []byte(g.b.String()), sig, diags
+}
+
+// writeShapesVar emits the precomposed shape table (sorted keys for
+// deterministic output).
+func (g *queryGen) writeShapesVar(w *strings.Builder) {
+	fmt.Fprintf(w, "var %sShapes = map[string]runtime.Expanded{\n", lowerCamel(g.in.Q.Name))
+	keys := make([]string, 0, len(g.in.ExpandedShapes))
+	for k := range g.in.ExpandedShapes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		e := g.in.ExpandedShapes[k]
+		fmt.Fprintf(w, "\t%q: {SQL: %q, ArgIdx: []int16{", k, e.SQL)
+		for i, a := range e.ArgIdx {
+			if i > 0 {
+				fmt.Fprint(w, ", ")
+			}
+			fmt.Fprintf(w, "%d", a)
+		}
+		fmt.Fprint(w, "}},\n")
+	}
+	fmt.Fprint(w, "}\n\n")
 }
 
 func (g *queryGen) addImport(imp string) {
@@ -370,7 +402,12 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
 	}
 
-	fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
+	if g.in.ExpandedShapes != nil {
+		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+	} else {
+		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
+	}
 	var vals []string
 	for _, name := range q.ParamOrder {
 		vals = append(vals, "arg."+GoName(name))

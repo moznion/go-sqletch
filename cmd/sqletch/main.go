@@ -47,13 +47,29 @@ func main() {
 		"prepare and EXPLAIN every enumerable shape (needs the dev DB)")
 	root.AddCommand(check)
 
-	root.AddCommand(&cobra.Command{
+	var enumerate bool
+	explain := &cobra.Command{
 		Use:   "explain [query...]",
 		Short: "show guards, cases, types, and shape counts per query",
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(cli.Explain(configPath, args, os.Stdout, os.Stderr))
+			os.Exit(cli.Explain(configPath, args, enumerate, os.Stdout, os.Stderr))
 		},
-	})
+	}
+	explain.Flags().BoolVar(&enumerate, "enumerate", false,
+		"print every reachable SQL shape (no database needed)")
+	root.AddCommand(explain)
+
+	var fmtCheck bool
+	fmtCmd := &cobra.Command{
+		Use:   "fmt",
+		Short: "canonicalize template files (construct layout, anchors)",
+		Run: func(cmd *cobra.Command, args []string) {
+			os.Exit(cli.Fmt(configPath, fmtCheck, os.Stdout, os.Stderr))
+		},
+	}
+	fmtCmd.Flags().BoolVar(&fmtCheck, "check", false,
+		"list files that would change; exit 1 if any")
+	root.AddCommand(fmtCmd)
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",

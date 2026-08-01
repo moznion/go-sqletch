@@ -51,6 +51,8 @@ output:
   path: gen
 cache:
   path: .sqletch/cache
+static_expansion:
+  queries: [SearchUsers]
 `)
 	}
 	writeConfig(dsn)
@@ -82,6 +84,17 @@ cache:
 		}
 	}
 	genBefore := readFile(t, dir, "gen/search_users.sql.go")
+
+	// Static expansion: the audit .sql files exist (8 shapes: 2 guards
+	// x 2 sort cases) and the generated code dispatches via the
+	// precomposed shape table instead of the composer.
+	expanded, err := filepath.Glob(filepath.Join(dir, ".sqletch/expanded/SearchUsers/*.sql"))
+	if err != nil || len(expanded) != 8 {
+		t.Fatalf("expanded shape files = %d (%v), want 8", len(expanded), err)
+	}
+	if !strings.Contains(genBefore, "searchUsersShapes") || strings.Contains(genBefore, "searchUsersFrags") {
+		t.Errorf("expanded query must dispatch via the shape table:\n%s", genBefore)
+	}
 
 	// 2. Warm check with an UNREACHABLE DSN: success proves the cache
 	// made it fully offline.

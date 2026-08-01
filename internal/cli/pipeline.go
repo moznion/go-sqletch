@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/cache"
@@ -23,6 +24,7 @@ import (
 	"github.com/moznion/sqletch/internal/rules"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/sqletch/runtime"
 )
 
 // Mode selects how much of the pipeline runs.
@@ -257,15 +259,40 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	}
 
 	// ---- codegen ---------------------------------------------------------
+	expandedNames := map[string]bool{}
+	for _, name := range cfg.Expansion.Queries {
+		if _, ok := names[name]; !ok {
+			res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeConfigInvalid,
+				diagnostics.Span{File: cfg.Dir}, "static_expansion.queries lists unknown query %q", name))
+		}
+		expandedNames[name] = true
+	}
 	var inputs []codegen.QueryInput
 	for _, cq := range queries {
-		inputs = append(inputs, codegen.QueryInput{
+		frags := codegen.BuildFrags(profile, cq.q)
+		in := codegen.QueryInput{
 			Q:          cq.q,
-			Frags:      codegen.BuildFrags(profile, cq.q),
+			Frags:      frags,
 			ParamTypes: cq.paramTypes,
 			Columns:    cq.descs[0].Columns,
 			Nullable:   cq.nullable,
-		})
+		}
+		if expandedNames[cq.q.Name] {
+			shapes, d := expandShapes(cq.q, frags, cfg.Expansion.MaxShapes)
+			res.Diags = append(res.Diags, d...)
+			if shapes != nil {
+				in.ExpandedShapes = shapes
+				if mode == ModeGenerate {
+					if err := writeExpandedFiles(cfg, cq.q.Name, shapes); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+		inputs = append(inputs, in)
+	}
+	if diagnostics.HasErrors(res.Diags) {
+		return res, nil
 	}
 	files, diags := codegen.Generate(codegen.Options{Package: cfg.Output.Package}, postgres.TypeMap{}, inputs)
 	res.Diags = append(res.Diags, diags...)
@@ -339,6 +366,53 @@ func descToEntry(fp, sql string, d dialect.Desc) *cache.OracleEntry {
 		})
 	}
 	return e
+}
+
+// expandShapes precomposes every reachable shape via the SAME runtime
+// composer generated code uses, so the expansion is byte-identical to
+// what hybrid composition would produce.
+func expandShapes(q *template.QueryTemplate, frags []runtime.Frag,
+	maxShapes int) (map[string]runtime.Expanded, []diagnostics.Diagnostic) {
+
+	keys, truncated := shape.Enumerate(q, maxShapes)
+	if truncated {
+		return nil, []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeExpansionLarge,
+			q.HeaderSpan,
+			"%s reaches more than %d shapes; raise static_expansion.max_shapes or drop the query from static expansion",
+			q.Name, maxShapes)}
+	}
+	out := make(map[string]runtime.Expanded, len(keys))
+	for _, k := range keys {
+		sqlText, argIdx := runtime.Compose(frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices})
+		out[k.String()] = runtime.Expanded{SQL: sqlText, ArgIdx: argIdx}
+	}
+	return out, nil
+}
+
+// writeExpandedFiles materializes the audit surface: one .sql file per
+// shape under .sqletch/expanded/<query>/.
+func writeExpandedFiles(cfg config.Config, query string, shapes map[string]runtime.Expanded) error {
+	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "expanded", query))
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for key, e := range shapes {
+		name := shapeFileName(key) + ".sql"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(e.SQL+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// shapeFileName makes a canonical shape key filename-safe:
+// "g=3;c=1,0" -> "g3_c1-0".
+func shapeFileName(key string) string {
+	r := strings.NewReplacer("=", "", ";", "_", ",", "-")
+	return r.Replace(key)
 }
 
 // explainData is the per-query summary consumed by `sqletch explain`.

@@ -7,9 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/config"
 	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/sqletch/internal/shape"
+	"github.com/moznion/sqletch/internal/template"
 )
 
 // Exit codes (design 07 §2): 0 ok, 1 diagnostics, 2 environment.
@@ -61,12 +66,17 @@ func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat b
 }
 
 // Explain implements `sqletch explain [query…]` from the data written
-// at generate time — no database, no recompilation.
-func Explain(configPath string, queryNames []string, out, errW io.Writer) int {
+// at generate time — no database, no recompilation. With enumerate,
+// it prints every reachable shape's SQL instead (scan + render only,
+// still no database).
+func Explain(configPath string, queryNames []string, enumerate bool, out, errW io.Writer) int {
 	cfg, diags := config.Load(configPath)
 	if len(diags) > 0 {
 		printBare(errW, diags, false)
 		return ExitDiagnostics
+	}
+	if enumerate {
+		return explainEnumerate(cfg, queryNames, out, errW)
 	}
 	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
 	entries, err := os.ReadDir(dir)
@@ -137,4 +147,101 @@ func printExplain(w io.Writer, d explainData) {
 func printBare(w io.Writer, diags []diagnostics.Diagnostic, jsonFormat bool) {
 	res := &Result{Diags: diags, Sources: map[string][]byte{}}
 	PrintDiags(w, res, jsonFormat)
+}
+
+const enumerateCap = 4096
+
+func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Writer) int {
+	profile := postgres.Profile{}
+	paths, err := cfg.ExpandGlobs(cfg.Queries)
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: %v\n", err)
+		return ExitEnvironment
+	}
+	want := map[string]bool{}
+	for _, n := range queryNames {
+		want[n] = true
+	}
+	scanner := template.NewScanner(profile)
+	printed := 0
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(errW, "sqletch: %v\n", err)
+			return ExitEnvironment
+		}
+		file, diags := scanner.ScanFile(p, src)
+		if diagnostics.HasErrors(diags) {
+			printBare(errW, diags, false)
+			return ExitDiagnostics
+		}
+		for _, q := range file.Queries {
+			if len(want) > 0 && !want[q.Name] {
+				continue
+			}
+			keys, truncated := shape.Enumerate(q, enumerateCap)
+			for _, k := range keys {
+				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection())
+				if err != nil {
+					fmt.Fprintf(errW, "sqletch: %v\n", err)
+					return ExitEnvironment
+				}
+				fmt.Fprintf(out, "-- %s shape %s\n%s\n\n", q.Name, k, strings.TrimSpace(r.SQL))
+			}
+			if truncated {
+				fmt.Fprintf(out, "-- %s: enumeration truncated at %d shapes\n\n", q.Name, enumerateCap)
+			}
+			printed++
+		}
+	}
+	if printed == 0 {
+		fmt.Fprintf(errW, "sqletch: no matching queries\n")
+		return ExitDiagnostics
+	}
+	return ExitOK
+}
+
+// Fmt implements `sqletch fmt [--check]`: canonicalize template files
+// in place, or report the ones that would change.
+func Fmt(configPath string, check bool, out, errW io.Writer) int {
+	cfg, diags := config.Load(configPath)
+	if len(diags) > 0 {
+		printBare(errW, diags, false)
+		return ExitDiagnostics
+	}
+	paths, err := cfg.ExpandGlobs(cfg.Queries)
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: %v\n", err)
+		return ExitEnvironment
+	}
+	changed := 0
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(errW, "sqletch: %v\n", err)
+			return ExitEnvironment
+		}
+		formatted, fdiags := template.Format(postgres.Profile{}, p, src)
+		if diagnostics.HasErrors(fdiags) {
+			printBare(errW, fdiags, false)
+			return ExitDiagnostics
+		}
+		if string(formatted) == string(src) {
+			continue
+		}
+		changed++
+		if check {
+			fmt.Fprintf(out, "%s\n", p)
+			continue
+		}
+		if err := os.WriteFile(p, formatted, 0o644); err != nil {
+			fmt.Fprintf(errW, "sqletch: %v\n", err)
+			return ExitEnvironment
+		}
+	}
+	if check && changed > 0 {
+		return ExitDiagnostics
+	}
+	fmt.Fprintf(out, "sqletch: %d file(s) formatted\n", changed)
+	return ExitOK
 }

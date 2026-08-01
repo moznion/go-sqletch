@@ -26,6 +26,7 @@ type Config struct {
 	Output        Output     `yaml:"output"`
 	Cache         Cache      `yaml:"cache"`
 	Overrides     []Override `yaml:"overrides"`
+	Expansion     Expansion  `yaml:"static_expansion"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.
@@ -53,6 +54,23 @@ type Override struct {
 	Query    string `yaml:"query"`
 	Column   string `yaml:"column"`
 	Nullable *bool  `yaml:"nullable"`
+}
+
+// Expansion configures strict static expansion: listed queries are
+// materialized shape-by-shape into .sql files and dispatch to
+// precomposed SQL instead of composing at runtime.
+type Expansion struct {
+	Queries   []string `yaml:"queries"`
+	MaxShapes int      `yaml:"max_shapes"`
+}
+
+func (c Config) Expanded(query string) bool {
+	for _, q := range c.Expansion.Queries {
+		if q == query {
+			return true
+		}
+	}
+	return false
 }
 
 var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -106,6 +124,9 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	if cfg.Cache.Path == "" {
 		cfg.Cache.Path = ".sqletch/cache"
+	}
+	if cfg.Expansion.MaxShapes == 0 {
+		cfg.Expansion.MaxShapes = 256
 	}
 	for i, o := range cfg.Overrides {
 		if o.Query == "" || o.Column == "" || o.Nullable == nil {
