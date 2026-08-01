@@ -37,9 +37,11 @@ func Format(profile dialect.LexerProfile, path string, src []byte) ([]byte, []di
 					lastTokEnd = start + end
 				}
 			case *IfPresent:
-				// R6 auto-fix: WHERE directly followed by an optional
-				// conjunct gets its TRUE anchor.
-				if v.Slot == SlotWhereConjunct && lastTok == "WHERE" && lastTokEnd >= 0 {
+				// R6 auto-fix: WHERE/HAVING directly followed by an
+				// optional conjunct gets its TRUE anchor.
+				needsAnchor := (v.Slot == SlotWhereConjunct && lastTok == "WHERE") ||
+					(v.Slot == SlotHavingConjunct && lastTok == "HAVING")
+				if needsAnchor && lastTokEnd >= 0 {
 					out := b.String()
 					b.Reset()
 					b.WriteString(out[:lastTokEnd])
@@ -60,14 +62,26 @@ func Format(profile dialect.LexerProfile, path string, src []byte) ([]byte, []di
 }
 
 func writeIfPresent(b *strings.Builder, v *IfPresent) {
-	b.WriteString("@if-present(")
-	for i, g := range v.Guards {
-		if i > 0 {
-			b.WriteString(", ")
-		}
+	isWhen := len(v.Guards) == 1 && v.Guards[0].IsValue()
+	if isWhen {
+		g := v.Guards[0]
+		b.WriteString("@when(")
 		b.WriteString(g.Param)
+		b.WriteString(" ")
+		b.WriteString(g.Op)
+		b.WriteString(" ")
+		b.WriteString(g.RawValue)
+		b.WriteString(")\n")
+	} else {
+		b.WriteString("@if-present(")
+		for i, g := range v.Guards {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(g.Param)
+		}
+		b.WriteString(")\n")
 	}
-	b.WriteString(")\n")
 	switch v.Sep {
 	case SepAnd:
 		b.WriteString("  AND ")
@@ -75,7 +89,11 @@ func writeIfPresent(b *strings.Builder, v *IfPresent) {
 		b.WriteString("  , ")
 	}
 	b.WriteString(v.Body)
-	b.WriteString("\n@endif")
+	if isWhen {
+		b.WriteString("\n@end")
+	} else {
+		b.WriteString("\n@endif")
+	}
 }
 
 func writeChoose(b *strings.Builder, v *Choose) {

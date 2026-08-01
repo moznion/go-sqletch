@@ -296,6 +296,7 @@ func (fs *fileScan) recordParam(q *QueryTemplate, name string, span diagnostics.
 var constructVocab = map[string]bool{
 	"if-present": true, "endif": true,
 	"choose": true, "case": true, "default": true, "end": true,
+	"when": true,
 }
 
 // matchConstruct reports whether src[pos:] starts a template construct.
@@ -332,6 +333,8 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 	switch name {
 	case "if-present":
 		return fs.parseIfPresent(pos, nameEnd)
+	case "when":
+		return fs.parseWhen(pos, nameEnd)
 	case "choose":
 		return fs.parseChoose(pos, nameEnd)
 	default:
@@ -419,7 +422,7 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 		if pos < len(fs.src) && fs.src[pos] == '@' {
 			if name, nameEnd := matchConstruct(fs.src, pos); name != "" {
 				switch name {
-				case "if-present", "choose":
+				case "if-present", "choose", "when":
 					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
 						fs.span(pos, nameEnd), "constructs do not nest (R5)").
 						WithHint("use a multi-parameter guard: @if-present(a, b)"))
@@ -471,7 +474,6 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 }
 
 func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
-	qb := fs.qb
 	args, afterArgs, ok := fs.parseArgList("if-present", pos, nameEnd)
 	if !ok {
 		return afterArgs
@@ -487,7 +489,80 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 		seen[a] = true
 		guards = append(guards, GuardAtom{Param: a})
 	}
+	return fs.finishGuardBlock(pos, afterArgs, guards, "if-present", "endif")
+}
 
+// parseWhen parses `@when(param op literal) … @end` into an IfPresent
+// item carrying a single value atom — everything downstream (render,
+// frags, rules, shapes) treats value and presence atoms uniformly.
+func (fs *fileScan) parseWhen(pos, nameEnd int) int {
+	bad := func(span diagnostics.Span, format string, args ...any) int {
+		fs.errorf(diagnostics.CodeConstructGrammar, span, format, args...)
+		return span.End
+	}
+	p := nameEnd
+	if p >= len(fs.src) || fs.src[p] != '(' {
+		return bad(fs.span(pos, p), "@when arguments must follow immediately: @when(param = literal)")
+	}
+	p = fs.skipTrivia(p + 1)
+	ident := fs.lexAt(p)
+	if ident.Kind != dialect.KindIdent {
+		return bad(fs.span(ident.Start, ident.End), "@when: expected a parameter name")
+	}
+	if !snakeRe.MatchString(ident.Text) {
+		fs.errorf(diagnostics.CodeBadIdentifier, fs.span(ident.Start, ident.End),
+			"%q must be snake_case ([a-z][a-z0-9_]*)", ident.Text)
+	}
+	p = fs.skipTrivia(ident.End)
+	op := fs.lexAt(p)
+	if op.Kind != dialect.KindOperator || (op.Text != "=" && op.Text != "!=" && op.Text != "<>") {
+		return bad(fs.span(op.Start, op.End), "@when: expected `=` or `!=`")
+	}
+	opText := op.Text
+	if opText == "<>" {
+		opText = "!="
+	}
+	p = fs.skipTrivia(op.End)
+	lit := fs.lexAt(p)
+	atom := GuardAtom{Param: ident.Text, Op: opText, RawValue: lit.Text}
+	switch {
+	case lit.Kind == dialect.KindString:
+		atom.Kind = ValueString
+		atom.Value = unquoteSQLString(lit.Text)
+	case lit.Kind == dialect.KindNumber && !strings.ContainsAny(lit.Text, ".eE"):
+		atom.Kind = ValueInt
+		atom.Value = lit.Text
+	case lit.Kind == dialect.KindIdent &&
+		(strings.EqualFold(lit.Text, "true") || strings.EqualFold(lit.Text, "false")):
+		atom.Kind = ValueBool
+		atom.Value = strings.ToLower(lit.Text)
+		atom.RawValue = atom.Value
+	default:
+		return bad(fs.span(lit.Start, lit.End),
+			"@when: the literal must be a string, integer, or boolean")
+	}
+	p = fs.skipTrivia(lit.End)
+	rp := fs.lexAt(p)
+	if rp.Kind != dialect.KindRParen {
+		return bad(fs.span(rp.Start, rp.End), "@when: expected ')'")
+	}
+	return fs.finishGuardBlock(pos, rp.End, []GuardAtom{atom}, "when", "end")
+}
+
+// unquoteSQLString converts a lexed SQL string literal ('a”b') to its
+// Go value (a'b). E-strings are rejected earlier by RawValue shape.
+func unquoteSQLString(text string) string {
+	inner := text
+	if len(inner) >= 2 && inner[0] == '\'' {
+		inner = inner[1 : len(inner)-1]
+	}
+	return strings.ReplaceAll(inner, "''", "'")
+}
+
+// finishGuardBlock consumes the body and closing marker of a guarded
+// block and classifies its slot — shared by @if-present and @when.
+func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, markerName, terminator string) int {
+	qb := fs.qb
 	allowedDepth := 0
 	if qb.ctx == ctxInsertColumns || qb.ctx == ctxInsertValueRow {
 		allowedDepth = 1 // the INSERT list parens are sanctioned slots
@@ -501,11 +576,11 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 	qb.flushSkeleton(fs, pos)
 
 	bodyStart := afterArgs
-	bodyEnd, term := fs.consumeBody(bodyStart, map[string]bool{"endif": true}, qb.q, guards, false)
+	bodyEnd, term := fs.consumeBody(bodyStart, map[string]bool{terminator: true}, qb.q, guards, false)
 	endPos := bodyEnd
 	if term == "" {
-		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
-			"unterminated @if-present: missing @endif")
+		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, afterArgs),
+			"unterminated @%s: missing @%s", markerName, terminator)
 	} else {
 		_, e := matchConstruct(fs.src, bodyEnd)
 		endPos = e
@@ -520,12 +595,15 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 	}
 
 	switch ctx {
-	case ctxWhere:
+	case ctxWhere, ctxHaving:
 		item.Slot = SlotWhereConjunct
+		if ctx == ctxHaving {
+			item.Slot = SlotHavingConjunct
+		}
 		stripped, off, hadAnd := fs.stripLeadingToken(body, bodyOff, isAndToken)
 		if !hadAnd {
 			d := diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
-				"an optional WHERE conjunct must be written as `AND <predicate>`; sqletch owns the separator")
+				"an optional conjunct must be written as `AND <predicate>`; sqletch owns the separator")
 			fs.diags = append(fs.diags, d)
 		} else {
 			item.Sep = SepAnd
@@ -584,7 +662,7 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 		item.Sep = SepNone
 	default:
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, endPos),
-			"@if-present is not allowed in the %s position; allowed slots: WHERE conjunct, SET item, INSERT column/value pair, FROM join item", ctx)
+			"@%s is not allowed in the %s position; allowed slots: WHERE/HAVING conjunct, SET item, INSERT column/value pair, FROM join item", markerName, ctx)
 	}
 
 	qb.q.Items = append(qb.q.Items, item)
@@ -790,7 +868,7 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					stack = append(stack, "endif")
 					pos = nameEnd
 					continue
-				case "choose":
+				case "choose", "when":
 					stack = append(stack, "end")
 					pos = nameEnd
 					continue

@@ -35,7 +35,7 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 		switch v := it.(type) {
 		case *template.IfPresent:
 			switch v.Slot {
-			case template.SlotWhereConjunct:
+			case template.SlotWhereConjunct, template.SlotHavingConjunct:
 				diags = append(diags, probeConjunct(profile, fe, v)...)
 			case template.SlotJoinItem:
 				diags = append(diags, probeJoin(profile, fe, v)...)

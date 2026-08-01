@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -306,6 +306,18 @@ func main() {
 	expect(total == 5, "daily buckets count all five users")
 	_, err = q.SignupsByBucket(ctx, gen.SignupsByBucketParams{Since: time.Now()})
 	expect(err != nil, "zero-value required @choose errors before touching the DB")
+
+	// @when value guard + HAVING conjunct: audit_logs has one row with
+	// a NULL actor (the cron entry). include_cron=false filters it.
+	act, err := q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true})
+	die(err)
+	expect(len(act) == 1 && act[0].Actions == 3, "all actions incl. cron")
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: false})
+	die(err)
+	expect(len(act) == 1 && act[0].Actions == 2, "@when guard drops the NULL-actor row")
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: gen.Ptr(int64(99))})
+	die(err)
+	expect(len(act) == 0, "HAVING conjunct filters the group out")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

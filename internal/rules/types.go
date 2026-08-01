@@ -49,7 +49,62 @@ func CheckTypeAgreement(q *template.QueryTemplate, rs []ast.Rendering,
 	}
 
 	_, paramDiags := ResolveParamTypes(q, rs, descs)
-	return append(diags, paramDiags...)
+	diags = append(diags, paramDiags...)
+
+	// @when literal/SQL type agreement: when a control parameter also
+	// binds in SQL, the literal-derived Go type must match the
+	// SQL-inferred one (spec: @when, checked in Phase 3/4).
+	types := map[string]dialect.TypeRef{}
+	resolved, _ := ResolveParamTypes(q, rs, descs)
+	for _, pt := range resolved {
+		types[pt.Name] = pt.Type
+	}
+	for _, g := range q.GuardAtoms {
+		if !g.IsValue() {
+			continue
+		}
+		tr, bound := types[g.Param]
+		if !bound {
+			continue
+		}
+		if !oidCompatibleWithLiteral(tr.OID, g.Kind) {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeParamAgreement,
+				paramSpan(q, g.Param),
+				"@when compares %q (SQL type %s) against a %s literal; the types must agree (premise P1)",
+				g.Param, tr.Name, kindName(g.Kind)))
+		}
+	}
+	return diags
+}
+
+func oidCompatibleWithLiteral(oid uint32, k template.ValueKind) bool {
+	switch k {
+	case template.ValueString:
+		switch oid {
+		case 18, 19, 25, 1042, 1043, 2950:
+			return true
+		}
+	case template.ValueInt:
+		switch oid {
+		case 20, 21, 23, 26, 700, 701, 1700:
+			return true
+		}
+	case template.ValueBool:
+		return oid == 16
+	}
+	return false
+}
+
+func kindName(k template.ValueKind) string {
+	switch k {
+	case template.ValueString:
+		return "string"
+	case template.ValueInt:
+		return "integer"
+	case template.ValueBool:
+		return "boolean"
+	}
+	return "unknown"
 }
 
 // ResolveParamTypes unifies each template parameter's type across all

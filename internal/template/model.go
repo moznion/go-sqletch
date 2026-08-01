@@ -50,11 +50,12 @@ const (
 	SlotWhereConjunct
 	SlotJoinItem
 	SlotOrderBy
-	SlotSetItem      // v0.2: an UPDATE SET assignment
-	SlotInsertColumn // v0.2: an INSERT column-list item (paired, R7)
-	SlotInsertValue  // v0.2: an INSERT VALUES row item (paired, R7)
-	SlotGroupBy      // v0.2: @choose over whole GROUP BY clauses
-	SlotProjExpr     // v0.2: @choose over one projection expression
+	SlotSetItem        // v0.2: an UPDATE SET assignment
+	SlotInsertColumn   // v0.2: an INSERT column-list item (paired, R7)
+	SlotInsertValue    // v0.2: an INSERT VALUES row item (paired, R7)
+	SlotGroupBy        // v0.2: @choose over whole GROUP BY clauses
+	SlotProjExpr       // v0.2: @choose over one projection expression
+	SlotHavingConjunct // v0.3: a HAVING conjunct
 )
 
 // GuardedItem records one guarded INSERT column/value item for the R7
@@ -65,13 +66,33 @@ type GuardedItem struct {
 	Span   diagnostics.Span
 }
 
-// GuardAtom identifies one guard condition. v0.1 has presence atoms
-// only; Op/Value are reserved for @when (v0.3).
+// ValueKind classifies a @when literal (drives the Go type of pure
+// control parameters).
+type ValueKind int
+
+const (
+	ValueNone ValueKind = iota
+	ValueString
+	ValueInt
+	ValueBool
+)
+
+// GuardAtom identifies one guard condition: a presence atom
+// (@if-present, Op == "") or a value atom (@when, Op "=" or "!=").
+// Atoms are compared by equality; identical conditions share a shape
+// bit.
 type GuardAtom struct {
 	Param string
-	Op    string // "" in v0.1
-	Value string // "" in v0.1
+	Op    string
+	Value string // Go-side literal (unquoted string, number, true/false)
+	Kind  ValueKind
+	// RawValue is the literal as written in SQL (e.g. `'a'`, `false`),
+	// preserved for `sqletch fmt`.
+	RawValue string
 }
+
+// IsValue reports whether the atom is a @when value condition.
+func (g GuardAtom) IsValue() bool { return g.Op != "" }
 
 // Item is one element of a query template in document order.
 // Exactly one of the concrete types below.

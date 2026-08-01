@@ -164,6 +164,23 @@ WHERE u.created_at >= :since
 GROUP BY 1
 ORDER BY 1;
 `,
+	"when_and_having": `-- name: TenantActivity :many
+SELECT a.tenant_id, count(*) AS actions
+FROM audit_logs AS a
+WHERE TRUE
+@when(include_cron = false)
+  AND a.actor_id IS NOT NULL
+@end
+@if-present(action)
+  AND a.action = :action
+@endif
+GROUP BY a.tenant_id
+HAVING TRUE
+@if-present(min_actions)
+  AND count(*) >= :min_actions
+@endif
+ORDER BY a.tenant_id;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u

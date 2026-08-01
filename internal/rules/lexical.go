@@ -101,6 +101,11 @@ func checkAnchors(profile dialect.LexerProfile, q *template.QueryTemplate) []dia
 					"every WHERE conjunct is optional; the shape with all guards off would be invalid SQL (R6)").
 					WithHint("write `WHERE TRUE` as the unconditional anchor")}
 			}
+			if v.Slot == template.SlotHavingConjunct && lastTok == "HAVING" {
+				return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeUnanchoredClause, v.Span,
+					"every HAVING conjunct is optional; the shape with all guards off would be invalid SQL (R6)").
+					WithHint("write `HAVING TRUE` as the unconditional anchor")}
+			}
 			if v.Slot == template.SlotSetItem && lastTok == "SET" {
 				return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeUnanchoredSet, v.Span,
 					"every SET item is optional; the shape with all guards off would be `UPDATE ... SET` with no assignments (R6)").
@@ -145,8 +150,33 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 			continue
 		}
 
+		hasPresence, hasValue := false, false
+		for _, g := range q.GuardAtoms {
+			if g.Param != name {
+				continue
+			}
+			if g.IsValue() {
+				hasValue = true
+			} else {
+				hasPresence = true
+			}
+		}
+		if hasPresence && hasValue {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeVacuousGuard,
+				guardSpan(q, template.GuardAtom{Param: name}),
+				"%q is used both as an @if-present guard (presence, pointer) and in @when (value, required); pick one (R9)", name))
+			p.Optional = false
+			continue
+		}
+		if hasValue {
+			// @when control parameter: required, typed by the literal;
+			// it may also bind in SQL (agreement checked in phase 4).
+			p.Optional = false
+			continue
+		}
+
 		self := template.GuardAtom{Param: name}
-		isGuard := p.GuardBit >= 0
+		isGuard := p.GuardBit >= 0 && hasPresence
 		hasSelfGuarded := false
 		var firstUnguarded *diagnostics.Span
 		allSelfGuarded := len(p.Occurrences) > 0
@@ -168,7 +198,7 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodeGuardNeverBinds,
 					guardSpan(q, self),
 					"guard parameter %q never binds inside a fragment it guards; its Go type would be uninferable (R9)", name).
-					WithHint("bind it in the guarded fragment, or wait for @when (v0.3) for pure control parameters"))
+					WithHint("bind it in the guarded fragment, or use @when for pure control parameters"))
 			case !allSelfGuarded:
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodeVacuousGuard, *firstUnguarded,
 					"%q binds outside its own guard, making it required — guarding on a required parameter is always true (R9)", ":"+name))

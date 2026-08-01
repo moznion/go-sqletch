@@ -109,6 +109,19 @@ INSERT INTO users (
 )
 RETURNING id;
 `,
+		`-- name: WhenAndHaving :many
+SELECT t.user_id, sum(t.amount) AS total FROM t
+WHERE TRUE
+@when(include_all = false)
+  AND t.visible
+@end
+GROUP BY t.user_id
+HAVING TRUE
+@if-present(min_total)
+  AND sum(t.amount) >= :min_total
+@endif
+;
+`,
 		`-- name: SignupsByBucket :many
 SELECT
 @choose(bucket)

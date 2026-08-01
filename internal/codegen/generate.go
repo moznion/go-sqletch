@@ -133,24 +133,33 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	}
 	for _, name := range q.ParamOrder {
 		p := q.Params[name]
+		var typ, comment string
 		tr, ok := g.in.ParamTypes[name]
-		if !ok {
-			fail(diagnostics.CodeUnsupportedType, paramSpanOf(q, name),
-				"parameter %q has no resolved type (oracle did not see it)", name)
-			continue
-		}
-		goType, tok := g.tm.GoType(tr.OID)
-		if !tok {
-			fail(diagnostics.CodeUnsupportedType, paramSpanOf(q, name),
-				"no Go mapping for type %s (oid %d) of parameter %q; add an explicit cast to a supported type", tr.Name, tr.OID, name)
-			continue
-		}
-		g.addImport(goType.Import)
-		typ := goType.Name
-		comment := ""
-		if p.Optional {
-			typ = "*" + typ
-			comment = " // nil omits the guarded fragment(s)"
+		switch {
+		case ok:
+			goType, tok := g.tm.GoType(tr.OID)
+			if !tok {
+				fail(diagnostics.CodeUnsupportedType, paramSpanOf(q, name),
+					"no Go mapping for type %s (oid %d) of parameter %q; add an explicit cast to a supported type", tr.Name, tr.OID, name)
+				continue
+			}
+			g.addImport(goType.Import)
+			typ = goType.Name
+			if p.Optional {
+				typ = "*" + typ
+				comment = " // nil omits the guarded fragment(s)"
+			}
+		default:
+			// A parameter the oracle never saw: legal only as a pure
+			// @when control parameter, typed by its literal (R9).
+			litType, isControl := valueAtomGoType(q, name)
+			if !isControl {
+				fail(diagnostics.CodeUnsupportedType, paramSpanOf(q, name),
+					"parameter %q has no resolved type (oracle did not see it)", name)
+				continue
+			}
+			typ = litType
+			comment = " // @when control parameter"
 		}
 		goName := GoName(name)
 		if claimField(goName, name) {
@@ -387,6 +396,15 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 
 	fmt.Fprint(w, "\tvar key runtime.ShapeKey\n")
 	for i, atom := range q.GuardAtoms {
+		if atom.IsValue() {
+			op := "=="
+			if atom.Op == "!=" {
+				op = "!="
+			}
+			fmt.Fprintf(w, "\tif arg.%s %s %s {\n\t\tkey.Guards |= 1 << %d\n\t}\n",
+				GoName(atom.Param), op, goLiteral(atom), i)
+			continue
+		}
 		fmt.Fprintf(w, "\tif arg.%s != nil {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
 	}
 	if len(chooses) > 0 {
@@ -511,6 +529,33 @@ func querierFile(pkg string, sigs []string) string {
 	}
 	fmt.Fprint(&b, "}\n\nvar _ Querier = (*Queries)(nil)\n")
 	return b.String()
+}
+
+// valueAtomGoType returns the Go type of a pure @when control
+// parameter (typed by its literal).
+func valueAtomGoType(q *template.QueryTemplate, name string) (string, bool) {
+	for _, g := range q.GuardAtoms {
+		if g.Param != name || !g.IsValue() {
+			continue
+		}
+		switch g.Kind {
+		case template.ValueString:
+			return "string", true
+		case template.ValueInt:
+			return "int64", true
+		case template.ValueBool:
+			return "bool", true
+		}
+	}
+	return "", false
+}
+
+// goLiteral renders a @when literal as a Go expression.
+func goLiteral(g template.GuardAtom) string {
+	if g.Kind == template.ValueString {
+		return fmt.Sprintf("%q", g.Value)
+	}
+	return g.Value // int / bool literals are identical in Go
 }
 
 func paramSpanOf(q *template.QueryTemplate, name string) diagnostics.Span {
