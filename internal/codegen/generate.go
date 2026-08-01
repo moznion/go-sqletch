@@ -34,6 +34,10 @@ type Options struct {
 	// TreeCaps bounds @filter-tree values; zero fields fall back to
 	// runtime.DefaultTreeCaps.
 	TreeCaps runtime.TreeCaps
+	// Style is the dialect's placeholder style; it selects the driver
+	// flavor of the generated code (StyleDollar → pgx, StyleQuestion →
+	// database/sql) and the composition entry points.
+	Style runtime.Style
 }
 
 // Generate emits the full package: db.go, querier.go, and one file per
@@ -58,7 +62,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	var querier []string
 
 	for _, in := range sorted {
-		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps}
+		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style}
 		src, sig, ds := g.emit(typeNames)
 		diags = append(diags, ds...)
 		if len(ds) > 0 {
@@ -69,7 +73,11 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	}
 
 	if !diagnostics.HasErrors(diags) {
-		files["db.go"] = []byte(dbFile(opts.Package))
+		if opts.Style == runtime.StyleQuestion {
+			files["db.go"] = []byte(dbFileQuestion(opts.Package))
+		} else {
+			files["db.go"] = []byte(dbFile(opts.Package))
+		}
 		files["querier.go"] = []byte(querierFile(opts.Package, querier))
 	}
 
@@ -90,6 +98,7 @@ type queryGen struct {
 	tm      dialect.TypeMap
 	pkg     string
 	caps    runtime.TreeCaps
+	style   runtime.Style
 	imports map[string]bool
 	b       strings.Builder
 }
@@ -124,10 +133,12 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		typeNames[name] = q.Name
 	}
 
-	// ---- choose / order-by / filter-tree metadata ------------------------
+	// ---- choose / order-by / filter-tree / @in metadata ------------------
 	var chooses []chooseMeta
 	var orders []orderMeta
 	var filter *template.FilterTree
+	var ins []*template.InExpr
+	inParams := map[string]bool{}
 	for _, it := range q.Items {
 		switch c := it.(type) {
 		case *template.Choose:
@@ -138,6 +149,9 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			om := orderMeta{o: c, typeName: q.Name + GoName(c.Param) + "Key"}
 			claimType(om.typeName)
 			orders = append(orders, om)
+		case *template.InExpr:
+			ins = append(ins, c)
+			inParams[c.Param] = true
 		case *template.FilterTree:
 			filter = c
 			claimType(q.Name + "Unscoped")
@@ -181,6 +195,12 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			}
 			g.addImport(goType.Import)
 			typ = goType.Name
+			if g.style == runtime.StyleQuestion && inParams[name] {
+				// The annotation gives the ELEMENT type on expanding
+				// dialects; the parameter is a slice of it.
+				typ = "[]" + typ
+				comment = " // @in list; empty matches nothing"
+			}
 			if p.Optional {
 				typ = "*" + typ
 				comment = " // nil omits the guarded fragment(s)"
@@ -325,7 +345,7 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			return nil, "", diags
 		}
 	}
-	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, rowFields)
+	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, ins, rowFields)
 
 	return []byte(g.b.String()), sig, diags
 }
@@ -476,6 +496,8 @@ func (g *queryGen) writeFragsVar(w *strings.Builder) {
 			fmt.Fprint(w, "\t}},\n")
 		case runtime.InAny:
 			fmt.Fprintf(w, "\t{Kind: runtime.InAny, ParamIdx: []int16{%d}},\n", f.ParamIdx[0])
+		case runtime.InList:
+			fmt.Fprintf(w, "\t{Kind: runtime.InList, ParamIdx: []int16{%d}},\n", f.ParamIdx[0])
 		case runtime.FilterTree:
 			fmt.Fprint(w, "\t{Kind: runtime.FilterTree, Cases: []runtime.Case{\n")
 			for _, c := range f.Cases {
@@ -522,7 +544,8 @@ func spanLits(spans []runtime.Span, idx []int16) string {
 }
 
 func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
-	chooses []chooseMeta, orders []orderMeta, filter *template.FilterTree, rowFields []field) string {
+	chooses []chooseMeta, orders []orderMeta, filter *template.FilterTree,
+	ins []*template.InExpr, rowFields []field) string {
 
 	q := g.in.Q
 	fragsVar := lowerCamel(q.Name) + "Frags"
@@ -590,6 +613,13 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		}
 		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
 	}
+	if g.style == runtime.StyleQuestion && len(ins) > 0 {
+		var arities []string
+		for _, in := range ins {
+			arities = append(arities, fmt.Sprintf("int32(len(arg.%s))", GoName(in.Param)))
+		}
+		fmt.Fprintf(w, "\tkey.Arities = []int32{%s}\n", strings.Join(arities, ", "))
+	}
 
 	var vals []string
 	for _, name := range q.ParamOrder {
@@ -602,14 +632,22 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			vals = append(vals, "arg."+GoName(name))
 		}
 	}
+	styleArg := ""
+	if g.style == runtime.StyleQuestion {
+		styleArg = "runtime.StyleQuestion, "
+	}
 	switch {
 	case filter != nil:
 		treeField := "arg." + GoName(filter.Param)
 		if filter.Required {
 			fmt.Fprintf(w, "\tif %s == nil {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
 		}
-		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetTree(%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
-			q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
+		method := "GetTree"
+		if g.style == runtime.StyleQuestion {
+			method = "GetTreeStyle"
+		}
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.%s(%s%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
+			method, styleArg, q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
 		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
 			strings.Join(vals, ", "), treeField)
@@ -617,6 +655,11 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
 		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	case g.style == runtime.StyleQuestion:
+		// The binds path covers slice-element expansion (@in).
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, %q, %s, key)\n", q.Name, fragsVar)
+		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, nil)\n", strings.Join(vals, ", "))
 	default:
 		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
 		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
@@ -631,9 +674,13 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		return strings.Join(refs, ", ")
 	}
 
+	query, queryRow, exec := "Query", "QueryRow", "Exec"
+	if g.style == runtime.StyleQuestion {
+		query, queryRow, exec = "QueryContext", "QueryRowContext", "ExecContext"
+	}
 	switch q.Annotation {
 	case template.AnnotationMany:
-		fmt.Fprint(w, "\trows, err := q.db.Query(ctx, sqlText, args...)\n")
+		fmt.Fprintf(w, "\trows, err := q.db.%s(ctx, sqlText, args...)\n", query)
 		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
 		fmt.Fprint(w, "\tdefer rows.Close()\n")
 		fmt.Fprintf(w, "\tvar items []%s\n", rowName)
@@ -643,16 +690,22 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprint(w, "\t\titems = append(items, i)\n\t}\n")
 		fmt.Fprint(w, "\treturn items, rows.Err()\n")
 	case template.AnnotationOne:
-		fmt.Fprint(w, "\trow := q.db.QueryRow(ctx, sqlText, args...)\n")
+		fmt.Fprintf(w, "\trow := q.db.%s(ctx, sqlText, args...)\n", queryRow)
 		fmt.Fprint(w, "\tvar i "+rowName+"\n")
 		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n\t\treturn zero, err\n\t}\n", scanList())
 		fmt.Fprint(w, "\treturn i, nil\n")
 	case template.AnnotationExecRows:
-		fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
-		fmt.Fprint(w, "\tif err != nil {\n\t\treturn 0, err\n\t}\n")
-		fmt.Fprint(w, "\treturn tag.RowsAffected(), nil\n")
+		if g.style == runtime.StyleQuestion {
+			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
+			fmt.Fprint(w, "\tif err != nil {\n\t\treturn 0, err\n\t}\n")
+			fmt.Fprint(w, "\treturn res.RowsAffected()\n")
+		} else {
+			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
+			fmt.Fprint(w, "\tif err != nil {\n\t\treturn 0, err\n\t}\n")
+			fmt.Fprint(w, "\treturn tag.RowsAffected(), nil\n")
+		}
 	default: // exec
-		fmt.Fprint(w, "\t_, err := q.db.Exec(ctx, sqlText, args...)\n")
+		fmt.Fprintf(w, "\t_, err := q.db.%s(ctx, sqlText, args...)\n", exec)
 		fmt.Fprint(w, "\treturn err\n")
 	}
 	fmt.Fprint(w, "}\n")
@@ -692,6 +745,62 @@ func New(db DBTX) *Queries {
 }
 
 func (q *Queries) WithTx(tx pgx.Tx) *Queries {
+	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery}
+}
+
+// OnQuery installs an observability hook receiving the shape key and
+// the composed SQL of every call.
+func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
+
+func (q *Queries) hook(shapeKey, sql string) {
+	if q.onQuery != nil {
+		q.onQuery(shapeKey, sql)
+	}
+}
+
+// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
+func Ptr[T any](v T) *T { return &v }
+
+// And / Or combine @filter-tree predicates built with the generated
+// per-query constructors.
+var (
+	And = runtime.And
+	Or  = runtime.Or
+)
+`, pkg)
+}
+
+func dbFileQuestion(pkg string) string {
+	return fmt.Sprintf(`// Code generated by sqletch. DO NOT EDIT.
+
+package %s
+
+import (
+	"context"
+	"database/sql"
+
+	"github.com/moznion/sqletch/runtime"
+)
+
+// DBTX matches sqlc's database/sql flavor: a *sql.DB or *sql.Tx
+// satisfies it, so sqlc- and sqletch-generated code share transactions.
+type DBTX interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type Queries struct {
+	db      DBTX
+	cache   *runtime.ComposedCache
+	onQuery func(shapeKey, sql string)
+}
+
+func New(db DBTX) *Queries {
+	return &Queries{db: db, cache: runtime.NewComposedCache(256)}
+}
+
+func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery}
 }
 

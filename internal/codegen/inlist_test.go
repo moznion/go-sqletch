@@ -1,10 +1,12 @@
 package codegen
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/moznion/sqletch/internal/ast"
+	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/dialect/mysql"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
@@ -119,6 +121,65 @@ func TestInList_QuestionConformance(t *testing.T) {
 	}
 	if empties != 1 {
 		t.Errorf("RenderInEmpty renderings = %d, want 1", empties)
+	}
+}
+
+// TestGenerate_QuestionStyle pins the generated code of a MySQL query:
+// database/sql driver surface, slice params for @in, arity key, and
+// the binds-based composition path.
+func TestGenerate_QuestionStyle(t *testing.T) {
+	f, diags := template.NewScanner(mysql.Profile{}).ScanFile("t.sql", []byte(inListTemplate))
+	if len(diags) != 0 {
+		t.Fatalf("scan: %+v", diags)
+	}
+	q := f.Queries[0]
+	q.Params["min_id"].Optional = true
+	types := map[string]dialect.TypeRef{}
+	tm := mysql.TypeMap{}
+	for name, sqlType := range map[string]string{
+		"tenant_id": "bigint", "statuses": "varchar(16)", "min_id": "bigint", "limit": "bigint",
+	} {
+		tr, ok := tm.TypeByName(sqlType)
+		if !ok {
+			t.Fatal(sqlType)
+		}
+		types[name] = tr
+	}
+	idRef, _ := tm.TypeByName("bigint")
+	emailRef, _ := tm.TypeByName("varchar")
+	files, ds := Generate(Options{Package: "gen", Style: runtime.StyleQuestion}, tm, []QueryInput{{
+		Q:          q,
+		Frags:      BuildFrags(mysql.Profile{}, q),
+		ParamTypes: types,
+		Columns: []dialect.ColumnDesc{
+			{Name: "id", Type: idRef},
+			{Name: "email", Type: emailRef},
+		},
+		Nullable: []bool{false, false},
+	}})
+	if len(ds) != 0 {
+		t.Fatalf("generate: %+v", ds)
+	}
+	src := string(files["users_in_statuses.sql.go"])
+	for _, want := range []string{
+		`Statuses\s+\[\]string`,
+		`MinID\s+\*int64`,
+		`key\.Arities = \[\]int32\{int32\(len\(arg\.Statuses\)\)\}`,
+		`q\.cache\.GetBindsStyle\(runtime\.StyleQuestion, "UsersInStatuses", usersInStatusesFrags, key\)`,
+		`runtime\.ResolveArgs\(binds, \[\]any\{arg\.TenantID, arg\.Statuses, arg\.MinID, arg\.Limit\}, nil\)`,
+		`\{Kind: runtime\.InList, ParamIdx: \[\]int16\{1\}\}`,
+		`q\.db\.QueryContext\(ctx, sqlText, args\.\.\.\)`,
+	} {
+		if !regexp.MustCompile(want).MatchString(src) {
+			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
+		}
+	}
+	db := string(files["db.go"])
+	if !strings.Contains(db, `"database/sql"`) || strings.Contains(db, "pgx") {
+		t.Errorf("db.go must be the database/sql flavor:\n%s", db)
+	}
+	if !strings.Contains(db, "WithTx(tx *sql.Tx)") {
+		t.Errorf("db.go WithTx flavor:\n%s", db)
 	}
 }
 
