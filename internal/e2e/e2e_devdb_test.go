@@ -107,6 +107,22 @@ WHERE a.tenant_id = :tenant_id
 ORDER BY a.id DESC
 LIMIT :limit;
 `,
+	"update_user_profile": `-- name: UpdateUserProfile :one
+UPDATE users
+SET
+    tenant_id = tenant_id
+@if-present(new_email)
+  , email = :new_email
+@endif
+@if-present(nickname)
+  , nickname = :nickname
+@endif
+@if-present(bio)
+  , bio = :bio
+@endif
+WHERE id = :id
+RETURNING id, email, nickname, bio;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u

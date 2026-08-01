@@ -1,0 +1,154 @@
+{
+  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "tables": [
+    {
+      "schema": "public",
+      "name": "audit_logs",
+      "oid": 16403,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "tenant_id",
+          "att": 2,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "actor_id",
+          "att": 3,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "action",
+          "att": 4,
+          "type_oid": 25,
+          "type_name": "text",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "att": 5,
+          "type_oid": 1184,
+          "type_name": "timestamptz",
+          "not_null": true,
+          "has_default": true
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "organization_users",
+      "oid": 16396,
+      "cols": [
+        {
+          "name": "user_id",
+          "att": 1,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "organization_id",
+          "att": 2,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "att": 3,
+          "type_oid": 1184,
+          "type_name": "timestamptz",
+          "not_null": true,
+          "has_default": true
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "users",
+      "oid": 16387,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "email",
+          "att": 2,
+          "type_oid": 25,
+          "type_name": "text",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "status",
+          "att": 3,
+          "type_oid": 25,
+          "type_name": "text",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "att": 4,
+          "type_oid": 1184,
+          "type_name": "timestamptz",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "updated_at",
+          "att": 5,
+          "type_oid": 1184,
+          "type_name": "timestamptz",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "tenant_id",
+          "att": 6,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "org_id",
+          "att": 7,
+          "type_oid": 20,
+          "type_name": "int8",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "nickname",
+          "att": 8,
+          "type_oid": 25,
+          "type_name": "text",
+          "not_null": false,
+          "has_default": false
+        }
+      ]
+    }
+  ]
+}

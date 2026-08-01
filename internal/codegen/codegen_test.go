@@ -82,6 +82,19 @@ WHERE t.a = :v
 @endif
 ;
 `,
+		`-- name: UpdateUserProfile :one
+UPDATE users
+SET
+    updated_at = now()
+@if-present(email)
+  , email = :email
+@endif
+@if-present(nickname)
+  , nickname = :nickname
+@endif
+WHERE id = :id
+RETURNING id, email, nickname, updated_at;
+`,
 	}
 	for _, src := range corpus {
 		q := scanOne(t, src)

@@ -170,8 +170,11 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			}
 			r.emitSynth("\n", v.Span.Start)
 			fragStart := r.len()
-			if v.Sep == template.SepAnd {
+			switch v.Sep {
+			case template.SepAnd:
 				r.emitSynth("AND (", v.Span.Start)
+			case template.SepComma:
+				r.emitSynth(", ", v.Span.Start)
 			}
 			if err := r.emitVerbatim(v.Body, v.BodySpan.Start); err != nil {
 				return Rendering{}, err

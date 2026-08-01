@@ -11,6 +11,7 @@ type Querier interface {
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
+	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

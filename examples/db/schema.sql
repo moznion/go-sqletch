@@ -3,6 +3,7 @@ CREATE TABLE users (
     email       text NOT NULL,
     status      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
     tenant_id   bigint NOT NULL,
     org_id      bigint,
     nickname    text

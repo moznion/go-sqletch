@@ -96,6 +96,23 @@ func (f Frontend) ProbeOrderBy(clause string) error {
 	return nil
 }
 
+// ProbeSetItem checks that item is exactly one UPDATE SET assignment.
+func (f Frontend) ProbeSetItem(item string) error {
+	res, err := pgquery.Parse("UPDATE sqletch_probe_t SET " + item)
+	if err != nil {
+		return toParseError(err)
+	}
+	if len(res.Stmts) != 1 {
+		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a single SET assignment"}
+	}
+	up := res.Stmts[0].Stmt.GetUpdateStmt()
+	if up == nil || len(up.TargetList) != 1 || up.WhereClause != nil ||
+		len(up.FromClause) != 0 || len(up.ReturningList) != 0 {
+		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a single SET assignment"}
+	}
+	return nil
+}
+
 func singleSelect(res *pgquery.ParseResult) *pgquery.SelectStmt {
 	if len(res.Stmts) != 1 {
 		return nil

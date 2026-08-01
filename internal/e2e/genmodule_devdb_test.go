@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -246,6 +246,31 @@ func main() {
 
 	_, err = q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 999})
 	expect(errors.Is(err, pgx.ErrNoRows), "missing row yields pgx.ErrNoRows")
+
+	// PATCH semantics: update only the provided field; others untouched.
+	upd, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
+		ID:       1,
+		Nickname: gen.Ptr("allie"),
+	})
+	die(err)
+	expect(upd.Nickname != nil && *upd.Nickname == "allie", "nickname updated")
+	expect(upd.Email == "alice@example.com", "email untouched by partial update")
+	expect(upd.Bio == nil, "bio untouched (still NULL)")
+
+	upd2, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
+		ID:       1,
+		NewEmail: gen.Ptr("alice2@example.com"),
+		Bio:      gen.Ptr("hello"),
+	})
+	die(err)
+	expect(upd2.Email == "alice2@example.com", "email updated")
+	expect(upd2.Nickname != nil && *upd2.Nickname == "allie", "nickname survives the second patch")
+	expect(upd2.Bio != nil && *upd2.Bio == "hello", "bio updated")
+
+	// Minimal shape: no fields provided — the anchor keeps it valid.
+	upd3, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{ID: 1})
+	die(err)
+	expect(upd3.Email == "alice2@example.com", "no-op patch changes nothing")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

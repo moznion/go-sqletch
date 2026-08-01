@@ -39,6 +39,8 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 				diags = append(diags, probeConjunct(profile, fe, v)...)
 			case template.SlotJoinItem:
 				diags = append(diags, probeJoin(profile, fe, v)...)
+			case template.SlotSetItem:
+				diags = append(diags, probeSetItem(profile, fe, v)...)
 			}
 		case *template.Choose:
 			diags = append(diags, probeChooseCases(profile, fe, v)...)
@@ -119,6 +121,20 @@ func probeJoin(profile dialect.LexerProfile, fe dialect.Frontend,
 	if err := fe.ProbeJoinItem(rewriteParams(profile, v.Body)); err != nil {
 		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
 			"fragment must be a single join item (R1): %s", probeMsg(err))}
+	}
+	return nil
+}
+
+func probeSetItem(profile dialect.LexerProfile, fe dialect.Frontend,
+	v *template.IfPresent) []diagnostics.Diagnostic {
+
+	if !balanced(profile, v.Body) {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment has unbalanced parentheses; it must form one complete SET assignment (R1)")}
+	}
+	if err := fe.ProbeSetItem(rewriteParams(profile, v.Body)); err != nil {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment must be a single SET assignment (R1): %s", probeMsg(err))}
 	}
 	return nil
 }

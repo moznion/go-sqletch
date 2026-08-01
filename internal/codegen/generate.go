@@ -279,8 +279,11 @@ func (g *queryGen) writeFragsVar(w *strings.Builder) {
 			fmt.Fprintf(w, "\t{Kind: runtime.Skel, Text: %q%s},\n", f.Text, spanLits(f.ParamSpans, f.ParamIdx))
 		case runtime.Guarded:
 			sep := "runtime.SepNone"
-			if f.Sep == runtime.SepAnd {
+			switch f.Sep {
+			case runtime.SepAnd:
 				sep = "runtime.SepAnd"
+			case runtime.SepComma:
+				sep = "runtime.SepComma"
 			}
 			fmt.Fprintf(w, "\t{Kind: runtime.Guarded, GuardMask: %#x, Sep: %s, Text: %q%s},\n",
 				f.GuardMask, sep, f.Text, spanLits(f.ParamSpans, f.ParamIdx))

@@ -50,6 +50,7 @@ const (
 	SlotWhereConjunct
 	SlotJoinItem
 	SlotOrderBy
+	SlotSetItem // v0.2: an UPDATE SET assignment
 )
 
 // GuardAtom identifies one guard condition. v0.1 has presence atoms

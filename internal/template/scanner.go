@@ -479,7 +479,7 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 	switch ctx {
 	case ctxWhere:
 		item.Slot = SlotWhereConjunct
-		stripped, off, hadAnd := fs.stripLeadingAnd(body, bodyOff)
+		stripped, off, hadAnd := fs.stripLeadingToken(body, bodyOff, isAndToken)
 		if !hadAnd {
 			d := diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
 				"an optional WHERE conjunct must be written as `AND <predicate>`; sqletch owns the separator")
@@ -489,12 +489,24 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 			item.Body = stripped
 			item.BodySpan = fs.span(off, off+len(stripped))
 		}
+	case ctxSet:
+		item.Slot = SlotSetItem
+		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
+		if !hadComma {
+			d := diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+				"an optional SET item must be written as `, column = <expr>`; sqletch owns the separator")
+			fs.diags = append(fs.diags, d)
+		} else {
+			item.Sep = SepComma
+			item.Body = stripped
+			item.BodySpan = fs.span(off, off+len(stripped))
+		}
 	case ctxFrom:
 		item.Slot = SlotJoinItem
 		item.Sep = SepNone
 	default:
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, endPos),
-			"@if-present is not allowed in the %s position; allowed slots in v0.1: WHERE conjunct, FROM join item", ctx)
+			"@if-present is not allowed in the %s position; allowed slots: WHERE conjunct, SET item, FROM join item", ctx)
 	}
 
 	qb.q.Items = append(qb.q.Items, item)
@@ -700,13 +712,19 @@ func (fs *fileScan) firstTokenOf(b []byte) *dialect.Token {
 	}
 }
 
-// stripLeadingAnd removes a leading AND token from body (which starts
-// at absolute offset bodyOff). Returns the stripped body, its new
-// absolute offset, and whether AND was present.
-func (fs *fileScan) stripLeadingAnd(body string, bodyOff int) (string, int, bool) {
+func isAndToken(t *dialect.Token) bool {
+	return t.Kind == dialect.KindIdent && strings.ToUpper(t.Text) == "AND"
+}
+
+func isCommaToken(t *dialect.Token) bool { return t.Kind == dialect.KindComma }
+
+// stripLeadingToken removes the composer-owned separator token from a
+// body (which starts at absolute offset bodyOff). Returns the stripped
+// body, its new absolute offset, and whether the separator was present.
+func (fs *fileScan) stripLeadingToken(body string, bodyOff int, match func(*dialect.Token) bool) (string, int, bool) {
 	b := []byte(body)
 	t := fs.firstTokenOf(b)
-	if t == nil || t.Kind != dialect.KindIdent || strings.ToUpper(t.Text) != "AND" {
+	if t == nil || !match(t) {
 		return body, bodyOff, false
 	}
 	rest := body[t.End:]

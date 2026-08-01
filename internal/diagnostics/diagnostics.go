@@ -71,6 +71,7 @@ const (
 	CodeScopeViolation   Code = "SQLETCH115" // reference into optional join w/o guard (R3)
 	CodePlannerSensitive Code = "SQLETCH116" // e.g. FOR UPDATE + optional LEFT JOIN
 	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
+	CodeUnanchoredSet    Code = "SQLETCH118" // every SET item optional, no anchor (R6)
 )
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).

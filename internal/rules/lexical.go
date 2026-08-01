@@ -50,6 +50,11 @@ func checkAnchors(profile dialect.LexerProfile, q *template.QueryTemplate) []dia
 					"every WHERE conjunct is optional; the shape with all guards off would be invalid SQL (R6)").
 					WithHint("write `WHERE TRUE` as the unconditional anchor")}
 			}
+			if v.Slot == template.SlotSetItem && lastTok == "SET" {
+				return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeUnanchoredSet, v.Span,
+					"every SET item is optional; the shape with all guards off would be `UPDATE ... SET` with no assignments (R6)").
+					WithHint("add an unconditional item, e.g. `updated_at = now()`")}
+			}
 			lastTok = "@construct"
 		case *template.Choose:
 			lastTok = "@construct"

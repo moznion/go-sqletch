@@ -40,8 +40,11 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 				mask |= 1 << uint(bit[g])
 			}
 			f := runtime.Frag{Kind: runtime.Guarded, Text: v.Body, GuardMask: mask}
-			if v.Sep == template.SepAnd {
+			switch v.Sep {
+			case template.SepAnd:
 				f.Sep = runtime.SepAnd
+			case template.SepComma:
+				f.Sep = runtime.SepComma
 			}
 			f.ParamSpans, f.ParamIdx = paramSpans(profile, v.Body, paramIdx)
 			frags = append(frags, f)

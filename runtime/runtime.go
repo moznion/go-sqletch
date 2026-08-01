@@ -31,6 +31,7 @@ type Sep uint8
 const (
 	SepNone Sep = iota
 	SepAnd
+	SepComma
 )
 
 // Span marks a :name parameter token inside a fragment's text.
@@ -114,8 +115,11 @@ func Compose(frags []Frag, key ShapeKey) (string, []int16) {
 				continue
 			}
 			b.WriteByte('\n')
-			if f.Sep == SepAnd {
+			switch f.Sep {
+			case SepAnd:
 				b.WriteString("AND (")
+			case SepComma:
+				b.WriteString(", ")
 			}
 			emit(f.Text, f.ParamSpans, f.ParamIdx)
 			if f.Sep == SepAnd {
