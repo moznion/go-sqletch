@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ output:
 func TestExplainEnumerate_Offline(t *testing.T) {
 	_, configPath := writeProject(t)
 	var out, errW bytes.Buffer
-	code := Explain(configPath, nil, true, &out, &errW)
+	code := Explain(context.Background(), configPath, nil, true, false, &out, &errW)
 	if code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, errW.String())
 	}
@@ -71,10 +72,10 @@ func TestExplainEnumerate_Offline(t *testing.T) {
 func TestExplainEnumerate_FilterAndMiss(t *testing.T) {
 	_, configPath := writeProject(t)
 	var out, errW bytes.Buffer
-	if code := Explain(configPath, []string{"FindT"}, true, &out, &errW); code != ExitOK {
+	if code := Explain(context.Background(), configPath, []string{"FindT"}, true, false, &out, &errW); code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, errW.String())
 	}
-	if code := Explain(configPath, []string{"Nope"}, true, &out, &errW); code != ExitDiagnostics {
+	if code := Explain(context.Background(), configPath, []string{"Nope"}, true, false, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("unknown query must exit %d, got %d", ExitDiagnostics, code)
 	}
 }

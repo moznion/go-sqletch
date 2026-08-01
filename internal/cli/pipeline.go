@@ -503,6 +503,6 @@ func PrintDiags(w io.Writer, res *Result, jsonFormat bool) {
 			fmt.Fprintln(w, string(enc))
 			continue
 		}
-		fmt.Fprintln(w, d.Render(res.Sources[d.Span.File]))
+		fmt.Fprintln(w, d.RenderExcerpt(res.Sources[d.Span.File]))
 	}
 }

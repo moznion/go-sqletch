@@ -140,6 +140,17 @@ static_expansion:
 		t.Errorf("exhaustive summary missing: %s", out)
 	}
 
+	// 6b. explain --analyze prints a plan per shape via the dev DB.
+	writeConfig(dsn)
+	var out2, err2 bytes.Buffer
+	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, false, true, &out2, &err2); code != cli.ExitOK {
+		t.Fatalf("explain --analyze: exit %d\n%s", code, err2.String())
+	}
+	if strings.Count(out2.String(), "-- SearchUsers shape ") != 8 ||
+		!strings.Contains(out2.String(), "Seq Scan") {
+		t.Errorf("analyze output unexpected:\n%s", out2.String())
+	}
+
 	// 7. A user mistake yields diagnostics (exit 1), not an env error.
 	writeFile(t, dir, "queries/users.sql", strings.Replace(cliQuery,
 		"AND u.status = :status", "AND ou.bogus = :status", 1))

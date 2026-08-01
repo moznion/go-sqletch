@@ -154,6 +154,58 @@ func (d Diagnostic) Render(src []byte) string {
 	return b.String()
 }
 
+// RenderExcerpt produces the multi-line form with a source excerpt and
+// caret underline (design 07 §3):
+//
+//	file:12:7: error[SQLETCHnnn]: message
+//	   |
+//	12 |   AND organization_id = :org
+//	   |       ^^^^^^^^^^^^^^^
+//	help: …
+func (d Diagnostic) RenderExcerpt(src []byte) string {
+	if len(src) == 0 || d.Span.Start >= len(src) {
+		return d.Render(src)
+	}
+	line, _ := LineCol(src, d.Span.Start)
+	lineStart := d.Span.Start
+	for lineStart > 0 && src[lineStart-1] != '\n' {
+		lineStart--
+	}
+	lineEnd := d.Span.Start
+	for lineEnd < len(src) && src[lineEnd] != '\n' {
+		lineEnd++
+	}
+	lineText := string(src[lineStart:lineEnd])
+
+	// Caret geometry in runes, keeping alignment for multibyte text.
+	prefixRunes := len([]rune(string(src[lineStart:d.Span.Start])))
+	spanEnd := d.Span.End
+	if spanEnd > lineEnd || spanEnd <= d.Span.Start {
+		spanEnd = d.Span.Start + 1
+	}
+	capEnd := spanEnd
+	if lineEnd < capEnd {
+		capEnd = lineEnd
+	}
+	caretRunes := len([]rune(string(src[d.Span.Start:capEnd])))
+	if caretRunes < 1 {
+		caretRunes = 1
+	}
+
+	gutter := fmt.Sprintf("%d", line)
+	pad := strings.Repeat(" ", len(gutter))
+	var b strings.Builder
+	lineNo, col := LineCol(src, d.Span.Start)
+	fmt.Fprintf(&b, "%s:%d:%d: %s[%s]: %s\n", d.Span.File, lineNo, col, d.Severity, d.Code, d.Message)
+	fmt.Fprintf(&b, "%s |\n", pad)
+	fmt.Fprintf(&b, "%s | %s\n", gutter, lineText)
+	fmt.Fprintf(&b, "%s | %s%s", pad, strings.Repeat(" ", prefixRunes), strings.Repeat("^", caretRunes))
+	if d.Hint != "" {
+		fmt.Fprintf(&b, "\nhelp: %s", d.Hint)
+	}
+	return b.String()
+}
+
 // LineCol converts a byte offset into 1-based line and column
 // (column counts bytes; rune-aware columns arrive with the P7
 // renderer).

@@ -11,6 +11,7 @@ import (
 
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/config"
+	"github.com/moznion/sqletch/internal/devdb"
 	"github.com/moznion/sqletch/internal/diagnostics"
 	"github.com/moznion/sqletch/internal/dialect/postgres"
 	"github.com/moznion/sqletch/internal/shape"
@@ -69,11 +70,14 @@ func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat b
 // at generate time — no database, no recompilation. With enumerate,
 // it prints every reachable shape's SQL instead (scan + render only,
 // still no database).
-func Explain(configPath string, queryNames []string, enumerate bool, out, errW io.Writer) int {
+func Explain(ctx context.Context, configPath string, queryNames []string, enumerate, analyze bool, out, errW io.Writer) int {
 	cfg, diags := config.Load(configPath)
 	if len(diags) > 0 {
 		printBare(errW, diags, false)
 		return ExitDiagnostics
+	}
+	if analyze {
+		return explainAnalyze(ctx, cfg, queryNames, out, errW)
 	}
 	if enumerate {
 		return explainEnumerate(cfg, queryNames, out, errW)
@@ -190,6 +194,91 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 			}
 			if truncated {
 				fmt.Fprintf(out, "-- %s: enumeration truncated at %d shapes\n\n", q.Name, enumerateCap)
+			}
+			printed++
+		}
+	}
+	if printed == 0 {
+		fmt.Fprintf(errW, "sqletch: no matching queries\n")
+		return ExitDiagnostics
+	}
+	return ExitOK
+}
+
+const analyzeCap = 64
+
+// explainAnalyze runs EXPLAIN (GENERIC_PLAN) for every enumerable
+// shape against the dev database and prints the plans.
+func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, out, errW io.Writer) int {
+	profile := postgres.Profile{}
+	schemaPaths, err := cfg.ExpandGlobs(cfg.Schema.Files)
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: %v\n", err)
+		return ExitEnvironment
+	}
+	var schemaSQL []string
+	for _, p := range schemaPaths {
+		content, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(errW, "sqletch: %v\n", err)
+			return ExitEnvironment
+		}
+		schemaSQL = append(schemaSQL, string(content))
+	}
+	conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
+		DSN:           cfg.Database.DSN,
+		ServerVersion: cfg.ServerVersion,
+		SchemaSQL:     schemaSQL,
+	})
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: %v\n", err)
+		return ExitEnvironment
+	}
+	defer cleanup()
+	oracle := postgres.NewOracle(conn)
+
+	paths, err := cfg.ExpandGlobs(cfg.Queries)
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: %v\n", err)
+		return ExitEnvironment
+	}
+	want := map[string]bool{}
+	for _, n := range queryNames {
+		want[n] = true
+	}
+	scanner := template.NewScanner(profile)
+	printed := 0
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(errW, "sqletch: %v\n", err)
+			return ExitEnvironment
+		}
+		file, diags := scanner.ScanFile(p, src)
+		if diagnostics.HasErrors(diags) {
+			printBare(errW, diags, false)
+			return ExitDiagnostics
+		}
+		for _, q := range file.Queries {
+			if len(want) > 0 && !want[q.Name] {
+				continue
+			}
+			keys, truncated := shape.Enumerate(q, analyzeCap)
+			for _, k := range keys {
+				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
+				if err != nil {
+					fmt.Fprintf(errW, "sqletch: %v\n", err)
+					return ExitEnvironment
+				}
+				plan, err := oracle.PlanText(ctx, r.SQL)
+				if err != nil {
+					fmt.Fprintf(errW, "sqletch: %s shape %s: %v\n", q.Name, k, err)
+					return ExitDiagnostics
+				}
+				fmt.Fprintf(out, "-- %s shape %s\n%s\n", q.Name, k, plan)
+			}
+			if truncated {
+				fmt.Fprintf(out, "-- %s: analysis truncated at %d shapes\n\n", q.Name, analyzeCap)
 			}
 			printed++
 		}

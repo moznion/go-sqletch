@@ -39,6 +39,40 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestRenderExcerpt(t *testing.T) {
+	src := []byte("SELECT 1\nFROM users AS u\nWHERE bad_col = 1;\n")
+	start := strings.Index(string(src), "bad_col")
+	d := Errorf(CodeScopeViolation, Span{File: "q.sql", Start: start, End: start + len("bad_col")}, "boom").
+		WithHint("fix it")
+	got := d.RenderExcerpt(src)
+	want := "q.sql:3:7: error[SQLETCH115]: boom\n" +
+		"  |\n" +
+		"3 | WHERE bad_col = 1;\n" +
+		"  |       ^^^^^^^\n" +
+		"help: fix it"
+	if got != want {
+		t.Errorf("RenderExcerpt:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestRenderExcerpt_MultibyteAlignment(t *testing.T) {
+	src := []byte("SELECT 1 -- 日本語\nWHERE x = 1;\n")
+	start := strings.Index(string(src), "x = 1")
+	d := Errorf(CodeBadIdentifier, Span{File: "q.sql", Start: start, End: start + 1}, "m")
+	got := d.RenderExcerpt(src)
+	// The caret line must align in runes: "WHERE " = 6 runes before x.
+	if !strings.Contains(got, "2 | WHERE x = 1;\n  |       ^") {
+		t.Errorf("multibyte-safe caret misaligned:\n%s", got)
+	}
+}
+
+func TestRenderExcerpt_FallbackWithoutSource(t *testing.T) {
+	d := Errorf(CodeMissingHeader, Span{File: "q.sql", Start: 5, End: 6}, "m")
+	if got := d.RenderExcerpt(nil); !strings.Contains(got, "SQLETCH003") {
+		t.Errorf("fallback rendering: %q", got)
+	}
+}
+
 func TestSortAndHasErrors(t *testing.T) {
 	diags := []Diagnostic{
 		Errorf(CodePositionalParam, Span{File: "b.sql", Start: 5}, "x"),

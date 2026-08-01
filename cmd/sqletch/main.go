@@ -47,16 +47,18 @@ func main() {
 		"prepare and EXPLAIN every enumerable shape (needs the dev DB)")
 	root.AddCommand(check)
 
-	var enumerate bool
+	var enumerate, analyze bool
 	explain := &cobra.Command{
 		Use:   "explain [query...]",
 		Short: "show guards, cases, types, and shape counts per query",
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(cli.Explain(configPath, args, enumerate, os.Stdout, os.Stderr))
+			os.Exit(cli.Explain(context.Background(), configPath, args, enumerate, analyze, os.Stdout, os.Stderr))
 		},
 	}
 	explain.Flags().BoolVar(&enumerate, "enumerate", false,
 		"print every reachable SQL shape (no database needed)")
+	explain.Flags().BoolVar(&analyze, "analyze", false,
+		"EXPLAIN every reachable shape on the dev DB and print the plans")
 	root.AddCommand(explain)
 
 	var fmtCheck bool

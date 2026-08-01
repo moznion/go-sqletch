@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
@@ -65,6 +66,30 @@ func (o *Oracle) Plan(ctx context.Context, sql string) error {
 		return mapOracleErr(err)
 	}
 	return nil
+}
+
+// PlanText returns the planner's textual output for a shape — the
+// `explain --analyze` payload. It goes through pgconn's raw simple
+// query: GENERIC_PLAN takes bare $n placeholders without values, and
+// pgx's higher-level paths would demand arguments for them.
+func (o *Oracle) PlanText(ctx context.Context, sql string) (string, error) {
+	results, err := o.conn.PgConn().Exec(ctx, "EXPLAIN (GENERIC_PLAN) "+sql).ReadAll()
+	if err != nil {
+		return "", mapOracleErr(err)
+	}
+	var b strings.Builder
+	for _, res := range results {
+		if res.Err != nil {
+			return "", mapOracleErr(res.Err)
+		}
+		for _, row := range res.Rows {
+			if len(row) > 0 {
+				b.Write(row[0])
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return b.String(), nil
 }
 
 const snapshotQuery = `
