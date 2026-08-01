@@ -1,0 +1,264 @@
+// Package rules implements the structural rule checks R1–R9.
+// This file is R1 (slot legality + node completeness), which runs in
+// phase P2's pipeline position; catalog-free and catalog-dependent
+// rule passes (R2–R9) arrive in P3. See docs/design/02-rendering.md §4
+// and 03-structural-rules.md.
+package rules
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/moznion/sqletch/internal/ast"
+	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/sqletch/internal/template"
+)
+
+// CheckR1 validates that every fragment is one complete AST node in
+// its slot and that every rendering parses as a single DML statement.
+// rs must come from ast.Renderings (maximal first).
+//
+// Order matters for diagnostics quality: fragment-local probes run
+// first (they pinpoint the offending fragment), then whole-rendering
+// parses, then AST-membership consistency checks on the maximal tree.
+func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
+	q *template.QueryTemplate, rs []ast.Rendering) []diagnostics.Diagnostic {
+
+	var diags []diagnostics.Diagnostic
+
+	// 1. Fragment-local probes (design 02 §4). Probe inputs have
+	// :name params rewritten to $n — the dialect grammar knows nothing
+	// about named params.
+	for _, it := range q.Items {
+		switch v := it.(type) {
+		case *template.IfPresent:
+			switch v.Slot {
+			case template.SlotWhereConjunct:
+				diags = append(diags, probeConjunct(profile, fe, v)...)
+			case template.SlotJoinItem:
+				diags = append(diags, probeJoin(profile, fe, v)...)
+			}
+		case *template.Choose:
+			diags = append(diags, probeChooseCases(profile, fe, v)...)
+		}
+	}
+
+	// 2. Every rendering parses as exactly one DML statement.
+	trees := make([]dialect.Tree, len(rs))
+	for i, r := range rs {
+		tree, err := fe.Parse(r.SQL)
+		if err != nil {
+			var pe *dialect.ParseError
+			span := q.HeaderSpan
+			msg := err.Error()
+			if errors.As(err, &pe) {
+				tOff, _ := r.Map.ToTemplate(pe.Pos)
+				span = diagnostics.Span{File: q.HeaderSpan.File, Start: tOff, End: tOff + 1}
+				msg = pe.Msg
+			}
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeRenderingParse, span,
+				"generated SQL does not parse: %s", msg))
+			continue
+		}
+		if tree.StmtCount() != 1 || tree.Kind() == dialect.StmtOther {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNotSingleDML, q.HeaderSpan,
+				"a query must be exactly one SELECT/UPDATE/INSERT/DELETE statement"))
+			continue
+		}
+		trees[i] = tree
+	}
+	if trees[0] == nil {
+		return diags // no maximal tree; membership checks would be noise
+	}
+	maxTree, maxR := trees[0], rs[0]
+
+	// 3. AST-membership consistency on the parsed maximal rendering.
+	for _, fr := range maxR.Frags {
+		switch v := fr.Item.(type) {
+		case *template.IfPresent:
+			switch v.Slot {
+			case template.SlotWhereConjunct:
+				diags = append(diags, checkConjunctMembership(maxTree, v, fr)...)
+			case template.SlotJoinItem:
+				diags = append(diags, checkJoinMembership(maxTree, v, fr)...)
+			}
+		}
+	}
+	for i, r := range rs {
+		if trees[i] == nil {
+			continue
+		}
+		diags = append(diags, checkOrderByContainment(trees[i], r)...)
+	}
+	return diags
+}
+
+func probeConjunct(profile dialect.LexerProfile, fe dialect.Frontend,
+	v *template.IfPresent) []diagnostics.Diagnostic {
+
+	if !balanced(profile, v.Body) {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment has unbalanced parentheses; it must form one complete predicate (R1)")}
+	}
+	if err := fe.ProbeExpr(rewriteParams(profile, v.Body)); err != nil {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment must be a single predicate expression (R1): %s", probeMsg(err))}
+	}
+	return nil
+}
+
+func probeJoin(profile dialect.LexerProfile, fe dialect.Frontend,
+	v *template.IfPresent) []diagnostics.Diagnostic {
+
+	if !balanced(profile, v.Body) {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment has unbalanced parentheses; it must form one complete join item (R1)")}
+	}
+	if err := fe.ProbeJoinItem(rewriteParams(profile, v.Body)); err != nil {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment must be a single join item (R1): %s", probeMsg(err))}
+	}
+	return nil
+}
+
+func probeChooseCases(profile dialect.LexerProfile, fe dialect.Frontend,
+	c *template.Choose) []diagnostics.Diagnostic {
+
+	var diags []diagnostics.Diagnostic
+	check := func(body string, span diagnostics.Span) {
+		if body == "" {
+			return
+		}
+		if err := fe.ProbeOrderBy(rewriteParams(profile, body)); err != nil {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, span,
+				"@case body must be exactly one ORDER BY clause (R1): %s", probeMsg(err)))
+		}
+	}
+	for _, cs := range c.Cases {
+		check(cs.Body, cs.Span)
+	}
+	if c.Default != nil {
+		check(c.Default.Body, c.Default.Span)
+	}
+	return diags
+}
+
+func checkConjunctMembership(maxTree dialect.Tree, v *template.IfPresent,
+	fr ast.FragRange) []diagnostics.Diagnostic {
+
+	n := 0
+	for _, loc := range maxTree.TopConjunctLocs() {
+		if loc >= fr.Start && loc < fr.End {
+			n++
+		}
+	}
+	if n != 1 {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment maps to %d WHERE conjuncts, want exactly 1 (R1)", n)}
+	}
+	return nil
+}
+
+func checkJoinMembership(maxTree dialect.Tree, v *template.IfPresent,
+	fr ast.FragRange) []diagnostics.Diagnostic {
+
+	var diags []diagnostics.Diagnostic
+	found := 0
+	for _, rel := range maxTree.Relations() {
+		if rel.Loc < fr.Start || rel.Loc >= fr.End {
+			continue
+		}
+		found++
+		if rel.Join != dialect.JoinInner && rel.Join != dialect.JoinLeft {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeJoinTypeForbidden, v.BodySpan,
+				"optional joins must be INNER or LEFT; %s null-extends or multiplies skeleton rows, "+
+					"which would change result nullability per shape (R2)", rel.Join))
+		}
+	}
+	if found == 0 {
+		diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment does not introduce a relation in the FROM clause (R1)"))
+	}
+	return diags
+}
+
+func checkOrderByContainment(tree dialect.Tree, r ast.Rendering) []diagnostics.Diagnostic {
+	var chooseFr *ast.FragRange
+	for i := range r.Frags {
+		if _, ok := r.Frags[i].Item.(*template.Choose); ok {
+			chooseFr = &r.Frags[i]
+			break
+		}
+	}
+	if chooseFr == nil {
+		return nil
+	}
+	c := chooseFr.Item.(*template.Choose)
+	for _, loc := range tree.OrderByLocs() {
+		if loc < chooseFr.Start || loc >= chooseFr.End {
+			return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, c.Span,
+				"a sort key outside the @choose block coexists with the @choose ORDER BY (R1); "+
+					"the statement may have only one ORDER BY owner")}
+		}
+	}
+	return nil
+}
+
+func probeMsg(err error) string {
+	var pe *dialect.ParseError
+	if errors.As(err, &pe) {
+		return pe.Msg
+	}
+	return err.Error()
+}
+
+// rewriteParams replaces :name refs with $n placeholders so probe
+// inputs are valid dialect SQL. Numbering is per-occurrence; probe
+// checks are purely syntactic, so stable numbering is not required.
+func rewriteParams(profile dialect.LexerProfile, body string) string {
+	src := []byte(body)
+	var b strings.Builder
+	pos, n := 0, 0
+	for {
+		tok, err := profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF {
+			b.Write(src[pos:])
+			return b.String()
+		}
+		if tok.Kind == dialect.KindParamRef {
+			b.Write(src[pos:tok.Start])
+			n++
+			fmt.Fprintf(&b, "$%d", n)
+			pos = tok.End
+			continue
+		}
+		b.Write(src[pos:tok.End])
+		pos = tok.End
+	}
+}
+
+// balanced reports whether the fragment's parentheses are balanced and
+// never negative — the lexer-level precondition that makes the
+// wrap-in-parens probe sound (design 02 §4).
+func balanced(profile dialect.LexerProfile, body string) bool {
+	src := []byte(body)
+	pos, depth := 0, 0
+	for {
+		tok, err := profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF {
+			return err == nil && depth == 0
+		}
+		switch tok.Kind {
+		case dialect.KindLParen:
+			depth++
+		case dialect.KindRParen:
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+		pos = tok.End
+	}
+}

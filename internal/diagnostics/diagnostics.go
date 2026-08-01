@@ -55,6 +55,15 @@ const (
 	CodeConstructNesting   Code = "SQLETCH012" // guard inside guard (R5)
 )
 
+// Rules-phase codes (R1 runs in P2's pipeline position; see
+// docs/design/02-rendering.md and 03-structural-rules.md).
+const (
+	CodeRenderingParse    Code = "SQLETCH100" // a rendering fails to parse
+	CodeJoinTypeForbidden Code = "SQLETCH101" // optional join not INNER/LEFT (R2)
+	CodeNodeIncomplete    Code = "SQLETCH102" // fragment is not one complete node (R1)
+	CodeNotSingleDML      Code = "SQLETCH103" // not exactly one SELECT/UPDATE/INSERT/DELETE
+)
+
 type Diagnostic struct {
 	Code     Code
 	Severity Severity
