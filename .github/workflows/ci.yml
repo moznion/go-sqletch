@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Unit tests
+        run: go test ./...
+      - name: Format check (goimports via gofmt-compatible output)
+        run: |
+          go run golang.org/x/tools/cmd/goimports@latest -l . | tee /tmp/fmt.out
+          test ! -s /tmp/fmt.out
+
+  e2e:
+    name: real-database E2E (-tags devdb)
+    runs-on: ubuntu-latest # Docker preinstalled; testcontainers starts PostgreSQL 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: E2E suite (property test, generated module, CLI round-trip)
+        run: go test -tags devdb -v ./internal/e2e/
+      - name: Offline check against the committed examples cache
+        run: go run ./cmd/sqletch check --config examples/sqletch.yaml | tee /tmp/check.out
+      - name: Assert the committed cache keeps CI offline
+        run: |
+          grep -q "offline: yes" /tmp/check.out
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: --build-tags devdb
+
+  fuzz-smoke:
+    name: fuzz (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scanner fuzz (30s)
+        run: go test ./internal/template -fuzz=FuzzScan -fuzztime=30s
