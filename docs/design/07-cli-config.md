@@ -100,9 +100,16 @@ help: move this predicate inside @if-present(organization_id)
 - Format: `file:line:col` (computed from byte offset + a lazily built
   line index), stable code, message, source excerpt with caret span,
   `help:` from the Hint field.
-- `--format json` on all commands emits one JSON object per diagnostic
-  (code, file, span, message, hint) for editor/CI integration — this
-  is also the future LSP's data source, so it ships in v0.1.
+- `--json` (a persistent root flag; earlier drafts of this doc called
+  it `--format json`) emits one JSON object per line per diagnostic for
+  editor/CI integration — this is also the LSP's data source, so it
+  ships in v0.1. The key set is exactly `code`, `severity`, `file`,
+  `line`, `col`, `message`, `hint`; `col` counts **bytes**, unlike the
+  excerpt renderer's rune-aligned caret and the LSP's UTF-16 code
+  units. It is a machine contract: `internal/cli/jsondiag_test.go` pins
+  the key set field for field, so any change breaks a test rather than
+  a downstream editor. `generate` and `check` honour the flag through
+  both `PrintDiags` and `printBare`; `explain` does not take it.
 - Diagnostics sorted by (file, offset, code) for stable output.
 
 ## 4. Command wiring rules
@@ -126,7 +133,9 @@ documentation, the e2e CI fixture, and the sqlc-coexistence smoke
 - Config: golden valid/invalid fixtures → exact `SQLETCH30x`
   diagnostics; env expansion; unknown-key strictness.
 - CLI: table-driven command tests over `examples/` using the in-proc
-  entry points; `--format json` schema pinned by golden files.
+  entry points; the `--json` key set and value semantics pinned in
+  `jsondiag_test.go`, including the exit-code mapping for SQLETCH200
+  (a bad `server_version` pin is exit 1, not exit 2).
 - Renderer: golden text output incl. the multibyte-column caret case.
 - E2E (`-tags devdb`): cold `generate` → commit cache → warm `check`
   offline → mutate a query → `check` fails with the right code →

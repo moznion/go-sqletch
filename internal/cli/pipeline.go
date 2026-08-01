@@ -50,7 +50,7 @@ type Result struct {
 // versionPinDiag converts a dev-database version-pin mismatch into
 // SQLETCH200. It is a user mistake in sqletch.yaml, not an environment
 // failure, so it belongs in the diagnostic stream — coded, attached to
-// the config file, and carried by `--format json` to editors.
+// the config file, and carried by `--json` to editors.
 func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
 	var vme *devdb.VersionMismatchError
 	if !errors.As(err, &vme) {
