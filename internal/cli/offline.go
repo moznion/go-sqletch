@@ -158,7 +158,7 @@ func (c *OfflineChecker) analyzeFile(path string, src []byte) *fileMemo {
 		return m
 	}
 	m := &fileMemo{hash: h}
-	file, diags := template.NewScanner(c.drv.profile).ScanFile(path, src)
+	file, diags := scanSource(template.NewScanner(c.drv.profile), path, src)
 	m.file = file
 	m.diags = diags
 	// Rendering a template whose scan already failed risks probing

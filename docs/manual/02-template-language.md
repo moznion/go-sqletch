@@ -27,6 +27,57 @@ query; names are global across files.
 Parameters are `:snake_case` tokens. Never write `$1` or `?` —
 placeholder emission belongs to the compiler.
 
+## Where templates live
+
+A template file is the default, and everything above describes it. A
+template may equally be authored **inside a Go file**, in a const
+marked `//sqletch:query`:
+
+```go
+package repo
+
+//sqletch:query
+const searchUsersSQL = `
+-- name: SearchUsers :many
+SELECT u.id, u.email FROM users AS u
+WHERE TRUE
+@if-present(status)
+  AND u.status = :status
+@endif
+;
+`
+```
+
+List the Go files in `queries:` alongside (or instead of) `.sql`
+globs — the input form is chosen by extension:
+
+```yaml
+queries: [queries/*.sql, internal/repo/*.go]
+```
+
+Nothing else changes. The const's contents are a template file: same
+grammar, `-- name:` headers included, several queries per const
+allowed. Generated code and cache entries are byte-identical to the
+`.sql` form, so a query can move between the two without a cold
+regenerate. Diagnostics point at the real `.go` line and column.
+
+Three restrictions, each with a diagnostic:
+
+- the marker goes on a **`const`** declaration, not a `var` — the SQL
+  that was verified must be the SQL that runs, and only a const makes
+  that structural;
+- the value is a single **raw** (backquoted) string literal, not an
+  interpreted string and not a concatenation;
+- conditionality still lives in the template's constructs. Building
+  SQL with Go `if` statements or `fmt.Sprintf` is exactly what sqletch
+  exists to replace, and the const requirement makes it impossible.
+
+Extraction is syntactic (`go/parser` only, never `go/types`), so the
+package does not have to compile — it may refer to symbols that
+`sqletch generate` has not emitted yet. Templates embedded in Go do
+not get syntax highlighting yet ([editor support](09-editors.md)); LSP
+diagnostics work today.
+
 ## `@if-present` — optional fragments
 
 ```sql

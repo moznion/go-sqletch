@@ -54,6 +54,11 @@ regression test.
 internal/template   P1  scanner: constructs, spans, params (lexer via
                         dialect.LexerProfile; postgres profile in
                         internal/dialect/postgres/lexer.go)
+internal/gosrc      —   templates authored in `//sqletch:query` consts
+                        inside .go files (doc 13); go/parser only, and
+                        it hands the scanner offset-preserving views so
+                        internal/template needs no notion of Go at all
+                        (cli.scanSource is the single dispatch)
 internal/ast        P2  Render/RenderShape + SourceMap — the reference
                         emission (premise P2)
 internal/rules      P2/3/4  CheckR1 (probe-based node completeness),

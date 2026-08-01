@@ -15,7 +15,8 @@ database:
 schema:
   files: [db/schema.sql]       # required: ordered globs of plain DDL
 
-queries: [queries/*.sql]       # required: globs of template files
+queries: [queries/*.sql]       # required: globs of template files;
+                               # `.go` paths are read for //sqletch:query consts
 
 output:
   package: gen                 # required: generated package name
@@ -61,6 +62,10 @@ filter_tree_caps:              # @filter-tree limits, baked into generated code
   `generate` rewrites from that cache (`.sqletch/explain/`, consumed by
   `sqletch explain`; `.sqletch/expanded/`, the static-expansion audit
   surface), so they belong in `.gitignore`.
+- **`queries`** globs may list `.sql` template files, `.go` files
+  holding `//sqletch:query` consts, or both; the input form follows the
+  extension (see [the template language](02-template-language.md)).
+  Query names are global across every file and both forms.
 - **`overrides`** force a result column's nullability where the
   analysis is conservative (the analyzer never narrows from optional
   fragments by design — see the manual's runtime chapter).

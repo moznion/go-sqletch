@@ -19,6 +19,12 @@ $ sqletch lsp     # stdio; started by your editor, not by hand
 The server reads `sqletch.yaml` from the workspace root. Any LSP
 client works; configure it to run `sqletch lsp` for SQL files.
 
+Templates authored in a `//sqletch:query` const inside a `.go` file
+get the same diagnostics, at the right Go line and column — the
+analysis works on byte offsets into the real file. What they do **not**
+get yet is syntax highlighting: the grammars below cover `.sql` files,
+not templates embedded in Go raw strings.
+
 ## VS Code
 
 The extension in `editors/vscode` bundles both halves:

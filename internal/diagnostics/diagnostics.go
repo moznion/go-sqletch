@@ -55,6 +55,17 @@ const (
 	CodeConstructNesting   Code = "SQLETCH012" // guard inside guard (R5)
 )
 
+// Go-source input codes: templates authored in a `//sqletch:query`
+// const inside a .go file (see docs/design/13-go-source-input.md).
+// They sit in the scanner band because they report on the same phase —
+// getting template bytes out of a file and into the scanner.
+const (
+	CodeGoParse        Code = "SQLETCH020" // the .go file does not parse
+	CodeGoMarkerTarget Code = "SQLETCH021" // //sqletch:query on a non-const declaration
+	CodeGoNotRawString Code = "SQLETCH022" // marked const's value is not a raw string literal
+	CodeGoBadConstSpec Code = "SQLETCH023" // marked const has no value, or names/values disagree
+)
+
 // Rules-phase codes (R1 runs in P2's pipeline position; see
 // docs/design/02-rendering.md and 03-structural-rules.md).
 const (

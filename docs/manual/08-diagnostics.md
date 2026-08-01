@@ -26,6 +26,10 @@ codes).
 | SQLETCH010 | Too many guard atoms for one query (the shape bitmask is 64 bits wide). |
 | SQLETCH011 | A positional placeholder (`$1`, `?`) in a template. Templates use `:name` parameters; the compiler owns placeholder emission. |
 | SQLETCH012 | A guarded construct inside another guarded body (rule R5). Flatten: multi-param `@if-present(a, b)` expresses conjunction. |
+| SQLETCH020 | A `.go` file listed in `queries:` does not parse. Templates are read syntactically, so the file must at least be valid Go syntax (it need not type-check). |
+| SQLETCH021 | `//sqletch:query` on something other than a `const` declaration. A const is what makes the verified SQL the SQL that runs. |
+| SQLETCH022 | A `//sqletch:query` const whose value is not a single raw (backquoted) string literal. Interpreted strings process escapes and concatenations have no contiguous source range, so template spans could not point back at the file. |
+| SQLETCH023 | A `//sqletch:query` const that declares no value, or more names than values. |
 
 ## SQLETCH1xx — structural rules
 

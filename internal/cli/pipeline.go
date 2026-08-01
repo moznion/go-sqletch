@@ -111,7 +111,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 			return nil, err
 		}
 		res.Sources[p] = src
-		file, diags := scanner.ScanFile(p, src)
+		file, diags := scanSource(scanner, p, src)
 		res.Diags = append(res.Diags, diags...)
 		for _, q := range file.Queries {
 			if prev, dup := names[q.Name]; dup {

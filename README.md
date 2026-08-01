@@ -170,6 +170,29 @@ and provides go-to-definition between `:param` occurrences and their
 `-- @param` annotations. It never touches a database. Point any LSP
 client at `sqletch lsp` for `.sql` template files.
 
+Templates do not have to live in `.sql` files. A `//sqletch:query`
+const inside a Go file compiles identically — same generated code,
+same cache entries — so a query can sit next to the repository code
+that uses it:
+
+```go
+//sqletch:query
+const searchUsersSQL = `
+-- name: SearchUsers :many
+SELECT u.id, u.email FROM users AS u
+WHERE TRUE
+@if-present(status)
+  AND u.status = :status
+@endif
+;
+`
+```
+
+List the file in `queries:` and generate as usual. Conditionality
+still lives in the constructs — the const requirement is what keeps
+Go control flow out of SQL construction. See
+[the template language](docs/manual/02-template-language.md).
+
 ## Guarantees and limits
 
 Verified at compile time, for **every** reachable shape: syntax,
