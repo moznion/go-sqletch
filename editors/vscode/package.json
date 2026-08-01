@@ -4,7 +4,7 @@
   "description": "Statically verified, dynamically composed SQL templates: construct highlighting and language server integration for sqletch.",
   "version": "0.1.0",
   "publisher": "moznion",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/moznion/sqletch"

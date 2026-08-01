@@ -211,7 +211,7 @@ language reference, per-dialect guides, and the
   promises (`docs/design/12-v1.md`), self-describing cache format, the
   [user manual](docs/manual/README.md) and
   [sqlc migration guide](docs/manual/10-sqlc-migration.md), per-dialect
-  examples. Remaining: LICENSE, CHANGELOG, the `v1.0.0` tag
+  examples. Remaining: CHANGELOG, the `v1.0.0` tag
 
 ## Development
 
@@ -220,3 +220,7 @@ $ go test ./...                          # unit suites
 $ go test -tags devdb ./internal/e2e/    # real-database E2E (Docker)
 $ golangci-lint run --build-tags devdb ./...
 ```
+
+## License
+
+[Apache-2.0](LICENSE).

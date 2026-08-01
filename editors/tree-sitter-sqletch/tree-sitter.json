@@ -11,7 +11,7 @@
   ],
   "metadata": {
     "version": "0.1.0",
-    "license": "MIT",
+    "license": "Apache-2.0",
     "description": "tree-sitter grammar for sqletch SQL templates",
     "links": {
       "repository": "https://github.com/moznion/sqletch"
