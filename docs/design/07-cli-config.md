@@ -14,6 +14,9 @@ dialect: postgres            # required; v0.1: postgres only
 server_version: "16.4"       # required; cache-key + container tag + pin
 database:
   dsn: ${SQLETCH_DSN}        # optional; env expansion supported
+                             # SQLite: a FILE PATH, resolved against the
+                             # config dir like every other path (":memory:"
+                             # and "file:…" URIs pass through)
   container: true            # default when dsn empty
 schema:
   files:                     # exactly one of files / setup_cmd
@@ -73,7 +76,11 @@ structure reserves them.)
 
 Exit codes: 0 ok, 1 diagnostics reported, 2 environment failure
 (config unreadable, DB unreachable, cache write failure). CI can
-distinguish "your SQL is wrong" from "infra flaked".
+distinguish "your SQL is wrong" from "infra flaked". A `server_version`
+pin that does not match the connected engine is on the *diagnostic*
+side of that line — it is a mistake in `sqletch.yaml`, so it surfaces
+as SQLETCH200 against the config file (exit 1), not as an environment
+failure.
 
 ## 3. Diagnostics rendering
 

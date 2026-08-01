@@ -32,6 +32,9 @@ type Config struct {
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.
 	Dir string `yaml:"-"`
+	// Path is the config file itself, so later phases can attach
+	// diagnostics to it (e.g. SQLETCH200). Not part of the YAML.
+	Path string `yaml:"-"`
 }
 
 type Database struct {
@@ -104,6 +107,7 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			diagnostics.CodeConfigParse, span, "invalid config: %v", err)}
 	}
 	cfg.Dir = filepath.Dir(path)
+	cfg.Path = path
 
 	var diags []diagnostics.Diagnostic
 	invalid := func(format string, args ...any) {

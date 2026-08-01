@@ -159,8 +159,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   need `-- @param` like MySQL. Affinity mapping has BOOLEAN/date-time
   carve-outs. @in arity-0 emission is per-dialect via Frag.Text /
   dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
-  is a file path, reset = drop all tables/views, version pin compares
-  dotted prefix ("3.50" vs "3.50.x").
+  is a file path resolved config-relative via `cli.sqliteDSNPath`
+  (`:memory:` and `file:` URIs pass through), reset = drop all
+  tables/views, version pin compares dotted prefix ("3.50" vs
+  "3.50.x").
+- Version-pin mismatch is a DIAGNOSTIC, not an environment error:
+  `devdb.VersionMismatchError` (which names its own engine — it is
+  shared by all three dialects) maps to SQLETCH200 against
+  `config.Config.Path` via `cli.versionPinDiag`, in both pipeline.Run
+  and explain --analyze. Exit 1, and it reaches `--format json`/LSP.
 - Editor grammars (doc 11, editors/): TextMate INJECTION grammar into
   source.sql (selector excludes string|comment so directive-shaped
   comments still win at line start); tree-sitter grammar keeps SQL as

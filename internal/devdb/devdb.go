@@ -30,13 +30,20 @@ type Config struct {
 }
 
 // VersionMismatchError signals that the connected server does not
-// match the pinned server_version (SQLETCH200 at the CLI layer).
+// match the pinned server_version (SQLETCH200 at the CLI layer). Every
+// dialect's Acquire returns it, so Server names the engine actually
+// connected to — the message is not PostgreSQL-specific.
 type VersionMismatchError struct {
 	Pinned, Actual string
+	Server         string // display name, e.g. "PostgreSQL", "MySQL", "SQLite"
 }
 
 func (e *VersionMismatchError) Error() string {
-	return fmt.Sprintf("connected server is PostgreSQL %s but sqletch.yaml pins server_version %s", e.Actual, e.Pinned)
+	server := e.Server
+	if server != "" {
+		server += " "
+	}
+	return fmt.Sprintf("connected server is %s%s but sqletch.yaml pins server_version %s", server, e.Actual, e.Pinned)
 }
 
 // AcquireDSN starts (or reuses) the dev database, verifies the version
@@ -99,7 +106,7 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 		}
 		if !sameMajor(cfg.ServerVersion, actual) {
 			closeAll()
-			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual}
+			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual, Server: "PostgreSQL"}
 		}
 	}
 
