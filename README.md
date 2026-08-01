@@ -13,7 +13,7 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v0.1, experimental.** PostgreSQL only. The template
+> **Status: v0.2, experimental.** PostgreSQL only. The template
 > language and generated API may change before 1.0.
 
 ## The problem
@@ -172,9 +172,9 @@ design is under [docs/design/](docs/design/).
 
 ## Roadmap
 
-- **v0.2** — partial `UPDATE` (PATCH semantics), optional `INSERT`
-  columns, `@choose` in projections, `sqletch fmt`, static expansion
-  mode
+- **v0.2 (shipped)** — partial `UPDATE` (PATCH semantics), optional
+  `INSERT` column/value pairs, `@choose` in projections and GROUP BY,
+  `sqletch fmt`, strict static expansion, `explain --enumerate`
 - **v0.3** — `@when` value guards, `@filter-tree` (typed, composable
   filters across layer boundaries — with a required mode for
   multi-tenant safety), `@order-by` multi-key sorting
