@@ -142,6 +142,18 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - go-mysql client: ExecuteMultiple hides per-statement errors (only
   the callback sees them) — devdb splits schema SQL on top-level
   semicolons via the lexer profile and executes one at a time.
+- SQLite driver (Tier 2): fully in-process (ncruces/go-sqlite3 =
+  SQLite-as-WASM under wazero; no Docker). Frontend = rqlite/sql
+  (byte offsets everywhere; no RIGHT/FULL JOIN; some non-reserved
+  keywords like ACTION need quoting). Prepare IS the plan check;
+  oracle errors carry offsets and the engine survives them. Expression
+  columns (count(*) etc.) have no decltype — `-- @column name: type`
+  annotations are MANDATORY for them (new scanner directive); params
+  need `-- @param` like MySQL. Affinity mapping has BOOLEAN/date-time
+  carve-outs. @in arity-0 emission is per-dialect via Frag.Text /
+  dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
+  is a file path, reset = drop all tables/views, version pin compares
+  dotted prefix ("3.50" vs "3.50.x").
 - Embedded-PG WASM spike (docs/design/09, harness spike/wasm-oracle):
   feasible — unmodified pgx oracle over libpglite WASI PG 16.6 under
   wazero, warm cold-start 1.7s. NOT shipped: today's build aborts the

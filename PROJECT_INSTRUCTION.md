@@ -297,11 +297,26 @@ configured target dialect only.
     locations are recovered lexically (a FROM-position name is always
     preceded by FROM/JOIN/','/'('/'.'/INTO/UPDATE, with subqueries
     skipped whole); the real-database property suite backstops it.
--   **SQLite**: `sqlite3_prepare_v2` plus declared column types as the
-    oracle. The protocol supplies **no parameter type information at
-    all**, so parameter annotations are always required (same mechanism
-    as MySQL); result types follow declared types/affinity, with
-    overrides for expression columns lacking a declared type.
+-   **SQLite** *(shipped in v0.4)*: `sqlite3_prepare` plus declared
+    column types as the oracle — over ncruces/go-sqlite3, the real
+    SQLite compiled to WASM and run in-process under wazero, so this
+    driver needs **no external database and no Docker at all**.
+    Preparing compiles through SQLite's planner (prepare is the plan
+    check); errors carry byte offsets. The engine supplies **no
+    parameter type information at all**, so `-- @param` annotations
+    are always required (same mechanism as MySQL); result types follow
+    declared types through the affinity rules (with deliberate BOOLEAN
+    and date/time carve-outs), and expression columns — whose declared
+    type SQLite reports as NULL, `count(*)` included — require
+    `-- @column name: type` annotations, enforced with diagnostics.
+    Source-column identity comes from `column_origin/table_name`
+    against a `pragma_table_info` snapshot with synthetic OIDs. The
+    grammar frontend is the pure-Go rqlite/sql parser (byte offsets on
+    every node); its known gaps versus the current SQLite grammar —
+    RIGHT/FULL JOIN (3.39+), a few non-reserved keywords such as
+    `ACTION` used as bare identifiers (quote them) — surface as parse
+    diagnostics, and everything the grammar accepts is backstopped by
+    the real engine.
 
 The soundness model (R1–R9, maximal/minimal verification) is identical
 across tiers; only the amount of type information the oracle supplies

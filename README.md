@@ -13,7 +13,7 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v0.4, experimental.** PostgreSQL and MySQL. The template
+> **Status: v0.4, experimental.** PostgreSQL, MySQL, and SQLite. The template
 > language and generated API may change before 1.0.
 
 ## The problem
@@ -193,13 +193,14 @@ design is under [docs/design/](docs/design/).
   with a required mode for multi-tenant safety), `@order-by` multi-key
   sorting, `explain --analyze`
 - **v0.4 (in progress)** — shipped: `@in` (`= ANY` on PostgreSQL,
-  arity-expanded `IN (?, …)` on MySQL), `-- @param` type annotations,
-  the MySQL driver (TiDB-parser frontend, COM_STMT_PREPARE oracle,
-  `database/sql` codegen), and the LSP server (`sqletch lsp`). The
-  embedded PostgreSQL oracle spike is done (feasible; see
+  arity-expanded `IN (?, …)` on MySQL/SQLite), `-- @param` /
+  `-- @column` type annotations, the MySQL driver (TiDB-parser
+  frontend, COM_STMT_PREPARE oracle, `database/sql` codegen), the
+  SQLite driver (rqlite/sql frontend, in-process WASM SQLite oracle —
+  no Docker at all), and the LSP server (`sqletch lsp`). The embedded
+  PostgreSQL oracle spike is done (feasible; see
   `docs/design/09-embedded-oracle.md` — shipping waits on upstream
-  libpglite). Remaining: SQLite driver, editor grammars
-  (tree-sitter / TextMate)
+  libpglite). Remaining: editor grammars (tree-sitter / TextMate)
 
 ## Development
 
