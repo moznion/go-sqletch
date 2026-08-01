@@ -99,6 +99,55 @@ func TestComposeStyle_Question(t *testing.T) {
 	}
 }
 
+func TestComposeStyle_InList(t *testing.T) {
+	frags := []Frag{
+		{Kind: Skel, Text: "SELECT id FROM t WHERE t.status "},
+		{Kind: InList, ParamIdx: []int16{0}},
+		{Kind: Skel, Text: "\nLIMIT :limit", ParamSpans: []Span{{7, 13}}, ParamIdx: []int16{1}},
+	}
+
+	sql, binds, err := ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{3}}, nil, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql, "t.status IN (?, ?, ?)") {
+		t.Errorf("arity-3 expansion:\n%s", sql)
+	}
+	want := []Bind{{Idx: 0, Elem: 1}, {Idx: 0, Elem: 2}, {Idx: 0, Elem: 3}, {Idx: 1}}
+	if len(binds) != len(want) {
+		t.Fatalf("binds = %+v", binds)
+	}
+	for i := range want {
+		if binds[i] != want[i] {
+			t.Fatalf("binds = %+v, want %+v", binds, want)
+		}
+	}
+	args := ResolveArgs(binds, []any{[]string{"a", "b", "c"}, int64(10)}, nil)
+	if len(args) != 4 || args[0] != "a" || args[2] != "c" || args[3] != int64(10) {
+		t.Errorf("args = %v", args)
+	}
+
+	// Arity 0: the empty list matches nothing, binds nothing.
+	sql, binds, err = ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{0}}, nil, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql, "t.status IN (SELECT NULL FROM DUAL WHERE FALSE)") {
+		t.Errorf("arity-0 rendering:\n%s", sql)
+	}
+	if len(binds) != 1 || binds[0].Idx != 1 {
+		t.Errorf("arity-0 binds = %+v", binds)
+	}
+
+	// Distinct arities are distinct cache keys.
+	if (ShapeKey{Arities: []int32{3}}).String() == (ShapeKey{Arities: []int32{2}}).String() {
+		t.Error("arity must be part of the canonical key encoding")
+	}
+	if got := (ShapeKey{Guards: 1, Arities: []int32{3}}).String(); got != "g=1;n=3" {
+		t.Errorf("canonical encoding = %q", got)
+	}
+}
+
 func TestCompose_Deterministic(t *testing.T) {
 	frags := testFrags()
 	k := ShapeKey{Guards: 1, Choices: []uint8{1}}

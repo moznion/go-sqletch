@@ -177,7 +177,7 @@ func conformanceOver(t *testing.T, profile dialect.LexerProfile, style runtime.S
 		frags := BuildFrags(profile, q)
 		keys, _ := shape.Enumerate(q, 0)
 		for _, k := range keys {
-			want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
+			want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 			if err != nil {
 				t.Fatal(err)
 			}

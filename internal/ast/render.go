@@ -19,12 +19,25 @@ const (
 	RenderMaximal RenderKind = iota
 	RenderCase
 	RenderOrderDefault // an @order-by @default body substituted
+	RenderInEmpty      // an @in at arity 0 (expanding dialects only)
 )
 
 // OrderSelection selects the emission of each @order-by block (by
 // block order): nil = maximal (all keys, declaration order), empty
 // non-nil = default-or-omit, else a sequence of key<<1|desc elements.
 type OrderSelection [][]uint8
+
+// InSelection selects the representative arity of each @in construct
+// (by template order) on expanding dialects: 1 (default when nil or
+// short) renders one placeholder — the verified stand-in for every
+// non-empty list, since IN-list growth is parse-invariant — and 0
+// renders the empty-list form. Ignored on dollar-style dialects.
+type InSelection []uint8
+
+// inEmptySQL is the arity-0 emission: the empty list matches nothing,
+// FALSE even for a NULL operand (IN over an empty subquery result is
+// FALSE per the SQL standard), matching PostgreSQL's `= ANY('{}')`.
+const inEmptySQL = "IN (SELECT NULL FROM DUAL WHERE FALSE)"
 
 // FragRange records where a construct's emission landed in the
 // rendered SQL, including synthesized wrapping.
@@ -38,6 +51,7 @@ type Rendering struct {
 	ChooseIdx int // which @choose block differs from maximal (RenderCase)
 	CaseIdx   int // selected ordinal: 0..len(Cases)-1, len(Cases)=default
 	OrderIdx  int // which @order-by block (RenderOrderDefault)
+	InIdx     int // which @in construct (RenderInEmpty)
 	SQL       string
 	ParamsSeq []string // template param name per placeholder ($1 = [0])
 	Frags     []FragRange
@@ -138,7 +152,7 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 		if o.Default != nil {
 			orders := make(OrderSelection, orderCount)
 			orders[orderIdx] = []uint8{} // empty non-nil = default
-			r, err := renderCore(profile, q, allActive, nil, orders)
+			r, err := renderCore(profile, q, allActive, nil, orders, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -147,6 +161,30 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 			out = append(out, r)
 		}
 		orderIdx++
+	}
+	// Expanding dialects: the arity-0 form of each @in is its own
+	// verified rendering (the non-empty form is in the maximal).
+	if dialect.StyleOf(profile) == dialect.PlaceholderQuestion {
+		inCount := 0
+		for _, it := range q.Items {
+			if _, ok := it.(*template.InExpr); ok {
+				inCount++
+			}
+		}
+		for i := 0; i < inCount; i++ {
+			ins := make(InSelection, inCount)
+			for j := range ins {
+				ins[j] = 1
+			}
+			ins[i] = 0
+			r, err := renderCore(profile, q, allActive, nil, nil, ins)
+			if err != nil {
+				return nil, err
+			}
+			r.Kind = RenderInEmpty
+			r.InIdx = i
+			out = append(out, r)
+		}
 	}
 	return out, nil
 }
@@ -157,16 +195,17 @@ func allActive(*template.IfPresent) bool { return true }
 // case selection. This is the reference implementation of premise P2's
 // emission algorithm.
 func Render(profile dialect.LexerProfile, q *template.QueryTemplate, sel CaseSelection) (Rendering, error) {
-	return renderCore(profile, q, allActive, sel, nil)
+	return renderCore(profile, q, allActive, sel, nil, nil)
 }
 
 // RenderShape emits the SQL of one concrete shape: an @if-present
 // fragment is active iff every one of its guard atoms' bits is set in
 // guardMask (bit order = q.GuardAtoms); orders selects each @order-by
-// block's key sequence. Used by shape enumeration,
-// `check --exhaustive`, and the property test.
+// block's key sequence; ins selects each @in construct's
+// representative arity (expanding dialects). Used by shape
+// enumeration, `check --exhaustive`, and the property test.
 func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
-	guardMask uint64, sel CaseSelection, orders OrderSelection) (Rendering, error) {
+	guardMask uint64, sel CaseSelection, orders OrderSelection, ins InSelection) (Rendering, error) {
 
 	bit := map[template.GuardAtom]int{}
 	for i, g := range q.GuardAtoms {
@@ -181,18 +220,18 @@ func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
 		}
 		return true
 	}
-	return renderCore(profile, q, active, sel, orders)
+	return renderCore(profile, q, active, sel, orders, ins)
 }
 
 func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
-	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection) (Rendering, error) {
+	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection, ins InSelection) (Rendering, error) {
 
 	r := &renderer{
 		profile:  profile,
 		paramNum: map[string]int{},
 		question: dialect.StyleOf(profile) == dialect.PlaceholderQuestion,
 	}
-	chooseIdx, orderIdx := 0, 0
+	chooseIdx, orderIdx, inIdx := 0, 0, 0
 	for _, it := range q.Items {
 		switch v := it.(type) {
 		case *template.Skeleton:
@@ -272,11 +311,23 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 			orderIdx++
 		case *template.InExpr:
-			// Inline membership (PostgreSQL rendering): `= ANY($n)`.
 			fragStart := r.len()
-			r.emitSynth("= ANY(", v.Span.Start)
-			r.emitParamRef(v.Param, v.Span.Start)
-			r.emitSynth(")", v.Span.Start)
+			switch {
+			case !r.question:
+				// PostgreSQL: `= ANY($n)`, one static shape.
+				r.emitSynth("= ANY(", v.Span.Start)
+				r.emitParamRef(v.Param, v.Span.Start)
+				r.emitSynth(")", v.Span.Start)
+			case inIdx < len(ins) && ins[inIdx] == 0:
+				// Expanding dialects, arity 0: no bind at all.
+				r.emitSynth(inEmptySQL, v.Span.Start)
+			default:
+				// Expanding dialects, representative arity 1.
+				r.emitSynth("IN (", v.Span.Start)
+				r.emitParamRef(v.Param, v.Span.Start)
+				r.emitSynth(")", v.Span.Start)
+			}
+			inIdx++
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 		case *template.FilterTree:
 			// Inline emission (the construct follows an unconditional

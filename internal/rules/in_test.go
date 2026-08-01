@@ -49,7 +49,7 @@ func TestInExpr_RenderAndConformance(t *testing.T) {
 	}
 	fe := postgres.Frontend{}
 	for _, k := range keys {
-		want, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
+		want, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 		if err != nil {
 			t.Fatal(err)
 		}

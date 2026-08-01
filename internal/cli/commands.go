@@ -185,7 +185,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 			}
 			keys, truncated := shape.Enumerate(q, enumerateCap)
 			for _, k := range keys {
-				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
+				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
 					fmt.Fprintf(errW, "sqletch: %v\n", err)
 					return ExitEnvironment
@@ -265,7 +265,7 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 			}
 			keys, truncated := shape.Enumerate(q, analyzeCap)
 			for _, k := range keys {
-				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection())
+				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
 					fmt.Fprintf(errW, "sqletch: %v\n", err)
 					return ExitEnvironment

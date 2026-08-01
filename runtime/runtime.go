@@ -13,6 +13,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,8 @@ const (
 	Choose
 	OrderBy
 	FilterTree
-	InAny // @in on PostgreSQL: `= ANY($n)`, ParamIdx[0] is the bind
+	InAny  // @in on PostgreSQL: `= ANY($n)`, ParamIdx[0] is the bind
+	InList // @in on expanding dialects: `IN (?, …)`, arity from the key
 )
 
 type Sep uint8
@@ -73,6 +75,10 @@ type ShapeKey struct {
 	// @filter-tree value (values excluded) — the cache-key component
 	// for tree-shaped queries.
 	Trees []string
+	// Arities holds the element count of each @in slice, in template
+	// order — a shape dimension on expanding dialects only (empty on
+	// PostgreSQL, whose `= ANY` binds the slice whole).
+	Arities []int32
 }
 
 // String is the canonical encoding (byte-identical to the compiler's
@@ -124,6 +130,15 @@ func (k ShapeKey) String() string {
 			b.WriteString(enc)
 		}
 	}
+	if len(k.Arities) > 0 {
+		b.WriteString(";n=")
+		for i, n := range k.Arities {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(strconv.Itoa(int(n)))
+		}
+	}
 	return b.String()
 }
 
@@ -146,6 +161,9 @@ const (
 type Bind struct {
 	FromTree bool
 	Idx      int16
+	// Elem selects within a slice value: 0 binds the value whole; k>0
+	// binds element k-1 (@in arity expansion on Tier 2 dialects).
+	Elem int16
 }
 
 // ResolveArgs materializes a bind plan into driver arguments.
@@ -155,11 +173,15 @@ func ResolveArgs(binds []Bind, vals, treeArgs []any) []any {
 	}
 	out := make([]any, len(binds))
 	for i, b := range binds {
+		src := vals
 		if b.FromTree {
-			out[i] = treeArgs[b.Idx]
-		} else {
-			out[i] = vals[b.Idx]
+			src = treeArgs
 		}
+		v := src[b.Idx]
+		if b.Elem > 0 {
+			v = reflect.ValueOf(v).Index(int(b.Elem) - 1).Interface()
+		}
+		out[i] = v
 	}
 	return out
 }
@@ -191,6 +213,7 @@ func ComposeStyle(style Style, frags []Frag, key ShapeKey) (string, []int16) {
 type bindKey struct {
 	fromTree bool
 	idx      int16
+	elem     int16
 }
 
 // ComposeTree composes a shape that may include one @filter-tree
@@ -208,7 +231,7 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 
 	place := func(k bindKey) {
 		if style == StyleQuestion {
-			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx})
+			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx, Elem: k.elem})
 			b.WriteByte('?')
 			return
 		}
@@ -216,7 +239,7 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 		if !ok {
 			n = len(binds) + 1
 			assigned[k] = n
-			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx})
+			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx, Elem: k.elem})
 		}
 		b.WriteByte('$')
 		b.WriteString(strconv.Itoa(n))
@@ -265,7 +288,7 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 		}
 	}
 
-	chooseSeen, orderSeen := 0, 0
+	chooseSeen, orderSeen, inSeen := 0, 0, 0
 	for _, f := range frags {
 		switch f.Kind {
 		case Skel:
@@ -332,6 +355,26 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 		case InAny:
 			b.WriteString("= ANY(")
 			place(bindKey{idx: f.ParamIdx[0]})
+			b.WriteByte(')')
+		case InList:
+			n := int32(1)
+			if inSeen < len(key.Arities) {
+				n = key.Arities[inSeen]
+			}
+			inSeen++
+			if n <= 0 {
+				// Arity 0 keeps the spec's semantics: an empty list
+				// matches nothing, FALSE even for a NULL operand.
+				b.WriteString("IN (SELECT NULL FROM DUAL WHERE FALSE)")
+				continue
+			}
+			b.WriteString("IN (")
+			for e := int32(1); e <= n; e++ {
+				if e > 1 {
+					b.WriteString(", ")
+				}
+				place(bindKey{idx: f.ParamIdx[0], elem: int16(e)})
+			}
 			b.WriteByte(')')
 		case FilterTree:
 			if tree == nil {
@@ -469,6 +512,12 @@ func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, ke
 	return sql, argIdx
 }
 
+// GetBindsStyle is GetStyle returning the full bind plan — needed
+// when binds select slice elements (@in arity expansion).
+func (c *ComposedCache) GetBindsStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []Bind, error) {
+	return c.get(style, queryName, frags, key, nil, DefaultTreeCaps)
+}
+
 // GetTree is the @filter-tree variant: the tree's structural encoding
 // becomes part of the cache key (values never do).
 func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
@@ -528,6 +577,7 @@ func cloneKey(k ShapeKey) ShapeKey {
 		}
 	}
 	out.Trees = append([]string(nil), k.Trees...)
+	out.Arities = append([]int32(nil), k.Arities...)
 	return out
 }
 
@@ -535,7 +585,8 @@ func cloneKey(k ShapeKey) ShapeKey {
 // index, never identity.
 func keysEqual(a, b ShapeKey) bool {
 	if a.Guards != b.Guards || !choicesEqual(a.Choices, b.Choices) ||
-		len(a.Orders) != len(b.Orders) || len(a.Trees) != len(b.Trees) {
+		len(a.Orders) != len(b.Orders) || len(a.Trees) != len(b.Trees) ||
+		len(a.Arities) != len(b.Arities) {
 		return false
 	}
 	for i := range a.Orders {
@@ -545,6 +596,11 @@ func keysEqual(a, b ShapeKey) bool {
 	}
 	for i := range a.Trees {
 		if a.Trees[i] != b.Trees[i] {
+			return false
+		}
+	}
+	for i := range a.Arities {
+		if a.Arities[i] != b.Arities[i] {
 			return false
 		}
 	}

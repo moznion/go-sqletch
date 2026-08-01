@@ -81,7 +81,7 @@ func TestOrderBy_ScanAndShapes(t *testing.T) {
 			t.Fatalf("duplicate key %s", s)
 		}
 		seen[s] = true
-		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
+		r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestOrderBy_PermutationAndDirectionEmission(t *testing.T) {
 	q := scanOne(t, orderByTemplate)
 	// email DESC, created_at ASC — reversed declaration order.
 	r, err := ast.RenderShape(postgres.Profile{}, q, 0, nil,
-		ast.OrderSelection{{1<<1 | 1, 0 << 1}})
+		ast.OrderSelection{{1<<1 | 1, 0 << 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestOrderBy_PermutationAndDirectionEmission(t *testing.T) {
 		t.Errorf("permutation emission:\n%s", r.SQL)
 	}
 	// Empty selection → default body.
-	r, err = ast.RenderShape(postgres.Profile{}, q, 0, nil, ast.OrderSelection{{}})
+	r, err = ast.RenderShape(postgres.Profile{}, q, 0, nil, ast.OrderSelection{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

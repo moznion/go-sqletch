@@ -277,7 +277,7 @@ func TestPropertyAllShapesPrepareAndPlan(t *testing.T) {
 				t.Fatalf("corpus template exceeds the test cap")
 			}
 			for _, k := range keys {
-				r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection())
+				r, err := ast.RenderShape(postgres.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
 					t.Fatalf("shape %s: render: %v", k, err)
 				}

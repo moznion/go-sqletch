@@ -254,7 +254,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 				continue
 			}
 			for _, k := range keys {
-				r, err := ast.RenderShape(profile, cq.q, k.Guards, k.Selection(), k.OrderSelection())
+				r, err := ast.RenderShape(profile, cq.q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
 					return nil, err
 				}
