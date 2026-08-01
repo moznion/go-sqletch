@@ -138,6 +138,14 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - go-mysql client: ExecuteMultiple hides per-statement errors (only
   the callback sees them) — devdb splits schema SQL on top-level
   semicolons via the lexer profile and executes one at a time.
+- Embedded-PG WASM spike (docs/design/09, harness spike/wasm-oracle):
+  feasible — unmodified pgx oracle over libpglite WASI PG 16.6 under
+  wazero, warm cold-start 1.7s. NOT shipped: today's build aborts the
+  whole instance on any PG error (sjlj off; clear_error is
+  emscripten-only), mitigated only by ~0.5s reboot + fresh data dir.
+  Transport is the socket-FILE pump (.s.PGSQL.5432.in/.out), not CMA;
+  session bootstrap must CREATE SCHEMA public (template1 lacks it).
+  Revisit when upstream libpglite ships official bindings.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

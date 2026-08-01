@@ -4,3 +4,9 @@
 
 # coverage
 *.out
+
+# WASM oracle spike workdir (bundle download + disposable data dir)
+/spike-run/
+
+# Claude worktrees (harness-managed)
+/.claude/worktrees/

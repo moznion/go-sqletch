@@ -182,8 +182,10 @@ design is under [docs/design/](docs/design/).
 - **v0.4 (in progress)** — shipped: `@in` (`= ANY` on PostgreSQL,
   arity-expanded `IN (?, …)` on MySQL), `-- @param` type annotations,
   and the MySQL driver (TiDB-parser frontend, COM_STMT_PREPARE oracle,
-  `database/sql` codegen). Remaining: SQLite driver, embedded
-  PostgreSQL oracle (no Docker), editor support (LSP)
+  `database/sql` codegen). The embedded PostgreSQL oracle spike is
+  done (feasible; see `docs/design/09-embedded-oracle.md` — shipping
+  waits on upstream libpglite). Remaining: SQLite driver, editor
+  support (LSP)
 
 ## Development
 

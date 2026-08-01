@@ -143,8 +143,12 @@ Mechanical extensions of existing paths (conjunct machinery; the
   fallback. `server_version` pins the embedded build. devdb selection
   becomes `database.backend: server | embedded`.
 - Explicit spike before committing: WASM PG maturity, extension
-  availability, cold-start time budget (< 2s target). Outcome of the
-  spike updates this section into doc 09.
+  availability, cold-start time budget (< 2s target). **Spike done
+  (2026-08): see doc 09.** Feasible — the unmodified pgx oracle runs
+  against libpglite's WASI PG 16.6 under wazero within budget — but
+  shipping waits for upstream (libpglite official bindings; today's
+  build aborts the instance on every PG error). Harness:
+  `spike/wasm-oracle/`.
 
 ### Editor support (LSP)
 
