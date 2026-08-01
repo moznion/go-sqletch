@@ -20,6 +20,7 @@ import (
 	"github.com/moznion/sqletch/internal/devdb"
 	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/sqletch/internal/nullability"
 	"github.com/moznion/sqletch/internal/rules"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
@@ -262,6 +263,53 @@ func TestIndeterminateParamError(t *testing.T) {
 	}
 	if !oe.Indeterminate {
 		t.Errorf("Indeterminate = false for %+v; the CLI relies on this flag for the cast hint (SQLETCH201)", oe)
+	}
+}
+
+// TestNullabilityAgainstRealCatalog runs the analysis with a real
+// snapshot and real Describe output (source-column identity comes from
+// the wire protocol, not fixtures).
+func TestNullabilityAgainstRealCatalog(t *testing.T) {
+	conn, ctx := acquire(t)
+	oracle := postgres.NewOracle(conn)
+	cat, err := oracle.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := `-- name: N :many
+SELECT u.id, u.email, u.org_id, u.nickname, count(*) OVER () AS total
+FROM users AS u
+@if-present(organization_id)
+JOIN organization_users AS ou
+  ON ou.user_id = u.id AND ou.organization_id = :organization_id
+@endif
+WHERE TRUE;
+`
+	q := compile(t, src)
+	rs, err := ast.Renderings(postgres.Profile{}, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := oracle.Describe(ctx, rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := nullability.Analyze(tree, rs[0], desc, cat, nil)
+	// id/email NOT NULL; org_id and nickname nullable; count(*) is
+	// total even as a window function (returns 0, never NULL).
+	want := []bool{false, false, true, true, false}
+	if len(got) != len(want) {
+		t.Fatalf("columns = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("column %d (%s) nullable = %v, want %v", i, desc.Columns[i].Name, got[i], want[i])
+		}
 	}
 }
 

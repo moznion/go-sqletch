@@ -39,6 +39,11 @@ type RelRef struct {
 	Table string // relation name ("" for subselects etc.)
 	Loc   int    // byte offset of the relation in the parsed SQL
 	Join  JoinType
+	// NullableSide reports whether this relation sits on a
+	// null-extended side of an outer join in this statement (right of
+	// LEFT, left of RIGHT, either side of FULL) — the nullability
+	// analysis input.
+	NullableSide bool
 }
 
 // StmtKind is the statement class sqletch supports.
@@ -65,6 +70,7 @@ type TargetItem struct {
 	Name      string // output alias ("" if none)
 	Star      bool   // item is * or qualifier.*
 	Qualifier string // "u" for u.*; "" for bare *
+	FuncName  string // lowercased function name when the item is a bare call
 	Loc       int
 }
 

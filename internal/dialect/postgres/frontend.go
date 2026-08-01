@@ -153,39 +153,42 @@ func (t *tree) Relations() []dialect.RelRef {
 	switch {
 	case n.GetSelectStmt() != nil:
 		for _, item := range n.GetSelectStmt().FromClause {
-			collectFromItem(item, dialect.JoinBase, &out)
+			collectFromItem(item, dialect.JoinBase, false, &out)
 		}
 	case n.GetUpdateStmt() != nil:
 		u := n.GetUpdateStmt()
 		if u.Relation != nil {
-			out = append(out, relFromRangeVar(u.Relation, dialect.JoinBase))
+			out = append(out, relFromRangeVar(u.Relation, dialect.JoinBase, false))
 		}
 		for _, item := range u.FromClause {
-			collectFromItem(item, dialect.JoinBase, &out)
+			collectFromItem(item, dialect.JoinBase, false, &out)
 		}
 	case n.GetDeleteStmt() != nil:
 		d := n.GetDeleteStmt()
 		if d.Relation != nil {
-			out = append(out, relFromRangeVar(d.Relation, dialect.JoinBase))
+			out = append(out, relFromRangeVar(d.Relation, dialect.JoinBase, false))
 		}
 		for _, item := range d.UsingClause {
-			collectFromItem(item, dialect.JoinBase, &out)
+			collectFromItem(item, dialect.JoinBase, false, &out)
 		}
 	case n.GetInsertStmt() != nil:
 		i := n.GetInsertStmt()
 		if i.Relation != nil {
-			out = append(out, relFromRangeVar(i.Relation, dialect.JoinBase))
+			out = append(out, relFromRangeVar(i.Relation, dialect.JoinBase, false))
 		}
 	}
 	return out
 }
 
-func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType) dialect.RelRef {
+func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType, nullable bool) dialect.RelRef {
 	alias := ""
 	if rv.Alias != nil {
 		alias = rv.Alias.Aliasname
 	}
-	return dialect.RelRef{Alias: alias, Table: rv.Relname, Loc: int(rv.Location), Join: join}
+	return dialect.RelRef{
+		Alias: alias, Table: rv.Relname, Loc: int(rv.Location),
+		Join: join, NullableSide: nullable,
+	}
 }
 
 func mapJoinType(jt pgquery.JoinType, isNatural bool, quals *pgquery.Node) dialect.JoinType {
@@ -207,28 +210,41 @@ func mapJoinType(jt pgquery.JoinType, isNatural bool, quals *pgquery.Node) diale
 	}
 }
 
-func collectFromItem(node *pgquery.Node, join dialect.JoinType, out *[]dialect.RelRef) {
+// collectFromItem flattens the FROM tree. nullable tracks whether the
+// current subtree is on a null-extended side of an enclosing outer
+// join: LEFT null-extends its right operand, RIGHT its left, FULL
+// both.
+func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, out *[]dialect.RelRef) {
 	switch {
 	case node.GetRangeVar() != nil:
-		*out = append(*out, relFromRangeVar(node.GetRangeVar(), join))
+		*out = append(*out, relFromRangeVar(node.GetRangeVar(), join, nullable))
 	case node.GetJoinExpr() != nil:
 		je := node.GetJoinExpr()
-		collectFromItem(je.Larg, join, out)
-		collectFromItem(je.Rarg, mapJoinType(je.Jointype, je.IsNatural, je.Quals), out)
+		leftNullable, rightNullable := nullable, nullable
+		switch je.Jointype {
+		case pgquery.JoinType_JOIN_LEFT:
+			rightNullable = true
+		case pgquery.JoinType_JOIN_RIGHT:
+			leftNullable = true
+		case pgquery.JoinType_JOIN_FULL:
+			leftNullable, rightNullable = true, true
+		}
+		collectFromItem(je.Larg, join, leftNullable, out)
+		collectFromItem(je.Rarg, mapJoinType(je.Jointype, je.IsNatural, je.Quals), rightNullable, out)
 	case node.GetRangeSubselect() != nil:
 		rs := node.GetRangeSubselect()
 		alias := ""
 		if rs.Alias != nil {
 			alias = rs.Alias.Aliasname
 		}
-		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join})
+		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join, NullableSide: nullable})
 	case node.GetRangeFunction() != nil:
 		rf := node.GetRangeFunction()
 		alias := ""
 		if rf.Alias != nil {
 			alias = rf.Alias.Aliasname
 		}
-		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join})
+		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join, NullableSide: nullable})
 	}
 }
 
@@ -301,6 +317,13 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 			}
 			if item.Star && len(quals) > 0 {
 				item.Qualifier = quals[len(quals)-1]
+			}
+		}
+		if fc := rt.Val.GetFuncCall(); fc != nil {
+			for _, fn := range fc.Funcname {
+				if s := fn.GetString_(); s != nil {
+					item.FuncName = strings.ToLower(s.Sval)
+				}
 			}
 		}
 		out = append(out, item)
