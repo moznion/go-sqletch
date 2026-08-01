@@ -129,12 +129,15 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 
 	chooseParams := map[string]*template.Choose{}
 	orderParams := map[string]*template.OrderBy{}
+	filterParams := map[string]*template.FilterTree{}
 	for _, it := range q.Items {
 		switch c := it.(type) {
 		case *template.Choose:
 			chooseParams[c.Param] = c
 		case *template.OrderBy:
 			orderParams[c.Param] = c
+		case *template.FilterTree:
+			filterParams[c.Param] = c
 		}
 	}
 
@@ -163,6 +166,38 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds, o.Span,
 					"%q cannot be both an @order-by parameter and a guard (R9)", name))
 			}
+			continue
+		}
+		if ft, isFilter := filterParams[name]; isFilter {
+			if len(p.Occurrences) > 0 {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds,
+					p.Occurrences[0].Span,
+					"%q is a @filter-tree control parameter; it carries the tree and cannot also bind as a SQL value (R9)", ":"+name))
+			}
+			if p.GuardBit >= 0 {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds, ft.Span,
+					"%q cannot be both a @filter-tree parameter and a guard (R9)", name))
+			}
+			continue
+		}
+		// Predicate params are constructor arguments; mixing them with
+		// non-tree bind sites would need two sources for one name.
+		inFT, outFT := false, false
+		for _, occ := range p.Occurrences {
+			if occ.InFilterTree {
+				inFT = true
+			} else {
+				outFT = true
+			}
+		}
+		if inFT && outFT {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeChooseParamBinds,
+				p.Occurrences[0].Span,
+				"%q binds both inside a @predicate (constructor argument) and outside it; use distinct parameter names (R9)", ":"+name))
+			continue
+		}
+		if inFT {
+			p.Optional = false
 			continue
 		}
 

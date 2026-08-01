@@ -198,6 +198,21 @@ ORDER BY u.id ASC
 @end
 LIMIT :limit;
 `,
+	"filter_tree": `-- name: FilterUsers :many
+SELECT u.id, u.email
+FROM users AS u
+WHERE TRUE
+  AND @filter-tree!(scope)
+@predicate(tenant)
+u.tenant_id = :scope_tenant_id
+@predicate(status_eq)
+u.status = :scope_status
+@predicate(email_prefix)
+u.email LIKE :scope_prefix || '%'
+@end
+ORDER BY u.id
+LIMIT :limit;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u

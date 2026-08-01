@@ -62,6 +62,22 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 				addCase(v.Default.Body)
 			}
 			frags = append(frags, f)
+		case *template.FilterTree:
+			// Predicate ParamIdx values index the LEAF's argument list
+			// (the predicate's distinct params in order), not the
+			// params struct — the composer offsets them per leaf
+			// instance into the flattened TreeArgs space.
+			f := runtime.Frag{Kind: runtime.FilterTree}
+			for _, pr := range v.Predicates {
+				local := map[string]int16{}
+				for i, name := range pr.Params {
+					local[name] = int16(i)
+				}
+				c := runtime.Case{Text: pr.Body}
+				c.ParamSpans, c.ParamIdx = paramSpans(profile, pr.Body, local)
+				f.Cases = append(f.Cases, c)
+			}
+			frags = append(frags, f)
 		case *template.OrderBy:
 			f := runtime.Frag{Kind: runtime.OrderBy}
 			for _, k := range v.Keys {

@@ -50,6 +50,21 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 			diags = append(diags, probeChooseCases(profile, fe, v)...)
 		case *template.OrderBy:
 			diags = append(diags, probeOrderKeys(profile, fe, v)...)
+		case *template.FilterTree:
+			for _, pr := range v.Predicates {
+				if pr.Body == "" {
+					continue
+				}
+				if !balanced(profile, pr.Body) {
+					diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, pr.Span,
+						"@predicate body has unbalanced parentheses (R1)"))
+					continue
+				}
+				if err := fe.ProbeExpr(rewriteParams(profile, pr.Body)); err != nil {
+					diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, pr.Span,
+						"@predicate body must be a single boolean expression (R1): %s", probeMsg(err)))
+				}
+			}
 		}
 	}
 

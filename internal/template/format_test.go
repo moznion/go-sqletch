@@ -105,6 +105,17 @@ ORDER BY t.id
 @end
 ;
 `,
+		`-- name: F :many
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree!(scope)
+@predicate(a)
+t.a = :a
+@predicate(b)
+t.b = :b
+@end
+;
+`,
 	}
 	for i, src := range sources {
 		once := format(t, src)

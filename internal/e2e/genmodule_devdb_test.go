@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -178,6 +178,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	sqletchruntime "github.com/moznion/sqletch/runtime"
 
 	gen "sqletchgen/gen"
 )
@@ -337,6 +339,30 @@ func main() {
 		Limit: 1,
 	})
 	expect(err != nil, "duplicate order key rejected")
+
+	// @filter-tree!: typed values cross the layer boundary, never SQL.
+	// Required mode: nil errors before the DB; Unscoped is the
+	// explicit opt-out; And/Or compose the closed vocabulary.
+	_, err = q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 100})
+	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "nil tree rejected by @filter-tree!")
+
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{Scope: gen.FilterUsersUnscoped(), Limit: 100})
+	die(err)
+	expect(len(unscoped) == 5, "Unscoped sees everyone")
+
+	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+		Limit: 100,
+	})
+	die(err)
+	expect(len(scoped) == 4, "tenant AND active")
+
+	either, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+		Limit: 100,
+	})
+	die(err)
+	expect(len(either) == 2, "banned OR alice*")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

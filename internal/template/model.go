@@ -156,11 +156,31 @@ type OrderKey struct {
 	Span diagnostics.Span
 }
 
+// FilterTree is the @filter-tree construct: a closed predicate
+// vocabulary the caller combines at runtime with AND/OR trees.
+// Predicate parameters are constructor arguments, not struct fields.
+type FilterTree struct {
+	Param      string
+	Required   bool // @filter-tree!: nil tree is an error, Unscoped explicit
+	Predicates []Predicate
+	Span       diagnostics.Span
+}
+
+func (f *FilterTree) Raw() diagnostics.Span { return f.Span }
+
+type Predicate struct {
+	Name   string
+	Body   string   // one boolean expression
+	Params []string // distinct :params in first-occurrence order
+	Span   diagnostics.Span
+}
+
 // Occurrence is one :name bind appearance of a parameter.
 type Occurrence struct {
 	Span         diagnostics.Span
 	Guards       []GuardAtom // guard set of the enclosing fragment; nil in skeleton
 	InChooseCase bool        // inside a @choose case body (empty guard set, R3)
+	InFilterTree bool        // inside a @predicate body (constructor arg)
 }
 
 type Param struct {

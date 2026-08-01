@@ -278,6 +278,17 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 			Nullable:   cq.nullable,
 		}
 		if expandedNames[cq.q.Name] {
+			for _, it := range cq.q.Items {
+				if _, hasTree := it.(*template.FilterTree); hasTree {
+					res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeExpansionLarge,
+						cq.q.HeaderSpan,
+						"%s uses @filter-tree, whose tree space is unbounded; it cannot be statically expanded (its audit surface is the predicate vocabulary and caps)", cq.q.Name))
+					break
+				}
+			}
+			if diagnostics.HasErrors(res.Diags) {
+				continue
+			}
 			shapes, d := expandShapes(cq.q, frags, cfg.Expansion.MaxShapes)
 			res.Diags = append(res.Diags, d...)
 			if shapes != nil {

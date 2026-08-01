@@ -112,9 +112,10 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		typeNames[name] = q.Name
 	}
 
-	// ---- choose / order-by metadata --------------------------------------
+	// ---- choose / order-by / filter-tree metadata ------------------------
 	var chooses []chooseMeta
 	var orders []orderMeta
+	var filter *template.FilterTree
 	for _, it := range q.Items {
 		switch c := it.(type) {
 		case *template.Choose:
@@ -125,6 +126,12 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			om := orderMeta{o: c, typeName: q.Name + GoName(c.Param) + "Key"}
 			claimType(om.typeName)
 			orders = append(orders, om)
+		case *template.FilterTree:
+			filter = c
+			claimType(q.Name + "Unscoped")
+			for _, pr := range c.Predicates {
+				claimType(q.Name + GoName(pr.Name))
+			}
 		}
 	}
 
@@ -144,6 +151,12 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	}
 	for _, name := range q.ParamOrder {
 		p := q.Params[name]
+		if filter != nil && name == filter.Param {
+			continue // the tree field is appended below
+		}
+		if filterOnlyParam(p) {
+			continue // predicate constructor argument, not a field
+		}
 		var typ, comment string
 		tr, ok := g.in.ParamTypes[name]
 		switch {
@@ -195,6 +208,16 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 				comment = " // key sequence; empty omits ORDER BY"
 			}
 			paramFields = append(paramFields, field{goName, "[]" + om.typeName, comment})
+		}
+	}
+	if filter != nil {
+		goName := GoName(filter.Param)
+		if claimField(goName, "@filter-tree("+filter.Param+")") {
+			comment := " // nil renders TRUE"
+			if filter.Required {
+				comment = " // required: nil is an error, use " + q.Name + "Unscoped() to opt out"
+			}
+			paramFields = append(paramFields, field{goName, "*runtime.Tree", comment})
 		}
 	}
 
@@ -284,9 +307,84 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	} else {
 		g.writeFragsVar(w)
 	}
-	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, rowFields)
+	if filter != nil {
+		g.writeFilterConstructors(w, filter, &diags)
+		if diagnostics.HasErrors(diags) {
+			return nil, "", diags
+		}
+	}
+	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, rowFields)
 
 	return []byte(g.b.String()), sig, diags
+}
+
+// filterOnlyParam reports a parameter bound exclusively inside
+// @predicate bodies — a constructor argument, not a struct field.
+func filterOnlyParam(p *template.Param) bool {
+	if len(p.Occurrences) == 0 {
+		return false
+	}
+	for _, occ := range p.Occurrences {
+		if !occ.InFilterTree {
+			return false
+		}
+	}
+	return true
+}
+
+// writeFilterConstructors emits the typed predicate constructors and
+// the explicit Unscoped opt-out.
+func (g *queryGen) writeFilterConstructors(w *strings.Builder, filter *template.FilterTree, diags *[]diagnostics.Diagnostic) {
+	q := g.in.Q
+	for i, pr := range filter.Predicates {
+		var params []string
+		ok := true
+		for _, name := range pr.Params {
+			tr, seen := g.in.ParamTypes[name]
+			if !seen {
+				*diags = append(*diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType, pr.Span,
+					"predicate parameter %q has no resolved type", name))
+				ok = false
+				continue
+			}
+			goType, tok := g.tm.GoType(tr.OID)
+			if !tok {
+				*diags = append(*diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType, pr.Span,
+					"no Go mapping for type %s (oid %d) of predicate parameter %q", tr.Name, tr.OID, name))
+				ok = false
+				continue
+			}
+			g.addImport(goType.Import)
+			params = append(params, GoName(name)+" "+goType.Name)
+		}
+		if !ok {
+			continue
+		}
+		var args []string
+		for _, name := range pr.Params {
+			args = append(args, GoName(name))
+		}
+		fmt.Fprintf(w, "// %s%s builds the %q predicate of @filter-tree(%s).\n",
+			q.Name, GoName(pr.Name), pr.Name, filter.Param)
+		fmt.Fprintf(w, "func %s%s(%s) *runtime.Tree {\n\treturn runtime.NewLeaf(%d",
+			q.Name, GoName(pr.Name), strings.Join(lowerFirst(params), ", "), i)
+		for _, a := range lowerFirst(args) {
+			fmt.Fprintf(w, ", %s", a)
+		}
+		fmt.Fprint(w, ")\n}\n\n")
+	}
+	fmt.Fprintf(w, "// %sUnscoped is the explicit, greppable opt-out: it renders TRUE.\n", q.Name)
+	fmt.Fprintf(w, "func %sUnscoped() *runtime.Tree { return runtime.Unscoped() }\n\n", q.Name)
+}
+
+// lowerFirst lowercases the leading identifier of each "Name type" (or
+// bare name) so constructor arguments are unexported locals.
+func lowerFirst(items []string) []string {
+	out := make([]string, len(items))
+	for i, s := range items {
+		out[i] = lowerCamel(s)
+	}
+	return out
 }
 
 // writeShapesVar emits the precomposed shape table (sorted keys for
@@ -364,6 +462,12 @@ func (g *queryGen) writeFragsVar(w *strings.Builder) {
 				fmt.Fprintf(w, "\t\t{Text: %q%s},\n", c.Text, spanLits(c.ParamSpans, c.ParamIdx))
 			}
 			fmt.Fprint(w, "\t}},\n")
+		case runtime.FilterTree:
+			fmt.Fprint(w, "\t{Kind: runtime.FilterTree, Cases: []runtime.Case{\n")
+			for _, c := range f.Cases {
+				fmt.Fprintf(w, "\t\t{Text: %q%s},\n", c.Text, spanLits(c.ParamSpans, c.ParamIdx))
+			}
+			fmt.Fprint(w, "\t}},\n")
 		case runtime.OrderBy:
 			fmt.Fprint(w, "\t{Kind: runtime.OrderBy, Cases: []runtime.Case{\n")
 			for _, c := range f.Cases {
@@ -404,7 +508,7 @@ func spanLits(spans []runtime.Span, idx []int16) string {
 }
 
 func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
-	chooses []chooseMeta, orders []orderMeta, rowFields []field) string {
+	chooses []chooseMeta, orders []orderMeta, filter *template.FilterTree, rowFields []field) string {
 
 	q := g.in.Q
 	fragsVar := lowerCamel(q.Name) + "Frags"
@@ -473,17 +577,35 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
 	}
 
-	if g.in.ExpandedShapes != nil {
-		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
-		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
-	} else {
-		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
-	}
 	var vals []string
 	for _, name := range q.ParamOrder {
-		vals = append(vals, "arg."+GoName(name))
+		switch {
+		case filter != nil && name == filter.Param:
+			vals = append(vals, "nil /* tree control */")
+		case filterOnlyParam(q.Params[name]):
+			vals = append(vals, "nil /* predicate arg */")
+		default:
+			vals = append(vals, "arg."+GoName(name))
+		}
 	}
-	fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	switch {
+	case filter != nil:
+		treeField := "arg." + GoName(filter.Param)
+		if filter.Required {
+			fmt.Fprintf(w, "\tif %s == nil {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
+		}
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetTree(%q, %s, key, %s)\n", q.Name, fragsVar, treeField)
+		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
+			strings.Join(vals, ", "), treeField)
+	case g.in.ExpandedShapes != nil:
+		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	default:
+		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
+		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	}
 	fmt.Fprint(w, "\tq.hook(key.String(), sqlText)\n")
 
 	scanList := func() string {
@@ -570,6 +692,13 @@ func (q *Queries) hook(shapeKey, sql string) {
 
 // Ptr is a convenience for presence parameters: Ptr("x") yields *string.
 func Ptr[T any](v T) *T { return &v }
+
+// And / Or combine @filter-tree predicates built with the generated
+// per-query constructors.
+var (
+	And = runtime.And
+	Or  = runtime.Or
+)
 `, pkg)
 }
 

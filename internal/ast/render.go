@@ -267,6 +267,25 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			}
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 			orderIdx++
+		case *template.FilterTree:
+			// Inline emission (the construct follows an unconditional
+			// `AND ` in the skeleton). Maximal = all predicates
+			// conjoined, each parenthesized, the whole wrapped — the
+			// runtime tree And(p0..pn) is byte-identical.
+			fragStart := r.len()
+			r.emitSynth("(", v.Span.Start)
+			for i, pr := range v.Predicates {
+				if i > 0 {
+					r.emitSynth(" AND ", v.Span.Start)
+				}
+				r.emitSynth("(", v.Span.Start)
+				if err := r.emitVerbatim(pr.Body, pr.Span.Start); err != nil {
+					return Rendering{}, err
+				}
+				r.emitSynth(")", v.Span.Start)
+			}
+			r.emitSynth(")", v.Span.Start)
+			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 		}
 	}
 	return Rendering{

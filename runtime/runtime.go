@@ -25,6 +25,7 @@ const (
 	Guarded
 	Choose
 	OrderBy
+	FilterTree
 )
 
 type Sep uint8
@@ -67,6 +68,10 @@ type ShapeKey struct {
 	// key<<1|desc). nil inner = maximal/all keys (verification only);
 	// empty = default-or-omit.
 	Orders [][]uint8
+	// Trees holds the canonical structural encoding of each
+	// @filter-tree value (values excluded) — the cache-key component
+	// for tree-shaped queries.
+	Trees []string
 }
 
 // String is the canonical encoding (byte-identical to the compiler's
@@ -109,34 +114,126 @@ func (k ShapeKey) String() string {
 			}
 		}
 	}
+	if len(k.Trees) > 0 {
+		b.WriteString(";t=")
+		for i, enc := range k.Trees {
+			if i > 0 {
+				b.WriteByte('|')
+			}
+			b.WriteString(enc)
+		}
+	}
 	return b.String()
+}
+
+// Bind is one entry of a shape's bind plan: the placeholder $(i+1)
+// takes vals[Idx] (struct source) or treeArgs[Idx] (tree source).
+// Plans contain positions only — never values — so they are cacheable.
+type Bind struct {
+	FromTree bool
+	Idx      int16
+}
+
+// ResolveArgs materializes a bind plan into driver arguments.
+func ResolveArgs(binds []Bind, vals, treeArgs []any) []any {
+	if len(binds) == 0 {
+		return nil
+	}
+	out := make([]any, len(binds))
+	for i, b := range binds {
+		if b.FromTree {
+			out[i] = treeArgs[b.Idx]
+		} else {
+			out[i] = vals[b.Idx]
+		}
+	}
+	return out
 }
 
 // Compose walks the fragment table in source order and emits the SQL
 // of the shape plus the bind order: argIdx[n] is the params-struct
 // value index bound to placeholder $(n+1). Placeholders are numbered
-// in first-occurrence order per shape.
+// in first-occurrence order per shape. Queries with a @filter-tree
+// use ComposeTree instead.
 func Compose(frags []Frag, key ShapeKey) (string, []int16) {
-	var b strings.Builder
-	assigned := map[int16]int{}
-	var argIdx []int16
+	sql, binds, err := ComposeTree(frags, key, nil)
+	if err != nil {
+		// Without a tree the composer has no failure modes; a non-nil
+		// error here is a generated-code bug.
+		panic(err)
+	}
+	argIdx := make([]int16, len(binds))
+	for i, bd := range binds {
+		argIdx[i] = bd.Idx
+	}
+	return sql, argIdx
+}
 
-	emit := func(text string, spans []Span, idx []int16) {
+type bindKey struct {
+	fromTree bool
+	idx      int16
+}
+
+// ComposeTree composes a shape that may include one @filter-tree
+// block. tree may be nil (renders TRUE); a nil tree with a required
+// block is rejected by the generated code before reaching here.
+func ComposeTree(frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
+	var b strings.Builder
+	assigned := map[bindKey]int{}
+	var binds []Bind
+
+	place := func(k bindKey) {
+		n, ok := assigned[k]
+		if !ok {
+			n = len(binds) + 1
+			assigned[k] = n
+			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx})
+		}
+		b.WriteByte('$')
+		b.WriteString(strconv.Itoa(n))
+	}
+	emitFrom := func(text string, spans []Span, idx []int16, fromTree bool, base int16) {
 		last := int32(0)
 		for i, sp := range spans {
 			b.WriteString(text[last:sp.Start])
-			p := idx[i]
-			n, ok := assigned[p]
-			if !ok {
-				n = len(argIdx) + 1
-				assigned[p] = n
-				argIdx = append(argIdx, p)
-			}
-			b.WriteByte('$')
-			b.WriteString(strconv.Itoa(n))
+			place(bindKey{fromTree: fromTree, idx: base + idx[i]})
 			last = sp.End
 		}
 		b.WriteString(text[last:])
+	}
+	emit := func(text string, spans []Span, idx []int16) {
+		emitFrom(text, spans, idx, false, 0)
+	}
+
+	// Tree emission: preorder; each leaf instance gets its own slice of
+	// the flattened TreeArgs space (repeated predicates bind
+	// independently).
+	treeArgBase := int16(0)
+	var emitTree func(n *Tree, preds []Case)
+	emitTree = func(n *Tree, preds []Case) {
+		switch {
+		case n == nil || n.op == opTrue:
+			b.WriteString("TRUE")
+		case n.op == opLeaf:
+			c := preds[n.pred]
+			b.WriteByte('(')
+			emitFrom(c.Text, c.ParamSpans, c.ParamIdx, true, treeArgBase)
+			b.WriteByte(')')
+			treeArgBase += int16(len(n.args))
+		default:
+			sep := " AND "
+			if n.op == opOr {
+				sep = " OR "
+			}
+			b.WriteByte('(')
+			for i, k := range n.kids {
+				if i > 0 {
+					b.WriteString(sep)
+				}
+				emitTree(k, preds)
+			}
+			b.WriteByte(')')
+		}
 	}
 
 	chooseSeen, orderSeen := 0, 0
@@ -203,9 +300,18 @@ func Compose(frags []Frag, key ShapeKey) (string, []int16) {
 				c := f.Cases[ord]
 				emit(c.Text, c.ParamSpans, c.ParamIdx)
 			}
+		case FilterTree:
+			if tree == nil {
+				b.WriteString("TRUE")
+				continue
+			}
+			if err := tree.validate(len(f.Cases), DefaultTreeCaps); err != nil {
+				return "", nil, err
+			}
+			emitTree(tree, f.Cases)
 		}
 	}
-	return b.String(), argIdx
+	return b.String(), binds, nil
 }
 
 // ErrChooseRequired is returned before any SQL is sent when a required
@@ -303,7 +409,7 @@ type cacheEntry struct {
 	mapKey string
 	key    ShapeKey
 	sql    string
-	argIdx []int16
+	binds  []Bind
 }
 
 func NewComposedCache(capacity int) *ComposedCache {
@@ -314,15 +420,34 @@ func NewComposedCache(capacity int) *ComposedCache {
 }
 
 func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (string, []int16) {
+	sql, binds, err := c.get(queryName, frags, key, nil)
+	if err != nil {
+		panic(err) // no failure modes without a tree
+	}
+	argIdx := make([]int16, len(binds))
+	for i, bd := range binds {
+		argIdx[i] = bd.Idx
+	}
+	return sql, argIdx
+}
+
+// GetTree is the @filter-tree variant: the tree's structural encoding
+// becomes part of the cache key (values never do).
+func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
+	key.Trees = []string{tree.Encode()}
+	return c.get(queryName, frags, key, tree)
+}
+
+func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
 	mapKey := queryName + "|" + key.String()
 	c.mu.Lock()
 	if el, ok := c.m[mapKey]; ok {
 		e := el.Value.(*cacheEntry)
-		if e.key.Guards == key.Guards && choicesEqual(e.key.Choices, key.Choices) {
+		if keysEqual(e.key, key) {
 			c.order.MoveToFront(el)
-			sql, argIdx := e.sql, e.argIdx
+			sql, binds := e.sql, e.binds
 			c.mu.Unlock()
-			return sql, argIdx
+			return sql, binds, nil
 		}
 		// Full-key mismatch (canonical-encoding collision would be a
 		// bug, but never trust the string form): drop and recompute.
@@ -331,12 +456,15 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 	}
 	c.mu.Unlock()
 
-	sql, argIdx := Compose(frags, key)
+	sql, binds, err := ComposeTree(frags, key, tree)
+	if err != nil {
+		return "", nil, err
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.m[mapKey]; !ok {
-		e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, argIdx: argIdx}
+		e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, binds: binds}
 		c.m[mapKey] = c.order.PushFront(e)
 		for len(c.m) > c.cap {
 			oldest := c.order.Back()
@@ -344,11 +472,40 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 			delete(c.m, oldest.Value.(*cacheEntry).mapKey)
 		}
 	}
-	return sql, argIdx
+	return sql, binds, nil
 }
 
 func cloneKey(k ShapeKey) ShapeKey {
-	return ShapeKey{Guards: k.Guards, Choices: append([]uint8(nil), k.Choices...)}
+	out := ShapeKey{Guards: k.Guards, Choices: append([]uint8(nil), k.Choices...)}
+	for _, seq := range k.Orders {
+		if seq == nil {
+			out.Orders = append(out.Orders, nil)
+		} else {
+			out.Orders = append(out.Orders, append([]uint8(nil), seq...))
+		}
+	}
+	out.Trees = append([]string(nil), k.Trees...)
+	return out
+}
+
+// keysEqual is the full-key comparison — hashes and encodings are an
+// index, never identity.
+func keysEqual(a, b ShapeKey) bool {
+	if a.Guards != b.Guards || !choicesEqual(a.Choices, b.Choices) ||
+		len(a.Orders) != len(b.Orders) || len(a.Trees) != len(b.Trees) {
+		return false
+	}
+	for i := range a.Orders {
+		if (a.Orders[i] == nil) != (b.Orders[i] == nil) || !choicesEqual(a.Orders[i], b.Orders[i]) {
+			return false
+		}
+	}
+	for i := range a.Trees {
+		if a.Trees[i] != b.Trees[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func choicesEqual(a, b []uint8) bool {

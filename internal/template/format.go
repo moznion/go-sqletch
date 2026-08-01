@@ -56,6 +56,9 @@ func Format(profile dialect.LexerProfile, path string, src []byte) ([]byte, []di
 			case *OrderBy:
 				writeOrderBy(&b, v)
 				lastTok = "@construct"
+			case *FilterTree:
+				writeFilterTree(&b, v)
+				lastTok = "@construct"
 			}
 			pos = it.Raw().End
 		}
@@ -137,6 +140,24 @@ func writeOrderBy(b *strings.Builder, v *OrderBy) {
 			b.WriteString(v.Default.Body)
 			b.WriteString("\n")
 		}
+	}
+	b.WriteString("@end")
+}
+
+func writeFilterTree(b *strings.Builder, v *FilterTree) {
+	b.WriteString("@filter-tree")
+	if v.Required {
+		b.WriteString("!")
+	}
+	b.WriteString("(")
+	b.WriteString(v.Param)
+	b.WriteString(")\n")
+	for _, pr := range v.Predicates {
+		b.WriteString("@predicate(")
+		b.WriteString(pr.Name)
+		b.WriteString(")\n")
+		b.WriteString(pr.Body)
+		b.WriteString("\n")
 	}
 	b.WriteString("@end")
 }

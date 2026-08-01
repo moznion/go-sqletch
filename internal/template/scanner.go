@@ -234,7 +234,7 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 			qb.statementEnded = true
 		}
 	case dialect.KindParamRef:
-		fs.recordParam(qb.q, tok.Text[1:], fs.span(tok.Start, tok.End), nil, false)
+		fs.recordParam(qb.q, tok.Text[1:], fs.span(tok.Start, tok.End), nil, false, false)
 	case dialect.KindPositionalParam:
 		fs.errorf(diagnostics.CodePositionalParam, fs.span(tok.Start, tok.End),
 			"positional parameter %q is not allowed; use a named parameter (:name)", tok.Text)
@@ -276,7 +276,7 @@ func (qb *queryBuilder) transition(kw string) {
 	}
 }
 
-func (fs *fileScan) recordParam(q *QueryTemplate, name string, span diagnostics.Span, guards []GuardAtom, inCase bool) {
+func (fs *fileScan) recordParam(q *QueryTemplate, name string, span diagnostics.Span, guards []GuardAtom, inCase, inFT bool) {
 	if !snakeRe.MatchString(name) {
 		fs.errorf(diagnostics.CodeBadIdentifier, span,
 			"parameter name %q must be snake_case ([a-z][a-z0-9_]*)", name)
@@ -288,7 +288,7 @@ func (fs *fileScan) recordParam(q *QueryTemplate, name string, span diagnostics.
 		q.Params[name] = p
 		q.ParamOrder = append(q.ParamOrder, name)
 	}
-	p.Occurrences = append(p.Occurrences, Occurrence{Span: span, Guards: guards, InChooseCase: inCase})
+	p.Occurrences = append(p.Occurrences, Occurrence{Span: span, Guards: guards, InChooseCase: inCase, InFilterTree: inFT})
 }
 
 // ---- construct handling ----------------------------------------------------
@@ -297,6 +297,7 @@ var constructVocab = map[string]bool{
 	"if-present": true, "endif": true,
 	"choose": true, "case": true, "default": true, "end": true,
 	"when": true, "order-by": true, "key": true,
+	"filter-tree": true, "predicate": true,
 }
 
 // matchConstruct reports whether src[pos:] starts a template construct.
@@ -339,6 +340,8 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 		return fs.parseChoose(pos, nameEnd)
 	case "order-by":
 		return fs.parseOrderBy(pos, nameEnd)
+	case "filter-tree":
+		return fs.parseFilterTree(pos, nameEnd)
 	default:
 		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
 			"unmatched @%s", name)
@@ -417,7 +420,7 @@ func (fs *fileScan) parseArgList(constructName string, markerStart, pos int) ([]
 // are reported as SQLETCH012 and skipped with a marker stack.
 // Returns (bodyEnd, terminatorName, posAtTerminatorStart).
 func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
-	q *QueryTemplate, guards []GuardAtom, inCase bool) (int, string) {
+	q *QueryTemplate, guards []GuardAtom, inCase, inFT bool) (int, string) {
 
 	var stack []string // expected closers of nested constructs
 	for {
@@ -449,13 +452,13 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 					fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd), "unmatched @%s", name)
 					pos = nameEnd
 					continue
-				case "order-by":
+				case "order-by", "filter-tree":
 					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
 						fs.span(pos, nameEnd), "constructs do not nest (R5)"))
 					stack = append(stack, "end")
 					pos = nameEnd
 					continue
-				case "case", "default", "key":
+				case "case", "default", "key", "predicate":
 					if len(stack) == 0 && terminators[name] {
 						return pos, name
 					}
@@ -471,7 +474,7 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 		if len(stack) == 0 {
 			switch tok.Kind {
 			case dialect.KindParamRef:
-				fs.recordParam(q, tok.Text[1:], fs.span(tok.Start, tok.End), guards, inCase)
+				fs.recordParam(q, tok.Text[1:], fs.span(tok.Start, tok.End), guards, inCase, inFT)
 			case dialect.KindPositionalParam:
 				fs.errorf(diagnostics.CodePositionalParam, fs.span(tok.Start, tok.End),
 					"positional parameter %q is not allowed; use a named parameter (:name)", tok.Text)
@@ -584,7 +587,7 @@ func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, mar
 	qb.flushSkeleton(fs, pos)
 
 	bodyStart := afterArgs
-	bodyEnd, term := fs.consumeBody(bodyStart, map[string]bool{terminator: true}, qb.q, guards, false)
+	bodyEnd, term := fs.consumeBody(bodyStart, map[string]bool{terminator: true}, qb.q, guards, false, false)
 	endPos := bodyEnd
 	if term == "" {
 		fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, afterArgs),
@@ -715,7 +718,7 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 	endPos := p
 	sawDefault := false
 	for {
-		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, true)
+		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, true, false)
 		if term == "" {
 			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
 				"unterminated @choose: missing @end")
@@ -822,7 +825,7 @@ func (fs *fileScan) parseOrderBy(pos, nameEnd int) int {
 	endPos := p
 	sawDefault := false
 	for {
-		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, true)
+		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, true, false)
 		if term == "" {
 			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
 				"unterminated @order-by: missing @end")
@@ -891,6 +894,130 @@ func (fs *fileScan) parseOrderBy(pos, nameEnd int) int {
 	qb.ctx = ctxOrderBy
 	qb.skelStart = endPos
 	return endPos
+}
+
+// parseFilterTree parses `@filter-tree[!](param) @predicate(name)
+// expr … @end`. v0.3 restriction: at most one block per query, WHERE
+// conjunct position only (written after an unconditional `AND`).
+func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
+	qb := fs.qb
+	required := false
+	p := nameEnd
+	if p < len(fs.src) && fs.src[p] == '!' {
+		required = true
+		p++
+	}
+	args, afterArgs, ok := fs.parseArgList("filter-tree", pos, p)
+	if !ok || len(args) != 1 {
+		if ok {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, afterArgs),
+				"@filter-tree takes exactly one parameter")
+		}
+		return afterArgs
+	}
+	if qb.depth > 0 {
+		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
+			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
+	}
+	if qb.ctx != ctxWhere {
+		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, afterArgs),
+			"@filter-tree is only allowed as a WHERE conjunct (write it after `AND`)")
+	}
+	for _, it := range qb.q.Items {
+		if _, dup := it.(*FilterTree); dup {
+			fs.errorf(diagnostics.CodeChooseStructure, fs.span(pos, afterArgs),
+				"at most one @filter-tree per query (v0.3)")
+			break
+		}
+	}
+
+	qb.flushSkeleton(fs, pos)
+
+	item := &FilterTree{Param: args[0], Required: required}
+	predNames := map[string]bool{}
+	terminators := map[string]bool{"predicate": true, "end": true}
+	p = afterArgs
+
+	lead := fs.skipTrivia(p)
+	if lead < len(fs.src) && fs.src[lead] != '@' {
+		fs.errorf(diagnostics.CodeChooseStructure, fs.span(lead, lead+1),
+			"@filter-tree: expected @predicate before any content")
+	}
+
+	endPos := p
+	for {
+		bodyEnd, term := fs.consumeBody(p, terminators, qb.q, nil, false, true)
+		if term == "" {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(pos, nameEnd),
+				"unterminated @filter-tree: missing @end")
+			endPos = bodyEnd
+			break
+		}
+		_, markerEnd := matchConstruct(fs.src, bodyEnd)
+		switch term {
+		case "end":
+			endPos = markerEnd
+		case "predicate":
+			names, afterPred, ok := fs.parseArgList("predicate", bodyEnd, markerEnd)
+			if !ok || len(names) != 1 {
+				if ok {
+					fs.errorf(diagnostics.CodeConstructGrammar, fs.span(bodyEnd, afterPred),
+						"@predicate takes exactly one name")
+				}
+				p = afterPred
+				continue
+			}
+			if predNames[names[0]] {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(bodyEnd, afterPred),
+					"@filter-tree: duplicate predicate %q", names[0])
+			}
+			predNames[names[0]] = true
+			predBodyEnd, _ := fs.peekBodyEnd(afterPred, terminators)
+			body, bodyOff := trimEdges(fs.src, afterPred, predBodyEnd)
+			if body == "" {
+				fs.errorf(diagnostics.CodeChooseStructure, fs.span(afterPred, afterPred+1),
+					"@predicate body must be a non-empty boolean expression")
+			}
+			item.Predicates = append(item.Predicates, Predicate{
+				Name: names[0], Body: body,
+				Params: fs.distinctParams(body),
+				Span:   fs.span(bodyOff, bodyOff+len(body)),
+			})
+			p = afterPred
+			continue
+		}
+		break
+	}
+
+	if len(item.Predicates) == 0 {
+		fs.errorf(diagnostics.CodeChooseStructure, fs.span(pos, endPos),
+			"@filter-tree needs at least one @predicate")
+	}
+
+	item.Span = fs.span(pos, endPos)
+	qb.q.Items = append(qb.q.Items, item)
+	qb.skelStart = endPos
+	return endPos
+}
+
+// distinctParams lists a body's :params in first-occurrence order —
+// the predicate constructor's argument order.
+func (fs *fileScan) distinctParams(body string) []string {
+	src := []byte(body)
+	var out []string
+	seen := map[string]bool{}
+	pos := 0
+	for {
+		tok, err := fs.profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF {
+			return out
+		}
+		if tok.Kind == dialect.KindParamRef && !seen[tok.Text[1:]] {
+			seen[tok.Text[1:]] = true
+			out = append(out, tok.Text[1:])
+		}
+		pos = tok.End
+	}
 }
 
 // classifyChoose determines the block's slot from its position and
@@ -984,7 +1111,7 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					stack = append(stack, "endif")
 					pos = nameEnd
 					continue
-				case "choose", "when", "order-by":
+				case "choose", "when", "order-by", "filter-tree":
 					stack = append(stack, "end")
 					pos = nameEnd
 					continue
@@ -1007,7 +1134,7 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 					}
 					pos = nameEnd
 					continue
-				case "case", "default", "key":
+				case "case", "default", "key", "predicate":
 					if len(stack) == 0 && terminators[name] {
 						return pos, name
 					}
