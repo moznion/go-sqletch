@@ -161,6 +161,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
   is a file path, reset = drop all tables/views, version pin compares
   dotted prefix ("3.50" vs "3.50.x").
+- Editor grammars (doc 11, editors/): TextMate INJECTION grammar into
+  source.sql (selector excludes string|comment so directive-shaped
+  comments still win at line start); tree-sitter grammar keeps SQL as
+  opaque sql_token + combined injection; comment-shaped directives
+  beat the generic comment token via lexical precedence. Tests run
+  via npx (tree-sitter-cli corpus, vscode-tmgrammar-test) in the CI
+  grammars job; generated parser src/ is committed and diffed in CI.
 - Embedded-PG WASM spike (docs/design/09, harness spike/wasm-oracle):
   feasible — unmodified pgx oracle over libpglite WASI PG 16.6 under
   wazero, warm cold-start 1.7s. NOT shipped: today's build aborts the

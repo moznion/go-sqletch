@@ -1,0 +1,58 @@
+{
+  "name": "sqletch",
+  "displayName": "sqletch",
+  "description": "Statically verified, dynamically composed SQL templates: construct highlighting and language server integration for sqletch.",
+  "version": "0.1.0",
+  "publisher": "moznion",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moznion/sqletch"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:sql"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "grammars": [
+      {
+        "scopeName": "source.sql.sqletch",
+        "path": "./syntaxes/sqletch.injection.tmLanguage.json",
+        "injectTo": [
+          "source.sql"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "sqletch",
+      "properties": {
+        "sqletch.path": {
+          "type": "string",
+          "default": "sqletch",
+          "description": "Path to the sqletch binary used for the language server."
+        },
+        "sqletch.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start `sqletch lsp` for diagnostics and go-to-definition."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "vscode-tmgrammar-test": "^0.1.3"
+  },
+  "scripts": {
+    "test": "vscode-tmgrammar-test -g syntaxes/sqletch.injection.tmLanguage.json 'tests/*.sql'"
+  }
+}

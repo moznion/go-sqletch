@@ -192,15 +192,16 @@ design is under [docs/design/](docs/design/).
   `@filter-tree` (typed, composable filters across layer boundaries —
   with a required mode for multi-tenant safety), `@order-by` multi-key
   sorting, `explain --analyze`
-- **v0.4 (in progress)** — shipped: `@in` (`= ANY` on PostgreSQL,
-  arity-expanded `IN (?, …)` on MySQL/SQLite), `-- @param` /
-  `-- @column` type annotations, the MySQL driver (TiDB-parser
-  frontend, COM_STMT_PREPARE oracle, `database/sql` codegen), the
-  SQLite driver (rqlite/sql frontend, in-process WASM SQLite oracle —
-  no Docker at all), and the LSP server (`sqletch lsp`). The embedded
-  PostgreSQL oracle spike is done (feasible; see
-  `docs/design/09-embedded-oracle.md` — shipping waits on upstream
-  libpglite). Remaining: editor grammars (tree-sitter / TextMate)
+- **v0.4 (shipped)** — `@in` (`= ANY` on PostgreSQL, arity-expanded
+  `IN (?, …)` on MySQL/SQLite), `-- @param` / `-- @column` type
+  annotations, the MySQL driver (TiDB-parser frontend,
+  COM_STMT_PREPARE oracle, `database/sql` codegen), the SQLite driver
+  (rqlite/sql frontend, in-process WASM SQLite oracle — no Docker at
+  all), the LSP server (`sqletch lsp`), and editor grammars
+  (`editors/`: VS Code extension with TextMate injection + LSP client,
+  tree-sitter). The embedded PostgreSQL oracle spike is done
+  (feasible; see `docs/design/09-embedded-oracle.md` — shipping waits
+  on upstream libpglite)
 
 ## Development
 
