@@ -73,6 +73,23 @@ func StyleOf(profile LexerProfile) PlaceholderStyle {
 	return PlaceholderDollar
 }
 
+// InEmpty is implemented by expanding-dialect profiles to provide the
+// arity-0 @in emission: a fragment completing `expr <here>` so that an
+// empty list matches nothing — FALSE even for a NULL operand,
+// matching PostgreSQL's `= ANY('{}')`.
+type InEmpty interface {
+	InEmptySQL() string
+}
+
+// InEmptyOf resolves a profile's arity-0 @in emission.
+func InEmptyOf(profile LexerProfile) string {
+	if p, ok := profile.(InEmpty); ok {
+		return p.InEmptySQL()
+	}
+	// The MySQL form, kept as the default for compatibility.
+	return "IN (SELECT NULL FROM DUAL WHERE FALSE)"
+}
+
 // LexError is returned for unterminated strings/comments; the scanner
 // converts it into a diagnostic at Pos.
 type LexError struct {

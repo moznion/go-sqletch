@@ -10,6 +10,7 @@ import (
 	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/dialect/mysql"
 	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/sqletch/internal/dialect/sqlite"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
 	"github.com/moznion/sqletch/runtime"
@@ -160,10 +161,11 @@ func TestComposeConformance(t *testing.T) {
 }
 
 // TestComposeConformance_QuestionStyle runs the same corpus under the
-// MySQL profile: '?' per occurrence, repeated binds repeated in the
-// arg plan.
+// question-style profiles: '?' per occurrence, repeated binds
+// repeated in the arg plan.
 func TestComposeConformance_QuestionStyle(t *testing.T) {
-	conformanceOver(t, mysql.Profile{}, runtime.StyleQuestion)
+	t.Run("mysql", func(t *testing.T) { conformanceOver(t, mysql.Profile{}, runtime.StyleQuestion) })
+	t.Run("sqlite", func(t *testing.T) { conformanceOver(t, sqlite.Profile{}, runtime.StyleQuestion) })
 }
 
 func conformanceOver(t *testing.T, profile dialect.LexerProfile, style runtime.Style) {

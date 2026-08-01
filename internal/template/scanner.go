@@ -19,7 +19,10 @@ func NewScanner(profile dialect.LexerProfile) *Scanner {
 }
 
 var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|many|exec|execrows)\s*$`)
-var paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
+var (
+	paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
+	colHintRe   = regexp.MustCompile(`^--\s*@column\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
+)
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // clause context, tracked at paren depth 0.
@@ -147,6 +150,14 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 				q.TypeHints = map[string]TypeHint{}
 			}
 			q.TypeHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
+			// fall through: the comment remains skeleton text.
+		}
+		if m := colHintRe.FindStringSubmatch(tok.Text); m != nil && fs.qb != nil {
+			q := fs.qb.q
+			if q.ColumnHints == nil {
+				q.ColumnHints = map[string]TypeHint{}
+			}
+			q.ColumnHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
 			// fall through: the comment remains skeleton text.
 		}
 	}

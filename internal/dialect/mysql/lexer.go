@@ -14,10 +14,15 @@ type Profile struct{}
 var (
 	_ dialect.LexerProfile = Profile{}
 	_ dialect.Placeholders = Profile{}
+	_ dialect.InEmpty      = Profile{}
 )
 
 // PlaceholderStyle declares MySQL's '?' per-occurrence binding.
 func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.PlaceholderQuestion }
+
+// InEmptySQL is the arity-0 @in emission (FALSE even for NULL
+// operands; MySQL needs FROM DUAL to attach a WHERE).
+func (Profile) InEmptySQL() string { return "IN (SELECT NULL FROM DUAL WHERE FALSE)" }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }

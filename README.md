@@ -78,6 +78,10 @@ Each combination of present parameters produces a *plain static query*
 as far as PostgreSQL is concerned — its own optimal plan, its own
 prepared statement. No `IS NULL OR` tricks, no string building.
 
+Every construct, side by side with the Go it generates and the SQL it
+composes, is documented in
+[docs/template-language.md](docs/template-language.md).
+
 ## How it works
 
 The template above reaches 2⁴ × 4 = **64 distinct query shapes**, but
@@ -173,8 +177,9 @@ optional `LEFT JOIN`) are rejected statically where known and covered
 by `check --exhaustive` otherwise.
 
 Deliberately out of scope: dynamic table/column names, shape-changing
-projections, and caller-supplied SQL strings. The full boundary — and
-the reasoning behind every rule — lives in
+projections, and caller-supplied SQL strings. The template-language
+reference is [docs/template-language.md](docs/template-language.md);
+the full boundary — and the reasoning behind every rule — lives in
 [PROJECT_INSTRUCTION.md](PROJECT_INSTRUCTION.md); the implementation
 design is under [docs/design/](docs/design/).
 

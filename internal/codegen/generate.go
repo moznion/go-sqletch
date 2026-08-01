@@ -497,7 +497,7 @@ func (g *queryGen) writeFragsVar(w *strings.Builder) {
 		case runtime.InAny:
 			fmt.Fprintf(w, "\t{Kind: runtime.InAny, ParamIdx: []int16{%d}},\n", f.ParamIdx[0])
 		case runtime.InList:
-			fmt.Fprintf(w, "\t{Kind: runtime.InList, ParamIdx: []int16{%d}},\n", f.ParamIdx[0])
+			fmt.Fprintf(w, "\t{Kind: runtime.InList, Text: %q, ParamIdx: []int16{%d}},\n", f.Text, f.ParamIdx[0])
 		case runtime.FilterTree:
 			fmt.Fprint(w, "\t{Kind: runtime.FilterTree, Cases: []runtime.Case{\n")
 			for _, c := range f.Cases {

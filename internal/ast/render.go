@@ -34,11 +34,6 @@ type OrderSelection [][]uint8
 // renders the empty-list form. Ignored on dollar-style dialects.
 type InSelection []uint8
 
-// inEmptySQL is the arity-0 emission: the empty list matches nothing,
-// FALSE even for a NULL operand (IN over an empty subquery result is
-// FALSE per the SQL standard), matching PostgreSQL's `= ANY('{}')`.
-const inEmptySQL = "IN (SELECT NULL FROM DUAL WHERE FALSE)"
-
 // FragRange records where a construct's emission landed in the
 // rendered SQL, including synthesized wrapping.
 type FragRange struct {
@@ -319,8 +314,9 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 				r.emitParamRef(v.Param, v.Span.Start)
 				r.emitSynth(")", v.Span.Start)
 			case inIdx < len(ins) && ins[inIdx] == 0:
-				// Expanding dialects, arity 0: no bind at all.
-				r.emitSynth(inEmptySQL, v.Span.Start)
+				// Expanding dialects, arity 0: the dialect's
+				// matches-nothing emission, no bind at all.
+				r.emitSynth(dialect.InEmptyOf(profile), v.Span.Start)
 			default:
 				// Expanding dialects, representative arity 1.
 				r.emitSynth("IN (", v.Span.Start)

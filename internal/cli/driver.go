@@ -8,6 +8,7 @@ import (
 	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/dialect/mysql"
 	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/sqletch/internal/dialect/sqlite"
 	"github.com/moznion/sqletch/runtime"
 )
 
@@ -26,6 +27,9 @@ type driver struct {
 	// annotationsRequired: the oracle cannot type parameters; every
 	// parameter needs a `-- @param` annotation (Tier 2).
 	annotationsRequired bool
+	// columnHintsRequired: the oracle cannot type expression result
+	// columns (SQLite decltype); they need `-- @column` annotations.
+	columnHintsRequired bool
 	acquire             func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error)
 }
 
@@ -36,6 +40,29 @@ type planTexter interface {
 }
 
 func driverFor(cfg config.Config) driver {
+	if cfg.Dialect == "sqlite" {
+		return driver{
+			profile:             sqlite.Profile{},
+			frontend:            sqlite.Frontend{},
+			typemap:             sqlite.TypeMap{},
+			typeByName:          sqlite.TypeMap{}.TypeByName,
+			style:               runtime.StyleQuestion,
+			expandIn:            true,
+			annotationsRequired: true,
+			columnHintsRequired: true,
+			acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
+				conn, cleanup, err := devdb.AcquireSQLite(ctx, devdb.Config{
+					DSN:           cfg.Database.DSN,
+					ServerVersion: cfg.ServerVersion,
+					SchemaSQL:     schemaSQL,
+				})
+				if err != nil {
+					return nil, cleanup, err
+				}
+				return sqlite.NewOracle(conn), cleanup, nil
+			},
+		}
+	}
 	if cfg.Dialect == "mysql" {
 		return driver{
 			profile:             mysql.Profile{},

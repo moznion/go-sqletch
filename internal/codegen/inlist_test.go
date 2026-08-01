@@ -8,6 +8,7 @@ import (
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/dialect/mysql"
+	"github.com/moznion/sqletch/internal/dialect/sqlite"
 	"github.com/moznion/sqletch/internal/shape"
 	"github.com/moznion/sqletch/internal/template"
 	"github.com/moznion/sqletch/runtime"
@@ -26,26 +27,42 @@ LIMIT :limit;
 `
 
 // TestInList_QuestionConformance pins the @in arity machinery on the
-// expanding path: every enumerable shape (guards × representative
-// arities) renders and composes byte-identically, parses under the
-// MySQL frontend, and runtime arities beyond the representative one
-// stay parseable.
+// expanding path for every question-style dialect: each enumerable
+// shape (guards × representative arities) renders and composes
+// byte-identically, parses under the dialect frontend, and runtime
+// arities beyond the representative one stay parseable.
 func TestInList_QuestionConformance(t *testing.T) {
-	f, diags := template.NewScanner(mysql.Profile{}).ScanFile("t.sql", []byte(inListTemplate))
+	for _, d := range []struct {
+		name     string
+		profile  dialect.LexerProfile
+		frontend dialect.Frontend
+		empty    string
+	}{
+		{"mysql", mysql.Profile{}, mysql.Frontend{}, "IN (SELECT NULL FROM DUAL WHERE FALSE)"},
+		{"sqlite", sqlite.Profile{}, sqlite.Frontend{}, "IN (SELECT NULL WHERE 0)"},
+	} {
+		t.Run(d.name, func(t *testing.T) {
+			inListConformance(t, d.profile, d.frontend, d.empty)
+		})
+	}
+}
+
+func inListConformance(t *testing.T, profile dialect.LexerProfile, fe dialect.Frontend, emptySQL string) {
+	t.Helper()
+	f, diags := template.NewScanner(profile).ScanFile("t.sql", []byte(inListTemplate))
 	if len(diags) != 0 {
 		t.Fatalf("scan: %+v", diags)
 	}
 	q := f.Queries[0]
-	frags := BuildFrags(mysql.Profile{}, q)
+	frags := BuildFrags(profile, q)
 
 	keys, _ := shape.EnumerateExpand(q, 0, true)
 	if len(keys) != 4 { // 2 guards × 2 representative arities
 		t.Fatalf("shapes = %d: %v", len(keys), keys)
 	}
-	fe := mysql.Frontend{}
 	sawEmpty := false
 	for _, k := range keys {
-		want, err := ast.RenderShape(mysql.Profile{}, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
+		want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,7 +86,7 @@ func TestInList_QuestionConformance(t *testing.T) {
 		if _, err := fe.Parse(got); err != nil {
 			t.Fatalf("shape %s does not parse: %v\n%s", k, err, got)
 		}
-		if strings.Contains(got, "SELECT NULL FROM DUAL WHERE FALSE") {
+		if strings.Contains(got, emptySQL) {
 			sawEmpty = true
 		}
 	}
@@ -87,7 +104,7 @@ func TestInList_QuestionConformance(t *testing.T) {
 	if !strings.Contains(sql, "u.status IN (?, ?, ?)") {
 		t.Fatalf("arity-3:\n%s", sql)
 	}
-	if _, err := (mysql.Frontend{}).Parse(sql); err != nil {
+	if _, err := fe.Parse(sql); err != nil {
 		t.Fatalf("arity-3 does not parse: %v\n%s", err, sql)
 	}
 	elems := 0
@@ -101,7 +118,7 @@ func TestInList_QuestionConformance(t *testing.T) {
 	}
 
 	// The renderings set includes the arity-0 verification rendering.
-	rs, err := ast.Renderings(mysql.Profile{}, q)
+	rs, err := ast.Renderings(profile, q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +126,7 @@ func TestInList_QuestionConformance(t *testing.T) {
 	for _, r := range rs {
 		if r.Kind == ast.RenderInEmpty {
 			empties++
-			if !strings.Contains(r.SQL, "IN (SELECT NULL FROM DUAL WHERE FALSE)") {
+			if !strings.Contains(r.SQL, emptySQL) {
 				t.Errorf("arity-0 rendering:\n%s", r.SQL)
 			}
 			for _, name := range r.ParamsSeq {
@@ -167,7 +184,7 @@ func TestGenerate_QuestionStyle(t *testing.T) {
 		`key\.Arities = \[\]int32\{int32\(len\(arg\.Statuses\)\)\}`,
 		`q\.cache\.GetBindsStyle\(runtime\.StyleQuestion, "UsersInStatuses", usersInStatusesFrags, key\)`,
 		`runtime\.ResolveArgs\(binds, \[\]any\{arg\.TenantID, arg\.Statuses, arg\.MinID, arg\.Limit\}, nil\)`,
-		`\{Kind: runtime\.InList, ParamIdx: \[\]int16\{1\}\}`,
+		`\{Kind: runtime\.InList, Text: "IN \(SELECT NULL FROM DUAL WHERE FALSE\)", ParamIdx: \[\]int16\{1\}\}`,
 		`q\.db\.QueryContext\(ctx, sqlText, args\.\.\.\)`,
 	} {
 		if !regexp.MustCompile(want).MatchString(src) {

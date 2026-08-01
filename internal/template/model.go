@@ -228,9 +228,14 @@ type QueryTemplate struct {
 	// oracle's answer. Values are raw SQL type names resolved by the
 	// dialect.
 	TypeHints map[string]TypeHint
+	// ColumnHints holds `-- @column name: sqltype` directives: result
+	// column types for dialects whose oracle cannot type expression
+	// columns (SQLite decltype is NULL for any expression). Keyed by
+	// the result column's output name.
+	ColumnHints map[string]TypeHint
 }
 
-// TypeHint is one `-- @param` directive.
+// TypeHint is one `-- @param` / `-- @column` directive.
 type TypeHint struct {
 	SQLType string
 	Span    diagnostics.Span

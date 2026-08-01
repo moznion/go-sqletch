@@ -279,5 +279,50 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 				name, name, dialectName))
 		}
 	}
+	if drv.columnHintsRequired {
+		// SQLite: expression columns have no declared type; fill them
+		// from `-- @column` annotations, in every rendering's Desc
+		// (the cache stores the raw oracle answer).
+		known := map[string]bool{}
+		for di := range descs {
+			for ci := range descs[di].Columns {
+				col := &descs[di].Columns[ci]
+				known[col.Name] = true
+				if col.Type.OID != 0 {
+					continue
+				}
+				hint, ok := q.ColumnHints[col.Name]
+				if !ok {
+					if di == 0 { // one diagnostic per column, not per rendering
+						diags = append(diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+							q.HeaderSpan,
+							"result column %q is an expression with no declared type on %s; add `-- @column %s: <type>`",
+							col.Name, dialectName, col.Name))
+					}
+					continue
+				}
+				tr, ok := drv.typeByName(hint.SQLType)
+				if !ok {
+					if di == 0 {
+						diags = append(diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+							hint.Span, "unknown SQL type %q in @column hint", hint.SQLType))
+					}
+					continue
+				}
+				col.Type = tr
+			}
+		}
+		var hintNames []string
+		for name := range q.ColumnHints {
+			if !known[name] {
+				hintNames = append(hintNames, name)
+			}
+		}
+		sort.Strings(hintNames)
+		for _, name := range hintNames {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
+				q.ColumnHints[name].Span, "@column hint for unknown result column %q", name))
+		}
+	}
 	return paramTypes, diags, nil
 }

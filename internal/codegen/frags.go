@@ -63,12 +63,17 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 			}
 			frags = append(frags, f)
 		case *template.InExpr:
-			kind := runtime.InAny // PostgreSQL: `= ANY($n)`
 			if dialect.StyleOf(profile) == dialect.PlaceholderQuestion {
-				kind = runtime.InList // expanding: `IN (?, …)` by arity
+				// Expanding: `IN (?, …)` by arity; Text carries the
+				// dialect's arity-0 (matches-nothing) emission.
+				frags = append(frags, runtime.Frag{
+					Kind: runtime.InList, Text: dialect.InEmptyOf(profile),
+					ParamIdx: []int16{paramIdx[v.Param]},
+				})
+				continue
 			}
 			frags = append(frags, runtime.Frag{
-				Kind: kind, ParamIdx: []int16{paramIdx[v.Param]},
+				Kind: runtime.InAny, ParamIdx: []int16{paramIdx[v.Param]},
 			})
 		case *template.FilterTree:
 			// Predicate ParamIdx values index the LEAF's argument list

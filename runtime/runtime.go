@@ -364,8 +364,15 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 			inSeen++
 			if n <= 0 {
 				// Arity 0 keeps the spec's semantics: an empty list
-				// matches nothing, FALSE even for a NULL operand.
-				b.WriteString("IN (SELECT NULL FROM DUAL WHERE FALSE)")
+				// matches nothing, FALSE even for a NULL operand. The
+				// dialect's emission is generated into Frag.Text; the
+				// fallback covers fragment tables generated before it
+				// existed (MySQL form).
+				if f.Text != "" {
+					b.WriteString(f.Text)
+				} else {
+					b.WriteString("IN (SELECT NULL FROM DUAL WHERE FALSE)")
+				}
 				continue
 			}
 			b.WriteString("IN (")
