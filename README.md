@@ -158,7 +158,8 @@ static queries in sqlc; move the conditional ones to sqletch.
 
 ## Quick start
 
-Requirements: Go 1.24+, and Docker (or a disposable PostgreSQL 16 via
+Requirements: Go 1.27+ (currently the 1.27 rc; `go.mod` pins the
+toolchain), and Docker (or a disposable PostgreSQL 16 via
 `database.dsn`) for cold generates.
 
 ```console

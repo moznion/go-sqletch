@@ -33,6 +33,30 @@ Both fuzz targets run in CI for 30s. A crasher is written to the
 package's `testdata/fuzz/<target>/`; commit it — that file *is* the
 regression test.
 
+## Go toolchain policy (v0.5)
+
+- The module requires **go1.27rc2** (bump to 1.27.0 when released).
+  Released golangci-lint binaries are built with the previous stable
+  Go and refuse newer targets: build it from source with the module's
+  toolchain (`GOTOOLCHAIN=go1.27rc2 go install .../golangci-lint@latest`);
+  CI does the same via `install-mode: goinstall`. Drop both once
+  golangci-lint ships go1.27-built binaries.
+- **JSON v1/v2 split**: byte-pinned outputs (cache JSON, `--json`
+  diagnostics, LSP outbound frames) marshal with the v1 API; external
+  input (LSP inbound, doc 10 §3) decodes with `encoding/json/v2` for
+  its stricter defaults. Never move a pinned output to v2 marshaling
+  without re-verifying byte-identity (and deciding a cache
+  FormatVersion bump if it changes).
+- **Generated code stays conservative.** Consumers need a 1.27
+  toolchain (the module graph forces it via `runtime/`), but the
+  *language level* of emitted code is governed by the user module's
+  own `go` directive, which sqletch does not control — do not emit
+  1.26+ syntax (`new(expr)`, generic methods, …) without a documented
+  minimum-language-level decision.
+- Generic methods (1.27): surveyed 2026-08, no genuine application in
+  this codebase — the few package-level generic functions have no
+  receiver-shaped first argument. Don't force them in.
+
 ## Working conventions (user-mandated)
 
 - **Test-first; tests are the spec.** Every layer gets thorough tests;

@@ -75,6 +75,15 @@ mandatory header; unknown headers are skipped). Hand-rolled in
 `internal/lsp/jsonrpc.go` — the message vocabulary is small enough
 that a dependency is not worth its transitive weight.
 
+Inbound bodies and params decode with `encoding/json/v2` (still
+stdlib): duplicate members and invalid UTF-8 are rejected, and member
+names match case-sensitively, as JSON-RPC requires. Outbound
+marshaling stays on the v1 API so the wire output is byte-unchanged.
+A body that fails to decode inside an intact `Content-Length` frame
+is answered with a spec-mandated `-32700` Parse Error (null id) and
+the server keeps reading — only transport and framing failures tear
+the connection down (exit 1).
+
 Handled methods:
 
 | method | behavior |
