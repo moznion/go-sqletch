@@ -14,8 +14,11 @@ import (
 )
 
 type Config struct {
-	// DSN, when set, is used as-is (the user owns the database's
-	// lifecycle). Otherwise a disposable container is started.
+	// DSN, when set, is used as-is instead of starting a container.
+	// The referenced database MUST be disposable: whenever SchemaSQL
+	// is non-empty, sqletch resets the public schema (DROP SCHEMA
+	// public CASCADE) before applying it, so repeated runs are
+	// idempotent. Never point this at a database you care about.
 	DSN string
 	// ServerVersion is the pinned major version (e.g. "16" or
 	// "16.4"); it selects the container image and is validated against
@@ -100,16 +103,34 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 		}
 	}
 
-	for i, stmt := range cfg.SchemaSQL {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		if _, err := conn.Exec(ctx, stmt); err != nil {
+	if hasSchema(cfg.SchemaSQL) {
+		// Dev databases are disposable by contract (see Config.DSN):
+		// reset so schema application is idempotent across runs.
+		if _, err := conn.Exec(ctx,
+			"DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public"); err != nil {
 			closeAll()
-			return nil, func() {}, fmt.Errorf("apply schema input %d: %w", i, err)
+			return nil, func() {}, fmt.Errorf("reset dev database schema: %w", err)
+		}
+		for i, stmt := range cfg.SchemaSQL {
+			if strings.TrimSpace(stmt) == "" {
+				continue
+			}
+			if _, err := conn.Exec(ctx, stmt); err != nil {
+				closeAll()
+				return nil, func() {}, fmt.Errorf("apply schema input %d: %w", i, err)
+			}
 		}
 	}
 	return conn, closeAll, nil
+}
+
+func hasSchema(stmts []string) bool {
+	for _, s := range stmts {
+		if strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func sameMajor(pinned, actual string) bool {

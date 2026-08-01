@@ -1,0 +1,27 @@
+{
+  "name": "SearchUsers",
+  "guards": [
+    "bit 0: organization_id",
+    "bit 1: status",
+    "bit 2: email_prefix",
+    "bit 3: created_after"
+  ],
+  "chooses": [
+    "sort: created_at_desc, created_at_asc, email_asc, (default)"
+  ],
+  "shape_count": "64",
+  "params": [
+    "organization_id: int8 (optional)",
+    "status: text (optional)",
+    "email_prefix: text (optional)",
+    "created_after: timestamptz (optional)",
+    "limit: int8"
+  ],
+  "columns": [
+    "id: int8 (not null)",
+    "email: text (not null)",
+    "status: text (not null)",
+    "created_at: timestamptz (not null)"
+  ],
+  "maximal_sql": "\nSELECT\n    u.id,\n    u.email,\n    u.status,\n    u.created_at\nFROM users AS u\n\n\nJOIN organization_users AS ou\n  ON ou.user_id = u.id\n AND ou.organization_id = $1\n\nWHERE TRUE\n\n\nAND (u.status = $2)\n\n\nAND (u.email LIKE $3 || '%')\n\n\nAND (u.created_at \u003e= $4)\n\n\nORDER BY u.created_at DESC\n\nLIMIT $5;\n\n"
+}

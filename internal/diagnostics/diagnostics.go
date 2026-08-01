@@ -84,6 +84,8 @@ const (
 
 // Codegen/config codes.
 const (
+	CodeConfigParse     Code = "SQLETCH300" // sqletch.yaml unreadable/unknown keys
+	CodeConfigInvalid   Code = "SQLETCH301" // sqletch.yaml field validation
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
 )

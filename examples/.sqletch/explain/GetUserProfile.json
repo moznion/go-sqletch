@@ -1,0 +1,18 @@
+{
+  "name": "GetUserProfile",
+  "guards": [
+    "bit 0: status"
+  ],
+  "shape_count": "2",
+  "params": [
+    "id: int8",
+    "status: text (optional)"
+  ],
+  "columns": [
+    "id: int8 (not null)",
+    "email: text (not null)",
+    "nickname: text (nullable)",
+    "org_id: int8 (nullable)"
+  ],
+  "maximal_sql": "\nSELECT u.id, u.email, u.nickname, u.org_id\nFROM users AS u\nWHERE u.id = $1\n\n\nAND (u.status = $2)\n;\n"
+}

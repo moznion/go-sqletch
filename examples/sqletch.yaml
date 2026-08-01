@@ -1,0 +1,15 @@
+version: 1
+dialect: postgres
+server_version: "16"
+database:
+  dsn: ${SQLETCH_DSN} # empty = start a disposable container
+schema:
+  files:
+    - db/schema.sql
+queries:
+  - queries/*.sql
+output:
+  package: gen
+  path: gen
+cache:
+  path: .sqletch/cache

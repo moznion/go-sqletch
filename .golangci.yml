@@ -5,6 +5,12 @@ linters:
   settings:
     staticcheck:
       checks: ["all"]
+    errcheck:
+      # Terminal-output write errors are unactionable in a CLI.
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
 
 formatters:
   enable:
