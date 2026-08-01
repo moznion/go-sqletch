@@ -280,4 +280,4 @@ $ golangci-lint run --build-tags devdb ./...
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](LICENSE). Attribution notices are in [NOTICE](NOTICE).

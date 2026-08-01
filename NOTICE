@@ -1,0 +1,24 @@
+sqletch
+Copyright 2026 Taiki Kawakami (a.k.a moznion) https://moznion.net
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+--------------------------------------------------------------------
+Third-party components redistributed in this repository
+--------------------------------------------------------------------
+
+editors/tree-sitter-sqletch/src/
+
+    parser.c, grammar.json and node-types.json are produced by the
+    tree-sitter CLI from grammar.js, and tree_sitter/alloc.h,
+    tree_sitter/array.h and tree_sitter/parser.h are copied verbatim
+    by that CLI from the tree-sitter runtime.
+
+    tree-sitter
+    Copyright (c) 2018-2024 Max Brunsfeld
+    Licensed under the MIT License.
+
+Go module dependencies are declared in go.mod / go.sum and are
+fetched at build time; they are not redistributed here, and their
+own license and notice files travel with them.
