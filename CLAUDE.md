@@ -25,8 +25,13 @@ go test -tags devdb ./internal/e2e/        # real-DB E2E (needs Docker or SQLETC
 golangci-lint run --build-tags devdb ./... # must be 0 issues before "done"
 goimports -w .                             # run after every change
 go run ./cmd/sqletch generate --config examples/postgres/sqletch.yaml
-go test ./internal/template -fuzz=FuzzScan -fuzztime=15s
+go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=15s
+go test ./internal/codegen  -run '^$' -fuzz=FuzzComposeConformance -fuzztime=15s
 ```
+
+Both fuzz targets run in CI for 30s. A crasher is written to the
+package's `testdata/fuzz/<target>/`; commit it — that file *is* the
+regression test.
 
 ## Working conventions (user-mandated)
 

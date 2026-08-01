@@ -64,8 +64,22 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Scanner fuzz (30s)
-        run: go test ./internal/template -fuzz=FuzzScan -fuzztime=30s
+      - name: Scanner fuzz (30s, all three lexer profiles)
+        run: go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=30s
+      - name: Compose/render differential fuzz (30s)
+        run: go test ./internal/codegen -run '^$' -fuzz=FuzzComposeConformance -fuzztime=30s
+      # A crasher is written to testdata/fuzz/<target>/ inside the runner.
+      # Without this the input is discarded with the runner and the finding
+      # is unreproducible; commit the uploaded file to pin the regression.
+      - name: Upload any crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: |
+            internal/template/testdata/fuzz/
+            internal/codegen/testdata/fuzz/
+          if-no-files-found: ignore
 
   grammars:
     name: editor grammars
