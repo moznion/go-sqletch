@@ -112,10 +112,17 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 ## Known v0.4 decisions and limits
 
 - `-- @param name: type` hints: parsed per query (the comment stays in
-  the skeleton verbatim); on PostgreSQL they act as explicit overrides
-  resolved via `postgres.TypeMap.TypeByName` (lowercased, length args
-  stripped); unknown param or type name → diagnostic. On Tier 2
-  dialects they will be mandatory.
+  the skeleton verbatim); resolved via the dialect's `TypeByName`
+  (lowercased, length args stripped); unknown param or type name →
+  diagnostic. On Tier 2 they SUPPLY the type (mandatory). On Tier 1
+  they ASSERT it: an annotation that disagrees with the oracle's
+  inferred OID is SQLETCH213 and the oracle's type wins — never a
+  silent override, because the oracle types the rendering and never
+  sees the annotation, so a wrong hint is invisible to every other
+  phase (it used to reach codegen and fail only at execution time).
+  Diagnostics iterate `q.TypeHints` in sorted order (determinism).
+  `postgres.TypeMap.WritableName` is TypeByName's inverse, used to
+  spell the fix (`_text` → `text[]`).
 - `@in(:param)`: v0.4-1 supports depth-0 WHERE/HAVING skeleton
   positions only; inside guarded bodies it is rejected with a
   diagnostic pointing at the PostgreSQL workaround (`= ANY(:param)`).

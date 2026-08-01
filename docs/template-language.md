@@ -8,7 +8,7 @@ verified.
 
 This page documents every construct, with a worked example for each.
 
-> Applies to **v0.4** (PostgreSQL and MySQL). The language may change
+> Applies to **v0.4** (PostgreSQL, MySQL, SQLite). The language may change
 > before 1.0.
 
 ## How to read this page
@@ -147,14 +147,16 @@ WHERE u.tenant_id = :tenant_id
   AND u.status @in(:statuses);
 ```
 
-- **PostgreSQL** — optional. The oracle (`PREPARE` + `Describe`) already
-  types every parameter; an annotation is an explicit *override* for the
-  rare case where you want a different type than inference gives.
-- **MySQL** — mandatory for every parameter that binds in SQL. The
-  `COM_STMT_PREPARE` protocol does not type parameter slots, so a
-  missing annotation is a compile error naming the parameter.
-  (Control-only parameters — `@when` conditions, `@choose`/`@order-by`
-  selectors — are exempt.)
+- **PostgreSQL** — optional, and an *assertion*, not an override. The
+  oracle (`PREPARE` + `Describe`) already types every parameter; an
+  annotation that disagrees with it is a compile error (`SQLETCH213`)
+  whose hint spells the correct annotation. An annotation can therefore
+  document a type or keep a template portable to Tier 2 dialects, but it
+  can never make a bind use a type the query was not verified with.
+- **MySQL / SQLite** — mandatory for every parameter that binds in SQL.
+  Their protocols do not type parameter slots, so a missing annotation
+  is a compile error naming the parameter. (Control-only parameters —
+  `@when` conditions, `@choose`/`@order-by` selectors — are exempt.)
 
 Type names are matched case-insensitively with length/precision
 arguments stripped (`varchar(16)` → `varchar`). An unknown parameter
@@ -162,6 +164,22 @@ name or an unknown type name is a compile error (`SQLETCH311`).
 
 For an `@in` parameter the annotation means different things per
 dialect — see [§8](#8-in--variable-arity-membership).
+
+### `-- @column name: type` annotations
+
+The result-column counterpart, needed only where the oracle cannot type
+a result column. On SQLite an expression column (`count(*)`,
+`a || b`, …) has no declared type, so it must be annotated:
+
+```sql
+-- name: CountUsers :one
+-- @column total: bigint
+SELECT count(*) AS total FROM users;
+```
+
+A missing annotation for such a column, or an annotation naming a
+column the query does not return, is a compile error. PostgreSQL and
+MySQL type expression columns themselves and need no `-- @column`.
 
 ---
 
@@ -964,11 +982,19 @@ The `-- @param` annotation means different things per dialect:
 | Dialect | Annotation | Meaning |
 |---------|-----------|---------|
 | PostgreSQL | optional | the **array** type (`text[]`, `bigint[]`, …). Usually omit it and let the oracle infer. |
-| MySQL | **mandatory** | the **element** type (`varchar(16)`, `bigint`, …); the Go field becomes a slice of it. |
+| MySQL / SQLite | **mandatory** | the **element** type (`varchar(16)`, `bigint`, …); the Go field becomes a slice of it. |
 
-Annotating an `@in` parameter with a *scalar* type on PostgreSQL
-overrides the oracle's array type and will produce the wrong Go type —
-either omit the annotation or name the array type.
+Annotating an `@in` parameter with a *scalar* type on PostgreSQL is a
+compile error — the oracle infers an array type from `= ANY($n)`, and
+the annotation disagrees:
+
+```
+queries/q.sql:2:1: error[SQLETCH213]: `-- @param statuses: varchar(16)` types the
+parameter as varchar, but the oracle infers _text from the query; binding at an
+unverified type would break the compile-time type guarantee
+help: remove the annotation (postgres infers parameter types), or correct it to
+`-- @param statuses: text[]`
+```
 
 ### Three-valued-logic caveat
 
@@ -1076,6 +1102,7 @@ oracle, `3xx` codegen/config.
 | `SQLETCH210` | renderings disagree on result columns (breaks R2) |
 | `SQLETCH211` | renderings disagree on a parameter's type |
 | `SQLETCH212` | *warning*: optional `INSERT` column is `NOT NULL` without a default |
+| `SQLETCH213` | a `-- @param` annotation disagrees with the type the oracle infers (Tier 1) |
 | `SQLETCH300`/`301` | `sqletch.yaml` unreadable / invalid |
 | `SQLETCH302` | static expansion exceeds `max_shapes`, or the query uses `@filter-tree`/`@in` (unbounded) |
 | `SQLETCH310` | generated Go identifiers collide after PascalCase mapping |
@@ -1085,14 +1112,16 @@ oracle, `3xx` codegen/config.
 
 ## 11. Dialect notes
 
-| | PostgreSQL (Tier 1) | MySQL (Tier 2) |
-|---|---|---|
-| placeholder style | `$1`, `$2`, … | `?` — one per occurrence, binds repeated |
-| parameter types | inferred by the oracle (`PREPARE`/`Describe`) | **`-- @param` annotations are mandatory** |
-| `@in` | `= ANY($n)` — one static shape | `IN (?, …)` — arity in the shape key |
-| `@in` empty list | `= ANY('{}')` ⇒ `FALSE` | `IN (SELECT NULL FROM DUAL WHERE FALSE)` ⇒ `FALSE` |
-| generated driver | pgx (`DBTX`, `WithTx(pgx.Tx)`) | `database/sql` (`WithTx(*sql.Tx)`) |
-| minimum version | PostgreSQL 16+ (needs `EXPLAIN (GENERIC_PLAN)`) | — |
+| | PostgreSQL (Tier 1) | MySQL (Tier 2) | SQLite (Tier 2) |
+|---|---|---|---|
+| placeholder style | `$1`, `$2`, … | `?` — one per occurrence, binds repeated | `?` — one per occurrence, binds repeated |
+| parameter types | inferred by the oracle (`PREPARE`/`Describe`) | **`-- @param` mandatory** | **`-- @param` mandatory** |
+| result column types | inferred | inferred | declared columns inferred; **expression columns need `-- @column`** |
+| `@in` | `= ANY($n)` — one static shape | `IN (?, …)` — arity in the shape key | `IN (?, …)` — arity in the shape key |
+| `@in` empty list | `= ANY('{}')` ⇒ `FALSE` | `IN (SELECT NULL FROM DUAL WHERE FALSE)` | `IN (SELECT NULL WHERE 0)` |
+| generated driver | pgx (`DBTX`, `WithTx(pgx.Tx)`) | `database/sql` (`WithTx(*sql.Tx)`) | `database/sql` (`WithTx(*sql.Tx)`) |
+| dev database | server or container | server or container | in-process (WASM); no Docker |
+| minimum version | PostgreSQL 16+ (needs `EXPLAIN (GENERIC_PLAN)`) | — | — |
 
 The template language itself is identical across dialects; only typing
 obligations and rendering differ.

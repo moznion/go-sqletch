@@ -20,7 +20,11 @@ type driver struct {
 	typemap  dialect.TypeMap
 	// typeByName resolves `-- @param` annotations.
 	typeByName func(string) (dialect.TypeRef, bool)
-	style      runtime.Style
+	// writableName is typeByName's inverse, used to spell the compliant
+	// rewrite when an annotation disagrees with the oracle
+	// (SQLETCH213). Only Tier 1 can disagree, so Tier 2 leaves it nil.
+	writableName func(uint32) (string, bool)
+	style        runtime.Style
 	// expandIn: @in is arity-expanded (a shape dimension) rather than a
 	// single array bind.
 	expandIn bool
@@ -86,11 +90,12 @@ func driverFor(cfg config.Config) driver {
 		}
 	}
 	return driver{
-		profile:    postgres.Profile{},
-		frontend:   postgres.Frontend{},
-		typemap:    postgres.TypeMap{},
-		typeByName: postgres.TypeMap{}.TypeByName,
-		style:      runtime.StyleDollar,
+		profile:      postgres.Profile{},
+		frontend:     postgres.Frontend{},
+		typemap:      postgres.TypeMap{},
+		typeByName:   postgres.TypeMap{}.TypeByName,
+		writableName: postgres.TypeMap{}.WritableName,
+		style:        runtime.StyleDollar,
 		acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
 			conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
 				DSN:           cfg.Database.DSN,

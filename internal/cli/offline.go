@@ -247,9 +247,16 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 			paramTypes[pt.Name] = pt.Type
 		}
 	}
-	// `-- @param` hints override (Tier 1) or supply (Tier 2) the
-	// oracle's parameter types.
-	for name, hint := range q.TypeHints {
+	// `-- @param` hints supply the parameter types on Tier 2, and on
+	// Tier 1 assert the oracle's. Sorted: diagnostics may not depend on
+	// map iteration order.
+	hintedParams := make([]string, 0, len(q.TypeHints))
+	for name := range q.TypeHints {
+		hintedParams = append(hintedParams, name)
+	}
+	sort.Strings(hintedParams)
+	for _, name := range hintedParams {
+		hint := q.TypeHints[name]
 		if _, known := q.Params[name]; !known {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
 				hint.Span, "@param hint for unknown parameter %q", name))
@@ -260,6 +267,24 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
 				hint.Span, "unknown SQL type %q in @param hint", hint.SQLType))
 			continue
+		}
+		// Tier 1: the oracle already typed this parameter against the
+		// real server. An annotation that disagrees would bind at a type
+		// the query was never verified with, breaking premise P1 — and
+		// the mismatch is invisible to every other phase, because the
+		// oracle types the rendering and never sees the annotation.
+		if inferred, ok := paramTypes[name]; ok && inferred.OID != tr.OID {
+			d := diagnostics.Errorf(diagnostics.CodeParamHintConflict, hint.Span,
+				"`-- @param %s: %s` types the parameter as %s, but the oracle infers %s from the query; binding at an unverified type would break the compile-time type guarantee",
+				name, hint.SQLType, tr.Name, inferred.Name)
+			d.Hint = fmt.Sprintf("remove the annotation (%s infers parameter types)", dialectName)
+			if drv.writableName != nil {
+				if spelling, ok := drv.writableName(inferred.OID); ok {
+					d.Hint += fmt.Sprintf(", or correct it to `-- @param %s: %s`", name, spelling)
+				}
+			}
+			diags = append(diags, d)
+			continue // the verified type wins; a rejected hint never reaches codegen
 		}
 		paramTypes[name] = tr
 	}
