@@ -1,0 +1,6 @@
+# binaries
+/sqletch
+*.test
+
+# coverage
+*.out

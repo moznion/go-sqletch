@@ -1,0 +1,55 @@
+// Package dialect defines the driver interfaces separating the
+// dialect-agnostic core from database specifics. v0.1 ships only the
+// LexerProfile half; Frontend/Oracle land in P2/P4.
+package dialect
+
+import "fmt"
+
+type TokenKind int
+
+const (
+	KindEOF TokenKind = iota
+	KindWhitespace
+	KindLineComment
+	KindBlockComment
+	KindString      // includes dollar-quoted and E'' strings
+	KindQuotedIdent // "ident"
+	KindIdent
+	KindNumber
+	KindParamRef        // :name (Text includes the colon)
+	KindPositionalParam // $1, $2, …
+	KindCast            // ::
+	KindOperator
+	KindLParen
+	KindRParen
+	KindComma
+	KindSemicolon
+	KindOther // ., [, ], and anything else structurally irrelevant
+)
+
+type Token struct {
+	Kind  TokenKind
+	Start int // byte offset into src, inclusive
+	End   int // exclusive
+	Text  string
+}
+
+// LexerProfile lets the shared template scanner walk dialect SQL
+// without parsing it. Implementations only need correct token
+// *boundaries* (strings, comments, params, operators), not SQL
+// understanding.
+type LexerProfile interface {
+	// NextToken lexes the token starting at src[pos:]. pos is
+	// guaranteed to be a token boundary. At end of input it returns
+	// a token with Kind == KindEOF.
+	NextToken(src []byte, pos int) (Token, error)
+}
+
+// LexError is returned for unterminated strings/comments; the scanner
+// converts it into a diagnostic at Pos.
+type LexError struct {
+	Pos int
+	Msg string
+}
+
+func (e *LexError) Error() string { return fmt.Sprintf("lex error at %d: %s", e.Pos, e.Msg) }
