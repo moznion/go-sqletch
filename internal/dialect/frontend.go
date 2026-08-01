@@ -109,6 +109,7 @@ type Frontend interface {
 	ProbeExpr(expr string) error
 	ProbeJoinItem(item string) error
 	ProbeOrderBy(clause string) error
+	ProbeGroupBy(clause string) error
 	ProbeSetItem(item string) error
 	ProbeInsertValue(expr string) error
 }

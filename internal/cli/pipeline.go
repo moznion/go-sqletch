@@ -212,7 +212,11 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		for _, pt := range types {
 			cq.paramTypes[pt.Name] = pt.Type
 		}
-		cq.nullable = nullability.Analyze(tree, cq.rs[0], cq.descs[0], cat, cfg.NullOverridesFor(cq.q.Name))
+		nullable, err := nullability.AnalyzeAll(frontend, cq.rs, cq.descs, cat, cfg.NullOverridesFor(cq.q.Name))
+		if err != nil {
+			return nil, err
+		}
+		cq.nullable = nullable
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil

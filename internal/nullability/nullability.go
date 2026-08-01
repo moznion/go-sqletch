@@ -89,6 +89,37 @@ func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 	return out
 }
 
+// AnalyzeAll runs Analyze over every verified rendering and unions the
+// results per column — the spec's nullable-most rule for @choose
+// projection cases (a case may be nullable where another is not;
+// review counterexample F1c). Renderings must already have passed the
+// column-agreement check (equal lengths).
+func AnalyzeAll(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
+	cat *cache.Catalog, overrides map[string]bool) ([]bool, error) {
+
+	var out []bool
+	for i, r := range rs {
+		if i >= len(descs) {
+			break
+		}
+		tree, err := fe.Parse(r.SQL)
+		if err != nil {
+			return nil, err
+		}
+		n := Analyze(tree, r, descs[i], cat, overrides)
+		if out == nil {
+			out = n
+			continue
+		}
+		for c := range out {
+			if c < len(n) {
+				out[c] = out[c] || n[c]
+			}
+		}
+	}
+	return out, nil
+}
+
 // isGuarded reports whether the rendered offset falls inside an
 // @if-present fragment's emission.
 func isGuarded(maxR ast.Rendering, loc int) bool {

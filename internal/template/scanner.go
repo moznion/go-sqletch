@@ -606,14 +606,15 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
 			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
 	}
-	if qb.ctx == ctxProjection || qb.ctx == ctxNone {
+	if qb.ctx == ctxNone {
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, afterArgs),
-			"@choose is not allowed in the %s position; the only @choose slot in v0.1 is ORDER BY", qb.ctx)
+			"@choose is not allowed before the statement begins")
 	}
+	inProjection := qb.ctx == ctxProjection
 
 	qb.flushSkeleton(fs, pos)
 
-	item := &Choose{Param: args[0], Slot: SlotOrderBy}
+	item := &Choose{Param: args[0]}
 	caseNames := map[string]bool{}
 	p := afterArgs
 	terminators := map[string]bool{"case": true, "default": true, "end": true}
@@ -661,7 +662,6 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 			caseBodyEnd, _ := fs.peekBodyEnd(afterCase, terminators)
 			body, bodyOff := trimEdges(fs.src, afterCase, caseBodyEnd)
 			cs := ChooseCase{Name: names[0], Body: body, Span: fs.span(bodyOff, bodyOff+len(body))}
-			fs.checkOrderByCase(&cs, false)
 			item.Cases = append(item.Cases, cs)
 			p = afterCase
 			continue
@@ -674,7 +674,6 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 			caseBodyEnd, _ := fs.peekBodyEnd(markerEnd, terminators)
 			body, bodyOff := trimEdges(fs.src, markerEnd, caseBodyEnd)
 			cs := ChooseCase{Body: body, Span: fs.span(bodyOff, bodyOff+len(body))}
-			fs.checkOrderByCase(&cs, true)
 			item.Default = &cs
 			p = markerEnd
 			continue
@@ -688,10 +687,91 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 	}
 
 	item.Span = fs.span(pos, endPos)
+	fs.classifyChoose(item, inProjection)
 	qb.q.Items = append(qb.q.Items, item)
-	qb.ctx = ctxOrderBy
+	switch item.Slot {
+	case SlotOrderBy:
+		qb.ctx = ctxOrderBy
+	case SlotGroupBy:
+		qb.ctx = ctxGroupBy
+	}
 	qb.skelStart = endPos
 	return endPos
+}
+
+// classifyChoose determines the block's slot from its position and
+// case bodies, and validates the cases against that slot:
+//   - projection position: every body (incl. @default) is a non-empty
+//     expression — an empty body would change the result shape (R2)
+//   - clause position: bodies are whole ORDER BY / GROUP BY clauses,
+//     all agreeing on the same clause keyword; only @default may be
+//     empty (the clause is omissible, R6)
+func (fs *fileScan) classifyChoose(item *Choose, inProjection bool) {
+	if inProjection {
+		item.Slot = SlotProjExpr
+		check := func(body string, span diagnostics.Span) {
+			if body == "" {
+				fs.errorf(diagnostics.CodeChooseStructure, span,
+					"in a projection slot every case (including @default) must be a non-empty expression; an empty case would change the result shape (R2)")
+			}
+		}
+		for _, cs := range item.Cases {
+			check(cs.Body, cs.Span)
+		}
+		if item.Default != nil {
+			check(item.Default.Body, item.Default.Span)
+		}
+		return
+	}
+
+	kw := ""
+	for _, cs := range item.Cases {
+		k := fs.clauseKeywordOf(cs.Body)
+		if k == "" {
+			fs.errorf(diagnostics.CodeChooseStructure, cs.Span,
+				"every @case body must start with `ORDER BY` or `GROUP BY` in this position")
+			return
+		}
+		if kw == "" {
+			kw = k
+		} else if kw != k {
+			fs.errorf(diagnostics.CodeChooseStructure, cs.Span,
+				"all cases of one @choose must target the same clause (mixing %s and %s)", kw, k)
+			return
+		}
+	}
+	if item.Default != nil && item.Default.Body != "" {
+		if k := fs.clauseKeywordOf(item.Default.Body); k != kw {
+			fs.errorf(diagnostics.CodeChooseStructure, item.Default.Span,
+				"the @default body must start with `%s BY` like the other cases", kw)
+			return
+		}
+	}
+	switch kw {
+	case "ORDER":
+		item.Slot = SlotOrderBy
+	case "GROUP":
+		item.Slot = SlotGroupBy
+	}
+}
+
+// clauseKeywordOf returns "ORDER" or "GROUP" when the body starts with
+// that clause ("" otherwise).
+func (fs *fileScan) clauseKeywordOf(body string) string {
+	b := []byte(body)
+	t1 := fs.firstTokenOf(b)
+	if t1 == nil || t1.Kind != dialect.KindIdent {
+		return ""
+	}
+	kw := strings.ToUpper(t1.Text)
+	if kw != "ORDER" && kw != "GROUP" {
+		return ""
+	}
+	t2 := fs.firstTokenOf(b[t1.End:])
+	if t2 == nil || t2.Kind != dialect.KindIdent || strings.ToUpper(t2.Text) != "BY" {
+		return ""
+	}
+	return kw
 }
 
 // peekBodyEnd finds where the body starting at pos ends (next
@@ -747,29 +827,6 @@ func (fs *fileScan) peekBodyEnd(pos int, terminators map[string]bool) (int, stri
 			return pos, ""
 		}
 		pos = tok.End
-	}
-}
-
-func (fs *fileScan) checkOrderByCase(cs *ChooseCase, isDefault bool) {
-	if cs.Body == "" {
-		if !isDefault {
-			fs.errorf(diagnostics.CodeChooseStructure, cs.Span,
-				"@case body may not be empty (only @default may be empty)")
-		}
-		return
-	}
-	b := []byte(cs.Body)
-	t1 := fs.firstTokenOf(b)
-	if t1 == nil || t1.Kind != dialect.KindIdent || strings.ToUpper(t1.Text) != "ORDER" {
-		fs.errorf(diagnostics.CodeChooseStructure, cs.Span,
-			"in the ORDER BY slot, every @case body must start with `ORDER BY`")
-		return
-	}
-	rest := b[t1.End:]
-	t2 := fs.firstTokenOf(rest)
-	if t2 == nil || t2.Kind != dialect.KindIdent || strings.ToUpper(t2.Text) != "BY" {
-		fs.errorf(diagnostics.CodeChooseStructure, cs.Span,
-			"in the ORDER BY slot, every @case body must start with `ORDER BY`")
 	}
 }
 

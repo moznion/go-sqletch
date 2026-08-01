@@ -53,6 +53,8 @@ const (
 	SlotSetItem      // v0.2: an UPDATE SET assignment
 	SlotInsertColumn // v0.2: an INSERT column-list item (paired, R7)
 	SlotInsertValue  // v0.2: an INSERT VALUES row item (paired, R7)
+	SlotGroupBy      // v0.2: @choose over whole GROUP BY clauses
+	SlotProjExpr     // v0.2: @choose over one projection expression
 )
 
 // GuardedItem records one guarded INSERT column/value item for the R7

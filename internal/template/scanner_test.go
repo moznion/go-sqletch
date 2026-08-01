@@ -366,13 +366,15 @@ ORDER BY t.b
 `,
 		},
 		{
-			name: "case body must start with ORDER BY",
+			// GROUP BY became a legal @choose target in v0.2; a body
+			// that is neither clause is still rejected.
+			name: "case body must start with ORDER BY or GROUP BY",
 			code: diagnostics.CodeChooseStructure,
 			src: `-- name: Bad :many
 SELECT 1 FROM t WHERE TRUE
 @choose(sort)
 @case(a)
-GROUP BY t.a
+LIMIT 5
 @end
 ;
 `,

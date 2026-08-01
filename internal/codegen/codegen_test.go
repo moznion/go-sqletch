@@ -109,6 +109,21 @@ INSERT INTO users (
 )
 RETURNING id;
 `,
+		`-- name: SignupsByBucket :many
+SELECT
+@choose(bucket)
+@case(daily)
+date_trunc('day', u.created_at)
+@case(weekly)
+date_trunc('week', u.created_at)
+@end
+ AS bucket,
+    count(*) AS signups
+FROM users AS u
+WHERE u.created_at >= :since
+GROUP BY 1
+ORDER BY 1;
+`,
 	}
 	for _, src := range corpus {
 		q := scanOne(t, src)

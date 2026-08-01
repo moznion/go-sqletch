@@ -96,6 +96,24 @@ func (f Frontend) ProbeOrderBy(clause string) error {
 	return nil
 }
 
+// ProbeGroupBy checks that clause is exactly one statement-level
+// GROUP BY clause and nothing more.
+func (f Frontend) ProbeGroupBy(clause string) error {
+	res, err := pgquery.Parse("SELECT 1 " + clause)
+	if err != nil {
+		return toParseError(err)
+	}
+	sel := singleSelect(res)
+	if sel == nil || len(sel.GroupClause) == 0 ||
+		sel.WhereClause != nil || len(sel.FromClause) != 0 ||
+		len(sel.SortClause) != 0 || sel.LimitCount != nil ||
+		sel.LimitOffset != nil || len(sel.LockingClause) != 0 ||
+		sel.HavingClause != nil || len(sel.DistinctClause) != 0 {
+		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a bare GROUP BY clause"}
+	}
+	return nil
+}
+
 // ProbeSetItem checks that item is exactly one UPDATE SET assignment.
 func (f Frontend) ProbeSetItem(item string) error {
 	res, err := pgquery.Parse("UPDATE sqletch_probe_t SET " + item)

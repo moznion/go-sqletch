@@ -160,14 +160,32 @@ func probeInsertValue(profile dialect.LexerProfile, fe dialect.Frontend,
 func probeChooseCases(profile dialect.LexerProfile, fe dialect.Frontend,
 	c *template.Choose) []diagnostics.Diagnostic {
 
+	var probe func(string) error
+	var what string
+	switch c.Slot {
+	case template.SlotOrderBy:
+		probe, what = fe.ProbeOrderBy, "one ORDER BY clause"
+	case template.SlotGroupBy:
+		probe, what = fe.ProbeGroupBy, "one GROUP BY clause"
+	case template.SlotProjExpr:
+		probe, what = fe.ProbeExpr, "one expression"
+	default:
+		return nil // scanner already rejected the block
+	}
+
 	var diags []diagnostics.Diagnostic
 	check := func(body string, span diagnostics.Span) {
 		if body == "" {
+			return // scanner enforces non-empty where required
+		}
+		if !balanced(profile, body) {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, span,
+				"@case body has unbalanced parentheses (R1)"))
 			return
 		}
-		if err := fe.ProbeOrderBy(rewriteParams(profile, body)); err != nil {
+		if err := probe(rewriteParams(profile, body)); err != nil {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, span,
-				"@case body must be exactly one ORDER BY clause (R1): %s", probeMsg(err)))
+				"@case body must be exactly %s (R1): %s", what, probeMsg(err)))
 		}
 	}
 	for _, cs := range c.Cases {
@@ -221,7 +239,7 @@ func checkJoinMembership(maxTree dialect.Tree, v *template.IfPresent,
 func checkOrderByContainment(tree dialect.Tree, r ast.Rendering) []diagnostics.Diagnostic {
 	var chooseFr *ast.FragRange
 	for i := range r.Frags {
-		if _, ok := r.Frags[i].Item.(*template.Choose); ok {
+		if c, ok := r.Frags[i].Item.(*template.Choose); ok && c.Slot == template.SlotOrderBy {
 			chooseFr = &r.Frags[i]
 			break
 		}

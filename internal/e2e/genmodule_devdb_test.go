@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -92,7 +92,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 		for _, pt := range types {
 			typeMap[pt.Name] = pt.Type
 		}
-		tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+		nullable, err := nullability.AnalyzeAll(postgres.Frontend{}, rs, descs, cat, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 			Frags:      codegen.BuildFrags(postgres.Profile{}, q),
 			ParamTypes: typeMap,
 			Columns:    descs[0].Columns,
-			Nullable:   nullability.Analyze(tree, rs[0], descs[0], cat, nil),
+			Nullable:   nullable,
 		})
 	}
 
@@ -175,6 +175,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -290,6 +291,21 @@ func main() {
 	die(err)
 	expect(created2.Nickname != nil && *created2.Nickname == "er" && created2.Bio == nil,
 		"provided pair inserts, unprovided stays NULL")
+
+	// @choose in a projection slot: the aggregation expression swaps
+	// per case; a required enum's zero value errors before the DB.
+	buckets, err := q.SignupsByBucket(ctx, gen.SignupsByBucketParams{
+		Bucket: gen.SignupsByBucketBucketDaily,
+		Since:  time.Now().Add(-24 * time.Hour),
+	})
+	die(err)
+	total := int64(0)
+	for _, b := range buckets {
+		total += b.Signups
+	}
+	expect(total == 5, "daily buckets count all five users")
+	_, err = q.SignupsByBucket(ctx, gen.SignupsByBucketParams{Since: time.Now()})
+	expect(err != nil, "zero-value required @choose errors before touching the DB")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})
