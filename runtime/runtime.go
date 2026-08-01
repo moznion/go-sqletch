@@ -7,6 +7,27 @@
 // Nothing here parses SQL or touches user data: composition is
 // table-driven selection and concatenation, and user values travel
 // exclusively through bind parameters.
+//
+// # API contract (v1)
+//
+// Two audiences share this package:
+//
+//   - The USER API — what application code is expected to touch:
+//     [Tree] and its constructors ([And], [Or], [Unscoped]; the typed
+//     per-predicate constructors are generated into your package),
+//     [TreeCaps], and the sentinel errors [ErrFilterRequired],
+//     [ErrChooseRequired], [ErrOrderKey], [ErrTreeTooLarge],
+//     [ErrTreePredicate]. These follow Go API compatibility for all
+//     v1 releases.
+//
+//   - The GENERATED-CODE CONTRACT — [Frag], [ShapeKey], [Bind],
+//     [Compose] and friends, [ComposedCache], [Expanded]. These are
+//     public only because generated code lives outside this module.
+//     They also follow Go API compatibility within v1, but their
+//     semantics are pinned to the sqletch compiler: after upgrading
+//     sqletch, re-run `sqletch generate` so generated code and
+//     runtime agree (the conformance tests hold per version pair, not
+//     across them). Constructing [Frag] tables by hand is UNSUPPORTED.
 package runtime
 
 import (

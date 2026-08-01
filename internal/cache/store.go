@@ -9,6 +9,12 @@ import (
 	"path/filepath"
 )
 
+// FormatVersion is the on-disk cache format. Every written file
+// carries it; loads treat any other value — including its absence in
+// pre-1.0 caches — as a miss, so a format change can never misread an
+// old entry: the pipeline falls back to the database and rewrites.
+const FormatVersion = 1
+
 // Store is the committed, offline-usable cache of oracle results and
 // catalog snapshots. Hashes are an index, never identity: every entry
 // stores its full inputs and loads compare them byte-wise
@@ -59,6 +65,7 @@ type EntryColumn struct {
 // OracleEntry is one cached Describe result, self-describing with its
 // full keys.
 type OracleEntry struct {
+	Format      int           `json:"format"`
 	SchemaFP    string        `json:"schema_fp"`
 	RenderedSQL string        `json:"rendered_sql"`
 	Params      []EntryType   `json:"params"`
@@ -89,7 +96,7 @@ func (s *Store) LoadCatalog(fp string) (*Catalog, bool) {
 		return nil, false
 	}
 	var cat Catalog
-	if err := json.Unmarshal(data, &cat); err != nil || cat.SchemaFP != fp {
+	if err := json.Unmarshal(data, &cat); err != nil || cat.Format != FormatVersion || cat.SchemaFP != fp {
 		return nil, false
 	}
 	return &cat, true
@@ -99,6 +106,7 @@ func (s *Store) SaveCatalog(cat *Catalog) error {
 	if cat.SchemaFP == "" {
 		return fmt.Errorf("catalog snapshot has no schema fingerprint")
 	}
+	cat.Format = FormatVersion
 	return s.writeJSON(s.catalogPath(cat.SchemaFP), cat)
 }
 
@@ -113,13 +121,14 @@ func (s *Store) LoadOracle(fp, renderedSQL string) (*OracleEntry, bool) {
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil, false
 	}
-	if e.SchemaFP != fp || e.RenderedSQL != renderedSQL {
-		return nil, false // hash collision or stale file: treat as miss
+	if e.Format != FormatVersion || e.SchemaFP != fp || e.RenderedSQL != renderedSQL {
+		return nil, false // format drift, hash collision, or stale file: miss
 	}
 	return &e, true
 }
 
 func (s *Store) SaveOracle(e *OracleEntry) error {
+	e.Format = FormatVersion
 	return s.writeJSON(s.oraclePath(queryHash(e.SchemaFP, e.RenderedSQL)), e)
 }
 

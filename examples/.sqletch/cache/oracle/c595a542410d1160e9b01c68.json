@@ -1,4 +1,5 @@
 {
+  "format": 1,
   "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
   "rendered_sql": "\nSELECT\n    u.id,\n    u.email,\n    u.status,\n    u.created_at\nFROM users AS u\n\n\nJOIN organization_users AS ou\n  ON ou.user_id = u.id\n AND ou.organization_id = $1\n\nWHERE TRUE\n\n\nAND (u.status = $2)\n\n\nAND (u.email LIKE $3 || '%')\n\n\nAND (u.created_at \u003e= $4)\n\n\nORDER BY u.created_at ASC\n\nLIMIT $5;\n\n",
   "params": [

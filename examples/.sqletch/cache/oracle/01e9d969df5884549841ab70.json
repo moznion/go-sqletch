@@ -1,4 +1,5 @@
 {
+  "format": 1,
   "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
   "rendered_sql": "\nUPDATE users\nSET\n    updated_at = now()\n\n, email = $1\n\n, nickname = $2\nWHERE id = $3\nRETURNING id, email, nickname, updated_at;\n\n",
   "params": [

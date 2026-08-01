@@ -7,6 +7,7 @@ package cache
 // Catalog is an offline snapshot of the schema portions sqletch needs:
 // relation and column existence, types, NOT NULL, and defaults.
 type Catalog struct {
+	Format   int     `json:"format"`
 	SchemaFP string  `json:"schema_fp"`
 	Tables   []Table `json:"tables"`
 }

@@ -1,4 +1,5 @@
 {
+  "format": 1,
   "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
   "rendered_sql": "\nSELECT u.id, u.email, u.nickname, u.org_id\nFROM users AS u\nWHERE u.id = $1\n\n\nAND (u.status = $2)\n;\n",
   "params": [
