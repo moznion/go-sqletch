@@ -55,6 +55,12 @@ filter_tree_caps:              # @filter-tree limits, baked into generated code
 - **`schema.files`** are plain SQL, applied in glob order. The
   concatenation (plus dialect and server_version) fingerprints the
   cache: any change re-verifies affected queries.
+- **`cache.path`** is the only part of `.sqletch/` you commit — it is
+  what makes `check`, warm `generate`, and the LSP work with no
+  database. The sibling directories are derived output that an offline
+  `generate` rewrites from that cache (`.sqletch/explain/`, consumed by
+  `sqletch explain`; `.sqletch/expanded/`, the static-expansion audit
+  surface), so they belong in `.gitignore`.
 - **`overrides`** force a result column's nullability where the
   analysis is conservative (the analyzer never narrows from optional
   fragments by design — see the manual's runtime chapter).

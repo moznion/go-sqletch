@@ -5,6 +5,14 @@
 # coverage
 *.out
 
+# sqletch derived output under .sqletch/.
+# NOTE: .sqletch/cache/ is deliberately NOT ignored — committing it is what
+# keeps `check`/`generate`/the LSP offline. These two are regenerated from
+# that cache by an offline `generate`, so they carry no information of their
+# own.
+**/.sqletch/explain/
+**/.sqletch/expanded/
+
 # WASM oracle spike workdir (bundle download + disposable data dir)
 /spike-run/
 

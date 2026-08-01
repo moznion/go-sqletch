@@ -149,9 +149,11 @@ $ go run github.com/moznion/sqletch/cmd/sqletch check   # warm: no DB needed
 sqletch: 3 queries ok (oracle cache: 6 hits, 0 misses; offline: yes)
 ```
 
-Commit `.sqletch/cache/` — that's what keeps CI offline. See
-[`examples/`](examples/) for a complete working project (its generated
-code and cache are committed; it builds with no database at all).
+Commit `.sqletch/cache/` — that's what keeps CI offline. The rest of
+`.sqletch/` (`explain/`, `expanded/`) is derived output that an offline
+`generate` rewrites, so `.gitignore` it. See [`examples/`](examples/)
+for a complete working project (its generated code and cache are
+committed; it builds with no database at all).
 
 Other commands:
 
