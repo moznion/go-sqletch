@@ -171,6 +171,15 @@ recompilation needed for the listing form.
 - Compose conformance: for all corpus templates × all enumerated
   shapes (capped), `runtime.Compose` output == `ast.Render` output
   byte-for-byte (this is the load-bearing test of the whole design).
+- Compose conformance, differential form: `FuzzComposeConformance`
+  asserts the same equality over templates the authored corpus cannot
+  reach, across all three profiles and both placeholder styles. Inputs
+  that fail to scan are skipped, as are shapes the renderer refuses —
+  it is the reference, so a shape it will not render has nothing to
+  conform to. `@filter-tree` and `@in` are out of scope: they compose
+  through `ComposeTree` and through an arity shape dimension, and have
+  their own conformance tests; comparing them against plain `Compose`
+  would be comparing against the wrong composer.
 - Runtime unit: LRU eviction, ChooseOrdinal error on zero value
   without default, Bind pointer flattening.
 - End-to-end (`-tags devdb`): `examples/` — generate, `go vet`+build,
