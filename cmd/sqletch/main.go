@@ -1,5 +1,5 @@
 // Command sqletch is the statically verified, dynamically composed SQL
-// compiler for Go. See PROJECT_INSTRUCTION.md for the concept and
+// compiler for Go. See docs/spec.md for the concept and
 // docs/design/ for the implementation design.
 package main
 

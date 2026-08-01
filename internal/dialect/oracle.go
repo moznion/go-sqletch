@@ -59,7 +59,7 @@ type TypeMap interface {
 // Oracle is the type oracle: it answers what the database itself knows
 // about a rendering. Backends (server, embedded engine, native
 // inference) implement the same interface — see the Oracle backends
-// section of PROJECT_INSTRUCTION.md.
+// section of docs/spec.md.
 type Oracle interface {
 	// Describe prepares (never executes) sql and reports parameter and
 	// result column types.

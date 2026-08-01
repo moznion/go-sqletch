@@ -9,7 +9,7 @@ import (
 	"github.com/moznion/sqletch/internal/shape"
 )
 
-// PROJECT_INSTRUCTION Use Case 2's INSERT counterpart.
+// The spec's Use Case 2 INSERT counterpart.
 const insertTemplate = `-- name: CreateUser :one
 INSERT INTO users (
     email

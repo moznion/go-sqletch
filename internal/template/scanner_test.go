@@ -40,7 +40,7 @@ func hasCode(diags []diagnostics.Diagnostic, code diagnostics.Code) bool {
 	return false
 }
 
-// useCase1 is PROJECT_INSTRUCTION's faceted-search example (Use Case 1).
+// useCase1 is the spec's faceted-search example (Use Case 1).
 const useCase1 = `-- name: SearchUsers :many
 SELECT
     u.id,

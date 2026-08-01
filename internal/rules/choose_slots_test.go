@@ -13,7 +13,7 @@ import (
 	"github.com/moznion/sqletch/internal/template"
 )
 
-// PROJECT_INSTRUCTION Use Case 4: @choose in a projection slot; the
+// Spec Use Case 4: @choose in a projection slot; the
 // alias stays in the skeleton (R8).
 const bucketTemplate = `-- name: SignupsByBucket :many
 SELECT

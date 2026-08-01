@@ -167,7 +167,7 @@ test cheap to build.
 
 ## 10. Testing & acceptance criteria
 
-- The complete Rejected Examples corpus from PROJECT_INSTRUCTION as
+- The complete Rejected Examples corpus from the spec as
   `.diag` golden tests (R3 unqualified-reference case, vacuous guard,
   unanchored WHERE, nesting → these must produce exactly the
   documented codes at the documented spans).

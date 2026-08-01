@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "schema_fp": "00bee77d27865758e214d6e882463851e47b530e6dd382de757c8ed01bdc0ccc",
+  "rendered_sql": "\n-- @param tenant_id: bigint\n-- @param statuses: varchar(32)\n-- @param limit: bigint\nSELECT u.id, u.email, u.status\nFROM users AS u\nWHERE u.tenant_id = ?\n  AND u.status IN (SELECT NULL FROM DUAL WHERE FALSE)\nORDER BY u.id\nLIMIT ?;\n\n",
+  "params": [
+    {
+      "oid": 0,
+      "name": ""
+    },
+    {
+      "oid": 0,
+      "name": ""
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 1,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 1,
+      "src_att": 2,
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 1,
+      "src_att": 3,
+      "nullable": false
+    }
+  ]
+}

@@ -180,8 +180,11 @@ Deliberately out of scope: dynamic table/column names, shape-changing
 projections, and caller-supplied SQL strings. The template-language
 reference is [docs/template-language.md](docs/template-language.md);
 the full boundary — and the reasoning behind every rule — lives in
-[PROJECT_INSTRUCTION.md](PROJECT_INSTRUCTION.md); the implementation
-design is under [docs/design/](docs/design/).
+[docs/spec.md](docs/spec.md); the implementation
+design is under [docs/design/](docs/design/). **User documentation lives in
+the [manual](docs/manual/README.md)** — getting started, the template
+language reference, per-dialect guides, and the
+[sqlc migration guide](docs/manual/10-sqlc-migration.md).
 
 ## Roadmap
 

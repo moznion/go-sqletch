@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "schema_fp": "a662b82ee1b8313dbbd5c6526dd148583cc95aa74f20dfd8ea82fc8405d1a46e",
+  "tables": [
+    {
+      "schema": "main",
+      "name": "users",
+      "oid": 1,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 1,
+          "type_name": "INTEGER",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "email",
+          "att": 2,
+          "type_oid": 3,
+          "type_name": "TEXT",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "status",
+          "att": 3,
+          "type_oid": 3,
+          "type_name": "TEXT",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "tenant_id",
+          "att": 4,
+          "type_oid": 1,
+          "type_name": "INTEGER",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "nickname",
+          "att": 5,
+          "type_oid": 3,
+          "type_name": "TEXT",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "att": 6,
+          "type_oid": 7,
+          "type_name": "DATETIME",
+          "not_null": true,
+          "has_default": true
+        }
+      ]
+    }
+  ]
+}

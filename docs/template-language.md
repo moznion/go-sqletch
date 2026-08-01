@@ -1158,7 +1158,7 @@ q.OnQuery(func(shapeKey, sql string) {
 
 - [`examples/`](../examples/) — a complete working project; its
   generated code and cache are committed, so it builds with no database.
-- [`PROJECT_INSTRUCTION.md`](../PROJECT_INSTRUCTION.md) — the
+- [`docs/spec.md`](spec.md) — the
   specification: rules R1–R9, the runtime premises, the soundness
   argument, and the design boundary (what is deliberately out of scope
   and why).

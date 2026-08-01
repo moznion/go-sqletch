@@ -1,7 +1,7 @@
 # sqletch Design — 08: Later Phases (v0.2 – v0.4, implementation deltas)
 
 Outline-level design for post-v0.1 work: what each feature touches per
-component, plus the decisions already fixed by PROJECT_INSTRUCTION so
+component, plus the decisions already fixed by the spec so
 future implementers don't re-litigate them. Each item gets a full
 design doc (this series' numbering continues) before its milestone
 starts; this file records the deltas and the landmines.
@@ -84,7 +84,7 @@ starts; this file records the deltas and the landmines.
   `<Query>Unscoped()` constructor (renders `TRUE`) as the sole opt-out
   path. Scanner: the `!` is part of the construct token
   (`@filter-tree!(`). Motivation and the repository/use-case layering
-  pattern are documented in PROJECT_INSTRUCTION Use Case 5; the
+  pattern are documented in the spec's Use Case 5; the
   example project gains a multi-tenant repository sample.
 - compose: every predicate and subtree parenthesized (P2); placeholder
   numbering per *occurrence* — `Frag.ParamSpans` machinery already

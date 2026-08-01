@@ -115,7 +115,7 @@ v0.1 accepts constructs in: `From` (`@if-present` join item), `Where`
 (`@if-present` conjunct), `OrderBy` (`@choose`). Constructs in any
 other context: `SQLETCH007` with a message naming the allowed slots
 (this also cleanly rejects the projection example from
-PROJECT_INSTRUCTION's Rejected Examples).
+the spec's Rejected Examples).
 
 ## 5. Separator lifting
 
@@ -181,7 +181,7 @@ fragments) but naturally share bits per atom.
   `@>` vs `@if-present`.
 - Golden tests: `testdata/scanner/*.sql` → `*.golden.json` (the
   serialized `QueryTemplate`). Corpus must include every example from
-  PROJECT_INSTRUCTION (accepted ones parse; each Rejected Example
+  the spec (accepted ones parse; each Rejected Example
   yields its documented diagnostic where the scanner is the detecting
   layer).
 - Fuzz test: `FuzzScan` must never panic and must uphold the §9

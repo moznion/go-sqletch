@@ -1,0 +1,11 @@
+version: 1
+dialect: mysql
+server_version: "8.4"
+database:
+  dsn: ${SQLETCH_MYSQL_DSN}   # empty = disposable testcontainers MySQL
+schema:
+  files: [db/schema.sql]
+queries: [queries/*.sql]
+output:
+  package: gen
+  path: gen

@@ -37,7 +37,7 @@ jobs:
       - name: E2E suite (property test, generated module, CLI round-trip)
         run: go test -tags devdb -v ./internal/e2e/
       - name: Offline check against the committed examples cache
-        run: go run ./cmd/sqletch check --config examples/sqletch.yaml | tee /tmp/check.out
+        run: go run ./cmd/sqletch check --config examples/postgres/sqletch.yaml | tee /tmp/check.out
       - name: Assert the committed cache keeps CI offline
         run: |
           grep -q "offline: yes" /tmp/check.out

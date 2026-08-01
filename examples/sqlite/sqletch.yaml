@@ -1,0 +1,11 @@
+version: 1
+dialect: sqlite
+server_version: "3"
+database:
+  dsn: dev.sqlite3   # disposable file next to this config; no server, no Docker
+schema:
+  files: [db/schema.sql]
+queries: [queries/*.sql]
+output:
+  package: gen
+  path: gen

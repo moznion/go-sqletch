@@ -1,9 +1,9 @@
 # sqletch Design — 00: Overview
 
 Status: draft for v0.1 implementation
-Companion to: `PROJECT_INSTRUCTION.md` (the concept/spec document; this
+Companion to: `../spec.md` (the concept/spec document; this
 series is the implementation design). Where the two disagree,
-`PROJECT_INSTRUCTION.md` wins and this series must be updated.
+`../spec.md` wins and this series must be updated.
 
 ## Reading order
 

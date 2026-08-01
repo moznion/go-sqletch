@@ -1,0 +1,23 @@
+{
+  "name": "SearchUsers",
+  "guards": [
+    "bit 0: status",
+    "bit 1: email_prefix"
+  ],
+  "chooses": [
+    "sort: email_asc, (default)"
+  ],
+  "shape_count": "8",
+  "params": [
+    "status: varchar (optional)",
+    "email_prefix: varchar (optional)",
+    "limit: bigint"
+  ],
+  "columns": [
+    "id: bigint (not null)",
+    "email: varchar (not null)",
+    "status: varchar (not null)",
+    "nickname: varchar (nullable)"
+  ],
+  "maximal_sql": "\n-- @param status: varchar(32)\n-- @param email_prefix: varchar(255)\n-- @param limit: bigint\nSELECT u.id, u.email, u.status, u.nickname\nFROM users AS u\nWHERE TRUE\n\n\nAND (u.status = ?)\n\n\nAND (u.email LIKE concat(?, '%'))\n\n\nORDER BY u.email ASC\n\nLIMIT ?;\n\n"
+}

@@ -7,7 +7,7 @@ import (
 	"github.com/moznion/sqletch/internal/diagnostics"
 )
 
-// useCase2 is PROJECT_INSTRUCTION's partial-UPDATE example (Use Case 2).
+// useCase2 is the spec's partial-UPDATE example (Use Case 2).
 const useCase2 = `-- name: UpdateUserProfile :one
 UPDATE users
 SET

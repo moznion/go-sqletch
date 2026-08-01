@@ -7,7 +7,7 @@ composition of pre-verified constant fragments.
 
 ## Document authority
 
-1. **`PROJECT_INSTRUCTION.md` is the specification** — the structural
+1. **`docs/spec.md` is the specification** — the structural
    rules R1–R9, runtime premises P1/P2, the soundness argument, and
    the design boundary. It survived multiple adversarial review
    cycles; do not weaken a rule to make an implementation easier.
@@ -24,7 +24,7 @@ go test ./...                              # unit suites (no DB)
 go test -tags devdb ./internal/e2e/        # real-DB E2E (needs Docker or SQLETCH_TEST_DSN)
 golangci-lint run --build-tags devdb ./... # must be 0 issues before "done"
 goimports -w .                             # run after every change
-go run ./cmd/sqletch generate --config examples/sqletch.yaml
+go run ./cmd/sqletch generate --config examples/postgres/sqletch.yaml
 go test ./internal/template -fuzz=FuzzScan -fuzztime=15s
 ```
 
