@@ -71,7 +71,8 @@ const (
 	CodeScopeViolation   Code = "SQLETCH115" // reference into optional join w/o guard (R3)
 	CodePlannerSensitive Code = "SQLETCH116" // e.g. FOR UPDATE + optional LEFT JOIN
 	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
-	CodeUnanchoredSet    Code = "SQLETCH118" // every SET item optional, no anchor (R6)
+	CodeUnanchoredSet    Code = "SQLETCH118" // every SET/INSERT-list item optional, no anchor (R6)
+	CodePairedGuards     Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
 )
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).
@@ -81,6 +82,7 @@ const (
 	CodeOracleFailure         Code = "SQLETCH202" // prepare/describe failed
 	CodeColumnAgreement       Code = "SQLETCH210" // renderings disagree on result columns
 	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
+	CodeOptionalInsertNotNull Code = "SQLETCH212" // optional NOT NULL column without default (warning)
 )
 
 // Codegen/config codes.
@@ -101,6 +103,10 @@ type Diagnostic struct {
 
 func Errorf(code Code, span Span, format string, args ...any) Diagnostic {
 	return Diagnostic{Code: code, Severity: Error, Span: span, Message: fmt.Sprintf(format, args...)}
+}
+
+func Warnf(code Code, span Span, format string, args ...any) Diagnostic {
+	return Diagnostic{Code: code, Severity: Warning, Span: span, Message: fmt.Sprintf(format, args...)}
 }
 
 func (d Diagnostic) WithHint(format string, args ...any) Diagnostic {

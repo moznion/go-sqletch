@@ -41,6 +41,10 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 				diags = append(diags, probeJoin(profile, fe, v)...)
 			case template.SlotSetItem:
 				diags = append(diags, probeSetItem(profile, fe, v)...)
+			case template.SlotInsertValue:
+				diags = append(diags, probeInsertValue(profile, fe, v)...)
+				// SlotInsertColumn needs no probe: the scanner already
+				// requires a single identifier.
 			}
 		case *template.Choose:
 			diags = append(diags, probeChooseCases(profile, fe, v)...)
@@ -135,6 +139,20 @@ func probeSetItem(profile dialect.LexerProfile, fe dialect.Frontend,
 	if err := fe.ProbeSetItem(rewriteParams(profile, v.Body)); err != nil {
 		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
 			"fragment must be a single SET assignment (R1): %s", probeMsg(err))}
+	}
+	return nil
+}
+
+func probeInsertValue(profile dialect.LexerProfile, fe dialect.Frontend,
+	v *template.IfPresent) []diagnostics.Diagnostic {
+
+	if !balanced(profile, v.Body) {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment has unbalanced parentheses; it must form one complete VALUES item (R1)")}
+	}
+	if err := fe.ProbeInsertValue(rewriteParams(profile, v.Body)); err != nil {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+			"fragment must be a single VALUES item (R1): %s", probeMsg(err))}
 	}
 	return nil
 }

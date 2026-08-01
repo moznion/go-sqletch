@@ -64,7 +64,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 
 	// Full pipeline for the corpus + the :one nullable-columns query.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], getUserProfile} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -271,6 +271,25 @@ func main() {
 	upd3, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{ID: 1})
 	die(err)
 	expect(upd3.Email == "alice2@example.com", "no-op patch changes nothing")
+
+	// Optional INSERT pairs: omitted columns receive their defaults
+	// (NULL here); provided pairs land together.
+	created, err := q.CreateUser(ctx, gen.CreateUserParams{
+		Email:    "dave@example.com",
+		Status:   "active",
+		TenantID: 1,
+	})
+	die(err)
+	expect(created.Nickname == nil && created.Bio == nil, "omitted optional columns default to NULL")
+	created2, err := q.CreateUser(ctx, gen.CreateUserParams{
+		Email:    "erin@example.com",
+		Status:   "active",
+		TenantID: 1,
+		Nickname: gen.Ptr("er"),
+	})
+	die(err)
+	expect(created2.Nickname != nil && *created2.Nickname == "er" && created2.Bio == nil,
+		"provided pair inserts, unprovided stays NULL")
 
 	// Cursor pagination across two shapes.
 	page1, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 2})

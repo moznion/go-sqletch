@@ -95,6 +95,20 @@ SET
 WHERE id = :id
 RETURNING id, email, nickname, updated_at;
 `,
+		`-- name: CreateUser :one
+INSERT INTO users (
+    email
+@if-present(nickname)
+  , nickname
+@endif
+) VALUES (
+    :email
+@if-present(nickname)
+  , :nickname
+@endif
+)
+RETURNING id;
+`,
 	}
 	for _, src := range corpus {
 		q := scanOne(t, src)

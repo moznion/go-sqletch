@@ -50,8 +50,18 @@ const (
 	SlotWhereConjunct
 	SlotJoinItem
 	SlotOrderBy
-	SlotSetItem // v0.2: an UPDATE SET assignment
+	SlotSetItem      // v0.2: an UPDATE SET assignment
+	SlotInsertColumn // v0.2: an INSERT column-list item (paired, R7)
+	SlotInsertValue  // v0.2: an INSERT VALUES row item (paired, R7)
 )
+
+// GuardedItem records one guarded INSERT column/value item for the R7
+// pairing check. Name is the column name (column items only).
+type GuardedItem struct {
+	Name   string
+	Guards []GuardAtom
+	Span   diagnostics.Span
+}
 
 // GuardAtom identifies one guard condition. v0.1 has presence atoms
 // only; Op/Value are reserved for @when (v0.3).
@@ -133,6 +143,13 @@ type QueryTemplate struct {
 	Params     map[string]*Param
 	// GuardAtoms in bit order: GuardAtoms[i] has bit i.
 	GuardAtoms []GuardAtom
+	// InsertColGuards / InsertValGuards collect the guarded INSERT
+	// column items and, per VALUES row, the guarded value items — the
+	// R7 pairing input. Guarded items are restricted to the tail of
+	// their clause (checked at scan time), so sequence equality plus
+	// the maximal Describe implies positional alignment in every shape.
+	InsertColGuards []GuardedItem
+	InsertValGuards [][]GuardedItem
 }
 
 type QueryFile struct {

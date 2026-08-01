@@ -123,6 +123,30 @@ SET
 WHERE id = :id
 RETURNING id, email, nickname, bio;
 `,
+	"create_user": `-- name: CreateUser :one
+INSERT INTO users (
+    email
+  , status
+  , tenant_id
+@if-present(nickname)
+  , nickname
+@endif
+@if-present(bio)
+  , bio
+@endif
+) VALUES (
+    :email
+  , :status
+  , :tenant_id
+@if-present(nickname)
+  , :nickname
+@endif
+@if-present(bio)
+  , :bio
+@endif
+)
+RETURNING id, email, nickname, bio;
+`,
 	"exists_form": `-- name: SearchUsersExists :many
 SELECT u.id, u.email
 FROM users AS u

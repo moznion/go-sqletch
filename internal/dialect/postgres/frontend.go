@@ -113,6 +113,32 @@ func (f Frontend) ProbeSetItem(item string) error {
 	return nil
 }
 
+// ProbeInsertValue checks that expr is exactly one VALUES row item
+// (including the DEFAULT keyword, which is only legal there).
+func (f Frontend) ProbeInsertValue(expr string) error {
+	res, err := pgquery.Parse("INSERT INTO sqletch_probe_t (c) VALUES (" + expr + "\n)")
+	if err != nil {
+		return toParseError(err)
+	}
+	bad := &dialect.ParseError{Pos: 0, Msg: "fragment is not a single VALUES item"}
+	if len(res.Stmts) != 1 {
+		return bad
+	}
+	ins := res.Stmts[0].Stmt.GetInsertStmt()
+	if ins == nil || len(ins.ReturningList) != 0 || ins.OnConflictClause != nil || ins.SelectStmt == nil {
+		return bad
+	}
+	sel := ins.SelectStmt.GetSelectStmt()
+	if sel == nil || len(sel.ValuesLists) != 1 {
+		return bad
+	}
+	row := sel.ValuesLists[0].GetList()
+	if row == nil || len(row.Items) != 1 {
+		return bad
+	}
+	return nil
+}
+
 func singleSelect(res *pgquery.ParseResult) *pgquery.SelectStmt {
 	if len(res.Stmts) != 1 {
 		return nil

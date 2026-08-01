@@ -36,7 +36,10 @@ const (
 	ctxUpdateTarget
 	ctxSet
 	ctxInsertTarget
-	ctxValues
+	ctxInsertColumns  // inside the INSERT column-list parens (depth 1)
+	ctxInsertAfterCol // after the column list, before VALUES
+	ctxValues         // between VALUES rows (depth 0)
+	ctxInsertValueRow // inside one VALUES row's parens (depth 1)
 	ctxReturning
 )
 
@@ -58,6 +61,10 @@ func (c clauseCtx) String() string {
 		return "LIMIT/OFFSET/locking clause"
 	case ctxSet:
 		return "SET"
+	case ctxInsertColumns:
+		return "INSERT column list"
+	case ctxInsertValueRow:
+		return "VALUES row"
 	default:
 		return "statement"
 	}
@@ -83,6 +90,10 @@ type queryBuilder struct {
 	ctx            clauseCtx
 	statementEnded bool
 	extraReported  bool
+	// R7 bookkeeping: guarded INSERT items must sit at the tail of
+	// their clause (after every unconditional item).
+	colGuardSeen bool
+	rowGuardSeen bool
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
@@ -185,10 +196,38 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 	}
 	switch tok.Kind {
 	case dialect.KindLParen:
+		if qb.depth == 0 {
+			switch qb.ctx {
+			case ctxInsertTarget:
+				qb.ctx = ctxInsertColumns
+				qb.colGuardSeen = false
+			case ctxValues:
+				qb.ctx = ctxInsertValueRow
+				qb.rowGuardSeen = false
+				qb.q.InsertValGuards = append(qb.q.InsertValGuards, nil)
+			}
+		}
 		qb.depth++
 	case dialect.KindRParen:
 		if qb.depth > 0 {
 			qb.depth--
+		}
+		if qb.depth == 0 {
+			switch qb.ctx {
+			case ctxInsertColumns:
+				qb.ctx = ctxInsertAfterCol
+			case ctxInsertValueRow:
+				qb.ctx = ctxValues
+			}
+		}
+	case dialect.KindComma:
+		// R7 tail rule: an unconditional item after a guarded one would
+		// break positional alignment across shapes.
+		if qb.depth == 1 &&
+			((qb.ctx == ctxInsertColumns && qb.colGuardSeen) ||
+				(qb.ctx == ctxInsertValueRow && qb.rowGuardSeen)) {
+			fs.errorf(diagnostics.CodePairedGuards, fs.span(tok.Start, tok.End),
+				"unconditional item after optional items in the %s; keep optional column/value pairs at the end (R7)", qb.ctx)
 		}
 	case dialect.KindSemicolon:
 		if qb.depth == 0 {
@@ -449,7 +488,11 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 		guards = append(guards, GuardAtom{Param: a})
 	}
 
-	if qb.depth > 0 {
+	allowedDepth := 0
+	if qb.ctx == ctxInsertColumns || qb.ctx == ctxInsertValueRow {
+		allowedDepth = 1 // the INSERT list parens are sanctioned slots
+	}
+	if qb.depth != allowedDepth {
 		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
 			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
 	}
@@ -501,12 +544,47 @@ func (fs *fileScan) parseIfPresent(pos, nameEnd int) int {
 			item.Body = stripped
 			item.BodySpan = fs.span(off, off+len(stripped))
 		}
+	case ctxInsertColumns:
+		item.Slot = SlotInsertColumn
+		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
+		if !hadComma {
+			fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+				"an optional INSERT column must be written as `, column_name`; sqletch owns the separator"))
+		} else {
+			item.Sep = SepComma
+			item.Body = stripped
+			item.BodySpan = fs.span(off, off+len(stripped))
+		}
+		if !fs.isSingleIdent(item.Body) {
+			fs.errorf(diagnostics.CodeBadIdentifier, item.BodySpan,
+				"an optional INSERT column item must be exactly one column name (got %q)", item.Body)
+		}
+		qb.q.InsertColGuards = append(qb.q.InsertColGuards,
+			GuardedItem{Name: item.Body, Guards: guards, Span: item.BodySpan})
+		qb.colGuardSeen = true
+	case ctxInsertValueRow:
+		item.Slot = SlotInsertValue
+		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
+		if !hadComma {
+			fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+				"an optional VALUES item must be written as `, <expr>`; sqletch owns the separator"))
+		} else {
+			item.Sep = SepComma
+			item.Body = stripped
+			item.BodySpan = fs.span(off, off+len(stripped))
+		}
+		row := len(qb.q.InsertValGuards) - 1
+		if row >= 0 {
+			qb.q.InsertValGuards[row] = append(qb.q.InsertValGuards[row],
+				GuardedItem{Guards: guards, Span: item.BodySpan})
+		}
+		qb.rowGuardSeen = true
 	case ctxFrom:
 		item.Slot = SlotJoinItem
 		item.Sep = SepNone
 	default:
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, endPos),
-			"@if-present is not allowed in the %s position; allowed slots: WHERE conjunct, SET item, FROM join item", ctx)
+			"@if-present is not allowed in the %s position; allowed slots: WHERE conjunct, SET item, INSERT column/value pair, FROM join item", ctx)
 	}
 
 	qb.q.Items = append(qb.q.Items, item)
@@ -710,6 +788,17 @@ func (fs *fileScan) firstTokenOf(b []byte) *dialect.Token {
 			return &tok
 		}
 	}
+}
+
+// isSingleIdent reports whether body lexes to exactly one (possibly
+// quoted) identifier.
+func (fs *fileScan) isSingleIdent(body string) bool {
+	b := []byte(body)
+	t := fs.firstTokenOf(b)
+	if t == nil || (t.Kind != dialect.KindIdent && t.Kind != dialect.KindQuotedIdent) {
+		return false
+	}
+	return fs.firstTokenOf(b[t.End:]) == nil
 }
 
 func isAndToken(t *dialect.Token) bool {

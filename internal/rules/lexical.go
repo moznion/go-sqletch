@@ -15,8 +15,59 @@ import (
 func CheckLexical(profile dialect.LexerProfile, q *template.QueryTemplate) []diagnostics.Diagnostic {
 	var diags []diagnostics.Diagnostic
 	diags = append(diags, checkAnchors(profile, q)...)
+	diags = append(diags, checkInsertPairing(q)...)
 	diags = append(diags, checkParamDiscipline(q)...)
 	return diags
+}
+
+// checkInsertPairing implements R7: guarded INSERT column items and
+// each VALUES row's guarded value items must carry identical guard
+// sets in identical order. Combined with the scan-time tail rule and
+// the maximal Describe, this guarantees column/value alignment in
+// every shape.
+func checkInsertPairing(q *template.QueryTemplate) []diagnostics.Diagnostic {
+	cols := q.InsertColGuards
+	rows := q.InsertValGuards
+	hasRowGuards := false
+	for _, r := range rows {
+		if len(r) > 0 {
+			hasRowGuards = true
+		}
+	}
+	if len(cols) == 0 && !hasRowGuards {
+		return nil
+	}
+	var diags []diagnostics.Diagnostic
+	if len(cols) > 0 && len(rows) == 0 {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodePairedGuards, cols[0].Span,
+			"optional INSERT columns require a VALUES clause with matching optional items (R7)")}
+	}
+	for r, row := range rows {
+		if len(row) != len(cols) {
+			span := q.HeaderSpan
+			if len(row) > 0 {
+				span = row[0].Span
+			} else if len(cols) > 0 {
+				span = cols[0].Span
+			}
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePairedGuards, span,
+				"VALUES row %d has %d optional items but the column list has %d; every guarded column needs its guarded value in every row (R7)",
+				r+1, len(row), len(cols)))
+			continue
+		}
+		for i := range row {
+			if !sameAtoms(row[i].Guards, cols[i].Guards) {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePairedGuards, row[i].Span,
+					"VALUES row %d item %d is guarded by @if-present(%s) but the paired column %q is guarded by @if-present(%s); pairs must share the same guard (R7)",
+					r+1, i+1, atomsParamList(row[i].Guards), cols[i].Name, atomsParamList(cols[i].Guards)))
+			}
+		}
+	}
+	return diags
+}
+
+func sameAtoms(a, b []template.GuardAtom) bool {
+	return supersetAtoms(a, b) && supersetAtoms(b, a)
 }
 
 // checkAnchors implements R6 for v0.1: if the first optional WHERE
@@ -54,6 +105,11 @@ func checkAnchors(profile dialect.LexerProfile, q *template.QueryTemplate) []dia
 				return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeUnanchoredSet, v.Span,
 					"every SET item is optional; the shape with all guards off would be `UPDATE ... SET` with no assignments (R6)").
 					WithHint("add an unconditional item, e.g. `updated_at = now()`")}
+			}
+			if (v.Slot == template.SlotInsertColumn || v.Slot == template.SlotInsertValue) && lastTok == "(" {
+				return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeUnanchoredSet, v.Span,
+					"every item of this INSERT list is optional; the shape with all guards off would leave the parentheses empty (R6)").
+					WithHint("keep at least one unconditional column/value pair")}
 			}
 			lastTok = "@construct"
 		case *template.Choose:

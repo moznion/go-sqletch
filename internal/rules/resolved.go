@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"strings"
+
 	"github.com/moznion/sqletch/internal/ast"
 	"github.com/moznion/sqletch/internal/cache"
 	"github.com/moznion/sqletch/internal/diagnostics"
@@ -88,6 +90,24 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeStarExpansion,
 				res.spanAt(ti.Loc, len(ti.Qualifier)),
 				"%s.* projects columns of an optional join; optional joins may not contribute result columns (R2)", ti.Qualifier))
+		}
+	}
+
+	// R7 companion warning: an optional NOT NULL column without a
+	// default fails at execution time in shapes that omit it —
+	// prepare-level verification cannot see that (spec: known limits).
+	if maxTree.Kind() == dialect.StmtInsert && len(q.InsertColGuards) > 0 && cat != nil {
+		if rels := maxTree.Relations(); len(rels) > 0 {
+			if tbl := cat.Lookup(rels[0].Table); tbl != nil {
+				for _, gi := range q.InsertColGuards {
+					name := strings.Trim(gi.Name, `"`)
+					if c := tbl.Col(name); c != nil && c.NotNull && !c.HasDefault {
+						diags = append(diags, diagnostics.Warnf(diagnostics.CodeOptionalInsertNotNull, gi.Span,
+							"column %q is NOT NULL without a default; shapes omitting it will fail at execution time", name).
+							WithHint("add a database default, or make the column unconditional"))
+					}
+				}
+			}
 		}
 	}
 
