@@ -31,6 +31,9 @@ type QueryInput struct {
 
 type Options struct {
 	Package string
+	// TreeCaps bounds @filter-tree values; zero fields fall back to
+	// runtime.DefaultTreeCaps.
+	TreeCaps runtime.TreeCaps
 }
 
 // Generate emits the full package: db.go, querier.go, and one file per
@@ -43,11 +46,19 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	sorted := append([]QueryInput(nil), queries...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Q.Name < sorted[j].Q.Name })
 
+	caps := opts.TreeCaps
+	if caps.MaxNodes == 0 {
+		caps.MaxNodes = runtime.DefaultTreeCaps.MaxNodes
+	}
+	if caps.MaxDepth == 0 {
+		caps.MaxDepth = runtime.DefaultTreeCaps.MaxDepth
+	}
+
 	typeNames := map[string]string{} // generated type name -> query
 	var querier []string
 
 	for _, in := range sorted {
-		g := &queryGen{in: in, tm: tm, pkg: opts.Package}
+		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps}
 		src, sig, ds := g.emit(typeNames)
 		diags = append(diags, ds...)
 		if len(ds) > 0 {
@@ -78,6 +89,7 @@ type queryGen struct {
 	in      QueryInput
 	tm      dialect.TypeMap
 	pkg     string
+	caps    runtime.TreeCaps
 	imports map[string]bool
 	b       strings.Builder
 }
@@ -594,7 +606,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		if filter.Required {
 			fmt.Fprintf(w, "\tif %s == nil {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
 		}
-		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetTree(%q, %s, key, %s)\n", q.Name, fragsVar, treeField)
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetTree(%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
+			q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
 		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
 			strings.Join(vals, ", "), treeField)

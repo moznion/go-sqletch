@@ -45,3 +45,10 @@ func (q *Queries) hook(shapeKey, sql string) {
 
 // Ptr is a convenience for presence parameters: Ptr("x") yields *string.
 func Ptr[T any](v T) *T { return &v }
+
+// And / Or combine @filter-tree predicates built with the generated
+// per-query constructors.
+var (
+	And = runtime.And
+	Or  = runtime.Or
+)

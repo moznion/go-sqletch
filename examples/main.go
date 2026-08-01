@@ -39,4 +39,32 @@ func main() {
 	for _, u := range users {
 		fmt.Printf("%d\t%s\t%s\n", u.ID, u.Email, u.Status)
 	}
+
+	// v0.3: typed filters cross the repository boundary as values —
+	// never as SQL strings (@filter-tree!).
+	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.And(
+			gen.FilterUsersTenant(1),
+			gen.FilterUsersStatusEq("active"),
+		),
+		Limit: 20,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("scoped: %d users\n", len(scoped))
+
+	// v0.3: caller-chosen multi-key sort over a closed key set.
+	sorted, err := q.ListUsersSorted(ctx, gen.ListUsersSortedParams{
+		IncludeBanned: false,
+		Sort: []gen.ListUsersSortedSortKey{
+			gen.ListUsersSortedSortEmailDesc,
+			gen.ListUsersSortedSortCreatedAtAsc,
+		},
+		Limit: 20,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("sorted: %d users\n", len(sorted))
 }

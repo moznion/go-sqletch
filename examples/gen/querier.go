@@ -8,8 +8,10 @@ import (
 
 // Querier lets user code mock the generated queries.
 type Querier interface {
+	FilterUsers(ctx context.Context, arg FilterUsersParams) ([]FilterUsersRow, error)
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
+	ListUsersSorted(ctx context.Context, arg ListUsersSortedParams) ([]ListUsersSortedRow, error)
 	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error)
 }

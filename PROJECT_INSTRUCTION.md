@@ -391,7 +391,10 @@ enumeration or unverified SQL.
 ```
 
 Like `@if-present`, but the condition compares a **required** parameter
-against a compile-time literal (`op` is `=` or `!=`), evaluated in Go.
+against a compile-time literal (`op` is `=` or `!=`; `<>` is accepted
+as an alias), evaluated in Go. Literals are strings (with `''`
+escapes), integers, or booleans — the literal fixes the parameter's Go
+type.
 The parameter's Go type comes from the literal (it need not bind in
 SQL — a sanctioned pure-control form, cf. R9's closing bullet; if it
 *does* bind, the literal-derived and SQL-inferred types must agree,
@@ -458,7 +461,12 @@ Specification details:
     *forgetting* the filter is an error; *opting out* is one
     greppable, reviewable line at the call site.
 -   The runtime enforces configurable tree caps (default: 32 nodes,
-    depth 8) to bound adversarially large inputs.
+    depth 8; `filter_tree_caps` in sqletch.yaml, baked into generated
+    code) to bound adversarially large inputs.
+-   v0.3 implementation constraints: at most **one** `@filter-tree`
+    per query, and it occupies a WHERE-conjunct slot (written after an
+    unconditional `AND`). Both are local restrictions, not model
+    limits; lifting them is future work.
 -   Statement/text caches key on the canonical tree encoding (hash as
     index, full encoding compared on hit) and are LRU-bounded.
 

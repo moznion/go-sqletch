@@ -156,7 +156,7 @@ func ResolveArgs(binds []Bind, vals, treeArgs []any) []any {
 // in first-occurrence order per shape. Queries with a @filter-tree
 // use ComposeTree instead.
 func Compose(frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := ComposeTree(frags, key, nil)
+	sql, binds, err := ComposeTree(frags, key, nil, DefaultTreeCaps)
 	if err != nil {
 		// Without a tree the composer has no failure modes; a non-nil
 		// error here is a generated-code bug.
@@ -177,7 +177,7 @@ type bindKey struct {
 // ComposeTree composes a shape that may include one @filter-tree
 // block. tree may be nil (renders TRUE); a nil tree with a required
 // block is rejected by the generated code before reaching here.
-func ComposeTree(frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
+func ComposeTree(frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
 	var b strings.Builder
 	assigned := map[bindKey]int{}
 	var binds []Bind
@@ -305,7 +305,7 @@ func ComposeTree(frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error)
 				b.WriteString("TRUE")
 				continue
 			}
-			if err := tree.validate(len(f.Cases), DefaultTreeCaps); err != nil {
+			if err := tree.validate(len(f.Cases), caps); err != nil {
 				return "", nil, err
 			}
 			emitTree(tree, f.Cases)
@@ -420,7 +420,7 @@ func NewComposedCache(capacity int) *ComposedCache {
 }
 
 func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := c.get(queryName, frags, key, nil)
+	sql, binds, err := c.get(queryName, frags, key, nil, DefaultTreeCaps)
 	if err != nil {
 		panic(err) // no failure modes without a tree
 	}
@@ -433,12 +433,12 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 
 // GetTree is the @filter-tree variant: the tree's structural encoding
 // becomes part of the cache key (values never do).
-func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
+func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
 	key.Trees = []string{tree.Encode()}
-	return c.get(queryName, frags, key, tree)
+	return c.get(queryName, frags, key, tree, caps)
 }
 
-func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *Tree) (string, []Bind, error) {
+func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
 	mapKey := queryName + "|" + key.String()
 	c.mu.Lock()
 	if el, ok := c.m[mapKey]; ok {
@@ -456,7 +456,7 @@ func (c *ComposedCache) get(queryName string, frags []Frag, key ShapeKey, tree *
 	}
 	c.mu.Unlock()
 
-	sql, binds, err := ComposeTree(frags, key, tree)
+	sql, binds, err := ComposeTree(frags, key, tree, caps)
 	if err != nil {
 		return "", nil, err
 	}

@@ -305,7 +305,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
 	}
-	files, diags := codegen.Generate(codegen.Options{Package: cfg.Output.Package}, postgres.TypeMap{}, inputs)
+	files, diags := codegen.Generate(codegen.Options{
+		Package:  cfg.Output.Package,
+		TreeCaps: runtime.TreeCaps{MaxNodes: cfg.TreeCaps.MaxNodes, MaxDepth: cfg.TreeCaps.MaxDepth},
+	}, postgres.TypeMap{}, inputs)
 	res.Diags = append(res.Diags, diags...)
 	if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {
 		return res, nil

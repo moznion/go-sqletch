@@ -90,6 +90,21 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - **Hashes are an index, never identity**: cache entries store full
   keys and compare on read; the runtime LRU compares full shape keys.
 
+## Known v0.2/v0.3 decisions and limits
+
+- @when literals: string/integer/boolean; `=`/`!=` (`<>` alias);
+  modeled as IfPresent items carrying value atoms so all downstream
+  machinery is shared.
+- @filter-tree: one block per query, WHERE-conjunct slot only (local
+  v0.3 restrictions, documented in the spec); caps configurable via
+  `filter_tree_caps` and baked into generated code; predicate params
+  are constructor arguments, never struct fields; composition caches
+  bind PLANS (positions), never values.
+- @order-by: verification = maximal + @default renderings only; the
+  full permutation space is enumerated for exhaustive/property checks.
+- `EXPLAIN (GENERIC_PLAN)` output must go through pgconn's raw simple
+  query (pgx's Query/Exec layers reject bare $n placeholders).
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

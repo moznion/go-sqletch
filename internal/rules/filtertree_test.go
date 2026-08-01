@@ -77,7 +77,7 @@ func TestFilterTree_ComposeConformance(t *testing.T) {
 		runtime.NewLeaf(2, "a", "b"),
 	)
 	key := runtime.ShapeKey{Guards: 1} // min_total active (maximal)
-	sql, binds, err := runtime.ComposeTree(frags, key, tree)
+	sql, binds, err := runtime.ComposeTree(frags, key, tree, runtime.DefaultTreeCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestFilterTree_RuntimeShapes(t *testing.T) {
 		),
 	}
 	for _, tree := range cases {
-		sql, binds, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, tree)
+		sql, binds, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, tree, runtime.DefaultTreeCaps)
 		if err != nil {
 			t.Fatalf("tree %s: %v", tree.Encode(), err)
 		}
@@ -136,7 +136,7 @@ func TestFilterTree_RuntimeShapes(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		deep = runtime.And(deep, runtime.NewLeaf(1, int64(2)))
 	}
-	if _, _, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, deep); err == nil {
+	if _, _, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, deep, runtime.DefaultTreeCaps); err == nil {
 		t.Fatal("expected ErrTreeTooLarge for a deep tree")
 	}
 }

@@ -27,6 +27,7 @@ type Config struct {
 	Cache         Cache      `yaml:"cache"`
 	Overrides     []Override `yaml:"overrides"`
 	Expansion     Expansion  `yaml:"static_expansion"`
+	TreeCaps      TreeCaps   `yaml:"filter_tree_caps"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.
@@ -62,6 +63,13 @@ type Override struct {
 type Expansion struct {
 	Queries   []string `yaml:"queries"`
 	MaxShapes int      `yaml:"max_shapes"`
+}
+
+// TreeCaps bounds @filter-tree values at runtime; the values are baked
+// into generated code.
+type TreeCaps struct {
+	MaxNodes int `yaml:"max_nodes"`
+	MaxDepth int `yaml:"max_depth"`
 }
 
 func (c Config) Expanded(query string) bool {
@@ -127,6 +135,15 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	if cfg.Expansion.MaxShapes == 0 {
 		cfg.Expansion.MaxShapes = 256
+	}
+	if cfg.TreeCaps.MaxNodes == 0 {
+		cfg.TreeCaps.MaxNodes = 32
+	}
+	if cfg.TreeCaps.MaxDepth == 0 {
+		cfg.TreeCaps.MaxDepth = 8
+	}
+	if cfg.TreeCaps.MaxNodes < 1 || cfg.TreeCaps.MaxDepth < 1 {
+		invalid("filter_tree_caps values must be positive")
 	}
 	for i, o := range cfg.Overrides {
 		if o.Query == "" || o.Column == "" || o.Nullable == nil {

@@ -96,6 +96,41 @@ func TestLoad_Validation(t *testing.T) {
 	}
 }
 
+func TestLoad_TreeCaps(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, dir, "sqletch.yaml", validYAML)
+	cfg, diags := Load(path)
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if cfg.TreeCaps.MaxNodes != 32 || cfg.TreeCaps.MaxDepth != 8 {
+		t.Errorf("default caps = %+v", cfg.TreeCaps)
+	}
+
+	path2 := write(t, dir, "custom.yaml", validYAML+"filter_tree_caps:\n  max_nodes: 64\n  max_depth: 12\n")
+	cfg2, diags := Load(path2)
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if cfg2.TreeCaps.MaxNodes != 64 || cfg2.TreeCaps.MaxDepth != 12 {
+		t.Errorf("custom caps = %+v", cfg2.TreeCaps)
+	}
+
+	path3 := write(t, dir, "bad.yaml", validYAML+"filter_tree_caps:\n  max_nodes: -1\n")
+	if _, diags := Load(path3); !hasConfigCode(diags, diagnostics.CodeConfigInvalid) {
+		t.Errorf("negative caps must be SQLETCH301, got %+v", diags)
+	}
+}
+
+func hasConfigCode(diags []diagnostics.Diagnostic, code diagnostics.Code) bool {
+	for _, d := range diags {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestExpandGlobs(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "queries/b.sql", "x")
