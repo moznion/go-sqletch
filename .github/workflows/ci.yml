@@ -36,11 +36,12 @@ jobs:
           go-version-file: go.mod
       - name: E2E suite (property test, generated module, CLI round-trip)
         run: go test -tags devdb -v ./internal/e2e/
-      - name: Offline check against the committed examples cache
-        run: go run ./cmd/sqletch check --config examples/postgres/sqletch.yaml | tee /tmp/check.out
-      - name: Assert the committed cache keeps CI offline
+      - name: Offline check against the committed example caches
         run: |
-          grep -q "offline: yes" /tmp/check.out
+          for d in postgres mysql sqlite; do
+            go run ./cmd/sqletch check --config examples/$d/sqletch.yaml | tee /tmp/check-$d.out
+            grep -q "offline: yes" /tmp/check-$d.out
+          done
 
   lint:
     name: golangci-lint

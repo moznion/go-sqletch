@@ -6,13 +6,28 @@ package main
 import (
 	"context"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 
 	"github.com/moznion/sqletch/internal/cli"
 )
 
-var version = "0.1.0-dev"
+// version is overridable at build time
+// (-ldflags="-X main.version=v1.2.3"); otherwise it resolves from the
+// module build info, so `go install …@vX.Y.Z` reports the right
+// version with no release tooling.
+var version = ""
+
+func resolvedVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "devel"
+}
 
 func main() {
 	var configPath string
@@ -85,7 +100,7 @@ func main() {
 		Use:   "version",
 		Short: "print the sqletch version",
 		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Println("sqletch " + version)
+			cmd.Println("sqletch " + resolvedVersion())
 		},
 	})
 

@@ -13,8 +13,10 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v0.4, experimental.** PostgreSQL, MySQL, and SQLite. The template
-> language and generated API may change before 1.0.
+> **Status: v1.0 candidate.** PostgreSQL, MySQL, and SQLite. The
+> template language and generated API are frozen for v1 (see the
+> [stability audit](docs/design/12-v1.md)); the remaining steps to the
+> tag are release mechanics.
 
 ## The problem
 
@@ -205,6 +207,11 @@ language reference, per-dialect guides, and the
   tree-sitter). The embedded PostgreSQL oracle spike is done
   (feasible; see `docs/design/09-embedded-oracle.md` — shipping waits
   on upstream libpglite)
+- **v1.0 (in progress)** — stability freeze with written compatibility
+  promises (`docs/design/12-v1.md`), self-describing cache format, the
+  [user manual](docs/manual/README.md) and
+  [sqlc migration guide](docs/manual/10-sqlc-migration.md), per-dialect
+  examples. Remaining: LICENSE, CHANGELOG, the `v1.0.0` tag
 
 ## Development
 
