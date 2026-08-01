@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/gosrc"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/gosrc"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // scanSource turns one file listed in `queries:` into scanned queries.

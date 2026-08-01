@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 func parse(t *testing.T, sqlText string) dialect.Tree {

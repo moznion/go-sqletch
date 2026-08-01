@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/moznion/sqletch"
+    "url": "https://github.com/moznion/go-sqletch"
   },
   "main": "bindings/node",
   "keywords": [

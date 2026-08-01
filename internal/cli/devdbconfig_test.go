@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/config"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 func TestSQLiteDSNPath(t *testing.T) {

@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/codegen"
-	"github.com/moznion/sqletch/internal/devdb"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/nullability"
-	"github.com/moznion/sqletch/internal/rules"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/codegen"
+	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/nullability"
+	"github.com/moznion/go-sqletch/internal/rules"
 )
 
 const getUserProfile = `-- name: GetUserProfile :one
@@ -135,8 +135,8 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 	}
 	goMod := "module sqletchgen\n\ngo 1.24\n\nrequire (\n" +
 		"\tgithub.com/jackc/pgx/v5 " + pgxVer[1] + "\n" +
-		"\tgithub.com/moznion/sqletch v0.0.0\n)\n\n" +
-		"replace github.com/moznion/sqletch => " + repoRoot + "\n"
+		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
+		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	sqletchruntime "github.com/moznion/sqletch/runtime"
+	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
 	gen "sqletchgen/gen"
 )

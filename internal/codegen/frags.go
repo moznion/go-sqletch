@@ -4,9 +4,9 @@
 package codegen
 
 import (
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/template"
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // BuildFrags lowers a scanned template into the runtime fragment

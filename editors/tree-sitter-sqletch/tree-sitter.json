@@ -14,7 +14,7 @@
     "license": "Apache-2.0",
     "description": "tree-sitter grammar for sqletch SQL templates",
     "links": {
-      "repository": "https://github.com/moznion/sqletch"
+      "repository": "https://github.com/moznion/go-sqletch"
     }
   }
 }

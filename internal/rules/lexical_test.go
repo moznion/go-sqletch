@@ -3,9 +3,9 @@ package rules
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 func scanOne(t *testing.T, src string) *template.QueryTemplate {

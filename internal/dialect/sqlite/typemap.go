@@ -3,7 +3,7 @@ package sqlite
 import (
 	"strings"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // SQLite has no OIDs and no static column types — only declared types

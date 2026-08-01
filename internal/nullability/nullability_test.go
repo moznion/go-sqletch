@@ -3,11 +3,11 @@ package nullability
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // Catalog fixture: users (id/email NOT NULL, org_id nullable),

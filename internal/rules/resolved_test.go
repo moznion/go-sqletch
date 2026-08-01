@@ -3,10 +3,10 @@ package rules
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 )
 
 // fixtureCatalog mirrors the schema used across the design docs.

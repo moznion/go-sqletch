@@ -4,7 +4,7 @@
 package template
 
 import (
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 type Annotation int

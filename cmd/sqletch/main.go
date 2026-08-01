@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/moznion/sqletch/internal/cli"
+	"github.com/moznion/go-sqletch/internal/cli"
 )
 
 // version is overridable at build time

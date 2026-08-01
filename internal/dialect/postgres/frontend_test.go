@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 func TestFrontend_Parse_Basics(t *testing.T) {

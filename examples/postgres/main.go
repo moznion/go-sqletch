@@ -2,7 +2,7 @@
 // with `go generate ./...` (needs Docker or SQLETCH_DSN).
 package main
 
-//go:generate go run github.com/moznion/sqletch/cmd/sqletch generate --config sqletch.yaml
+//go:generate go run github.com/moznion/go-sqletch/cmd/sqletch generate --config sqletch.yaml
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	gen "github.com/moznion/sqletch/examples/postgres/gen"
+	gen "github.com/moznion/go-sqletch/examples/postgres/gen"
 )
 
 func main() {

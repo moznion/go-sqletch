@@ -9,7 +9,7 @@ import (
 	pgparser "github.com/pganalyze/pg_query_go/v6/parser"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Frontend is the pg_query-backed grammar frontend (design 02 §3).

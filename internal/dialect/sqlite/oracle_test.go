@@ -7,7 +7,7 @@ import (
 
 	sqlite3 "github.com/ncruces/go-sqlite3"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 func testConn(t *testing.T) *sqlite3.Conn {

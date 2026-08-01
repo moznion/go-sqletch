@@ -3,7 +3,7 @@ package mysql
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // lexAll tokenizes src fully, failing the test on lex errors.

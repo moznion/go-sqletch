@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 // bt spells backquotes as '~' so fixtures can nest raw literals.

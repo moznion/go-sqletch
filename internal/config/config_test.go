@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 const validYAML = `version: 1

@@ -12,7 +12,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	gen "github.com/moznion/sqletch/examples/mysql/gen"
+	gen "github.com/moznion/go-sqletch/examples/mysql/gen"
 )
 
 func main() {

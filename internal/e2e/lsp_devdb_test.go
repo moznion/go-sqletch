@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moznion/sqletch/internal/cli"
-	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/devdb"
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/cli"
+	"github.com/moznion/go-sqletch/internal/config"
+	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 const lspSchema = `

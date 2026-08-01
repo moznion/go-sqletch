@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/moznion/sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/cache"
 )
 
 // TypeRef identifies a database type.

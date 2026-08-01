@@ -13,7 +13,7 @@ import (
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 
-	gen "github.com/moznion/sqletch/examples/sqlite/gen"
+	gen "github.com/moznion/go-sqletch/examples/sqlite/gen"
 )
 
 func main() {

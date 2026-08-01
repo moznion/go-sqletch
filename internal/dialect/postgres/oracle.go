@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Oracle is the server-backed PostgreSQL type oracle: it lets the

@@ -8,8 +8,8 @@ import (
 
 	sqlite3 "github.com/ncruces/go-sqlite3"
 
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Oracle is the sqlite3_prepare-backed type oracle over the in-process

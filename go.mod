@@ -1,4 +1,4 @@
-module github.com/moznion/sqletch
+module github.com/moznion/go-sqletch
 
 go 1.27rc2
 

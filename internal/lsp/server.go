@@ -8,8 +8,8 @@ import (
 	"log"
 	"sort"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // Workspace is the analysis seam: internal/cli injects its

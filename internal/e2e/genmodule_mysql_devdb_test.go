@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moznion/sqletch/internal/cli"
-	"github.com/moznion/sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/cli"
+	"github.com/moznion/go-sqletch/internal/devdb"
 )
 
 // TestMySQLCLIAndGeneratedModule is the MySQL full loop: the real CLI
@@ -124,8 +124,8 @@ cache:
 	}
 	goMod := "module sqletchgen\n\ngo 1.24\n\nrequire (\n" +
 		"\tgithub.com/go-sql-driver/mysql " + drvVer[1] + "\n" +
-		"\tgithub.com/moznion/sqletch v0.0.0\n)\n\n" +
-		"replace github.com/moznion/sqletch => " + repoRoot + "\n"
+		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
+		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	sqletchruntime "github.com/moznion/sqletch/runtime"
+	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
 	gen "sqletchgen/gen"
 )

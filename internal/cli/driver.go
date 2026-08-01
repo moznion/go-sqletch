@@ -4,13 +4,13 @@ import (
 	"context"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/devdb"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/mysql"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/dialect/sqlite"
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/internal/config"
+	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // driver bundles the per-dialect components the pipeline dispatches

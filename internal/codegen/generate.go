@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/template"
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
-const runtimeImport = "github.com/moznion/sqletch/runtime"
+const runtimeImport = "github.com/moznion/go-sqletch/runtime"
 
 // QueryInput is everything codegen needs for one query, produced by
 // the earlier pipeline phases.
@@ -723,7 +723,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // DBTX matches sqlc's pgx flavor: a pgx.Conn, pgxpool.Pool, or pgx.Tx
@@ -779,7 +779,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // DBTX matches sqlc's database/sql flavor: a *sql.DB or *sql.Tx

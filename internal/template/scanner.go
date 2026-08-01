@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Scanner turns template source into QueryFiles. It is construct-

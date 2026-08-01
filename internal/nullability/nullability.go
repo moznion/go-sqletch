@@ -9,10 +9,10 @@
 package nullability
 
 import (
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // funcWhitelist lists functions whose bare top-level call is total

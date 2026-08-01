@@ -3,10 +3,10 @@ package rules
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/sqlite"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // checkSQLite runs the offline rule chain under the SQLite dialect.

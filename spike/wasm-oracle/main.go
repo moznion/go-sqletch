@@ -39,7 +39,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 
-	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 )
 
 const bundleURL = "https://raw.githubusercontent.com/electric-sql/pglite-bindings/main/16.x/pglite-wasi.tar.gz"

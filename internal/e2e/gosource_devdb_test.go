@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moznion/sqletch/internal/cli"
+	"github.com/moznion/go-sqletch/internal/cli"
 )
 
 // TestGoSourceInputEquivalence is the contract of docs/design/13:

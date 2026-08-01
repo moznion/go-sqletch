@@ -15,7 +15,7 @@ import (
 	// restricted type support is irrelevant.
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Frontend is the TiDB-parser-backed grammar frontend for MySQL.

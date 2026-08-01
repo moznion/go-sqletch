@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/shape"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/config"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/shape"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // Exit codes (design 07 §2): 0 ok, 1 diagnostics, 2 environment.

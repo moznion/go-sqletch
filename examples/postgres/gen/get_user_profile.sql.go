@@ -5,7 +5,7 @@ package gen
 import (
 	"context"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 type GetUserProfileParams struct {

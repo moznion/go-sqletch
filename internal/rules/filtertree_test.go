@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/codegen"
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/template"
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/codegen"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/template"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 const filterTemplate = `-- name: ListOrders :many

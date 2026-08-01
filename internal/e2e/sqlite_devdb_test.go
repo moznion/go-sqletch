@@ -9,13 +9,13 @@ import (
 
 	sqlite3 "github.com/ncruces/go-sqlite3"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/devdb"
-	"github.com/moznion/sqletch/internal/dialect/sqlite"
-	"github.com/moznion/sqletch/internal/nullability"
-	"github.com/moznion/sqletch/internal/rules"
-	"github.com/moznion/sqletch/internal/shape"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/internal/nullability"
+	"github.com/moznion/go-sqletch/internal/rules"
+	"github.com/moznion/go-sqletch/internal/shape"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 const sqliteSchemaSQL = `

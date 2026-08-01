@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 // useCase2 is the spec's partial-UPDATE example (Use Case 2).

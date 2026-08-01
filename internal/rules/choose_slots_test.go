@@ -3,14 +3,14 @@ package rules
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/nullability"
-	"github.com/moznion/sqletch/internal/shape"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/nullability"
+	"github.com/moznion/go-sqletch/internal/shape"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // Spec Use Case 4: @choose in a projection slot; the

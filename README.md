@@ -174,10 +174,10 @@ output:
   package: gen
   path: gen
 
-$ go run github.com/moznion/sqletch/cmd/sqletch generate
+$ go run github.com/moznion/go-sqletch/cmd/sqletch generate
 sqletch: 3 queries ok (oracle cache: 0 hits, 6 misses; offline: no)
 
-$ go run github.com/moznion/sqletch/cmd/sqletch check   # warm: no DB needed
+$ go run github.com/moznion/go-sqletch/cmd/sqletch check   # warm: no DB needed
 sqletch: 3 queries ok (oracle cache: 6 hits, 0 misses; offline: yes)
 ```
 

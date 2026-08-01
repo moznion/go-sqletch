@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/mysql"
-	"github.com/moznion/sqletch/internal/dialect/sqlite"
-	"github.com/moznion/sqletch/internal/shape"
-	"github.com/moznion/sqletch/internal/template"
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/internal/shape"
+	"github.com/moznion/go-sqletch/internal/template"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 const inListTemplate = `-- name: UsersInStatuses :many

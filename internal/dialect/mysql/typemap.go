@@ -3,7 +3,7 @@ package mysql
 import (
 	"strings"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // MySQL has no OIDs; dialect.TypeRef.OID carries the wire-protocol

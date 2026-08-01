@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 type ListUsersSortedSortKey int

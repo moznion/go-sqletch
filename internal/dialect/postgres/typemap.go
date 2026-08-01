@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // TypeMap maps PostgreSQL type OIDs to Go types for generated code.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 // The `--json` stream is a machine contract consumed by editors, so its

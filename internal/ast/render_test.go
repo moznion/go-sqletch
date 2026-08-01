@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 const useCase1 = `-- name: SearchUsers :many

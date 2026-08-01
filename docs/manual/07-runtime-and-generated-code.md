@@ -55,7 +55,7 @@ editing generated code.
 
 ## The runtime package
 
-`github.com/moznion/sqletch/runtime` has two faces (see its package
+`github.com/moznion/go-sqletch/runtime` has two faces (see its package
 doc, "API contract (v1)"):
 
 - **For you**: `Tree`, `And`/`Or`, the generated predicate

@@ -3,8 +3,8 @@ package template
 import (
 	"strings"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Format canonicalizes a template file: skeleton SQL is preserved

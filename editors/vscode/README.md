@@ -1,6 +1,6 @@
 # sqletch for Visual Studio Code
 
-Editor support for [sqletch](https://github.com/moznion/sqletch) SQL
+Editor support for [sqletch](https://github.com/moznion/go-sqletch) SQL
 templates:
 
 - **Construct highlighting** via a TextMate injection grammar layered

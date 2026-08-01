@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moznion/sqletch/internal/cli"
+	"github.com/moznion/go-sqletch/internal/cli"
 )
 
 // TestSQLiteCLIAndGeneratedModule is the SQLite full loop — with no
@@ -120,8 +120,8 @@ cache:
 	}
 	goMod := "module sqletchgen\n\ngo 1.24\n\nrequire (\n" +
 		"\tgithub.com/ncruces/go-sqlite3 " + drvVer[1] + "\n" +
-		"\tgithub.com/moznion/sqletch v0.0.0\n)\n\n" +
-		"replace github.com/moznion/sqletch => " + repoRoot + "\n"
+		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
+		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
 
-	sqletchruntime "github.com/moznion/sqletch/runtime"
+	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
 	gen "sqletchgen/gen"
 )

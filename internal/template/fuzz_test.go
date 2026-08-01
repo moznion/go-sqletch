@@ -3,10 +3,10 @@ package template
 import (
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/dialect/mysql"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
-	"github.com/moznion/sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
 )
 
 // fuzzProfiles are every lexer profile the scanner ships. Each input is

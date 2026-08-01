@@ -19,4 +19,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/moznion/sqletch
+        - github.com/moznion/go-sqletch

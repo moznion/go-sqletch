@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/ast"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // Key identifies one concrete shape.

@@ -25,7 +25,7 @@ oracle; P5–P7 complete the v0.1 pipeline.
 
 ## Toolchain and dependencies
 
-- Go ≥ 1.24, module `github.com/moznion/sqletch`.
+- Go ≥ 1.24, module `github.com/moznion/go-sqletch`.
 - `github.com/pganalyze/pg_query_go/v6` — PostgreSQL parser (parse +
   scan/lexer APIs). Used by the postgres dialect driver only.
 - `github.com/jackc/pgx/v5` — PostgreSQL protocol (Prepare/Describe

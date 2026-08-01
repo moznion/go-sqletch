@@ -6,7 +6,7 @@ import (
 
 	rsql "github.com/rqlite/sql"
 
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Frontend is the rqlite/sql-backed grammar frontend for SQLite: a

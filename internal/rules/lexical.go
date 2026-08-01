@@ -4,9 +4,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect"
-	"github.com/moznion/sqletch/internal/template"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // CheckLexical runs the catalog-free rule pass: R6 (anchored clauses)

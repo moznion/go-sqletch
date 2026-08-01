@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 )
 
 func format(t *testing.T, src string) string {

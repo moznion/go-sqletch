@@ -9,8 +9,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 
-	"github.com/moznion/sqletch/internal/cache"
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // Oracle is the COM_STMT_PREPARE-backed type oracle. Preparing never

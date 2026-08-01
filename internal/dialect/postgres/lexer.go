@@ -3,7 +3,7 @@
 package postgres
 
 import (
-	"github.com/moznion/sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 type Profile struct{}

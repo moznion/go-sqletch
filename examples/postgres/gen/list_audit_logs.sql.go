@@ -6,7 +6,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 type ListAuditLogsParams struct {

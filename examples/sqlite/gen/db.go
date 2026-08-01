@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // DBTX matches sqlc's database/sql flavor: a *sql.DB or *sql.Tx

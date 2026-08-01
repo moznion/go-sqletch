@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/moznion/sqletch/internal/config"
-	"github.com/moznion/sqletch/internal/lsp"
+	"github.com/moznion/go-sqletch/internal/config"
+	"github.com/moznion/go-sqletch/internal/lsp"
 )
 
 // LSP implements `sqletch lsp`: the language server of

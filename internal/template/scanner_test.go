@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moznion/sqletch/internal/diagnostics"
-	"github.com/moznion/sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 )
 
 func scan(t *testing.T, src string) (*QueryFile, []diagnostics.Diagnostic) {

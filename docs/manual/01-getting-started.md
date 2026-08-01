@@ -8,7 +8,7 @@ but deterministic concatenation of pre-verified constant fragments.
 ## Install
 
 ```console
-$ go install github.com/moznion/sqletch/cmd/sqletch@latest
+$ go install github.com/moznion/go-sqletch/cmd/sqletch@latest
 ```
 
 ## Project layout

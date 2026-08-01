@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/moznion/sqletch/runtime"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 type SearchUsersSort int

@@ -10,8 +10,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
-	"github.com/moznion/sqletch/internal/dialect"
-	mysqldialect "github.com/moznion/sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	mysqldialect "github.com/moznion/go-sqletch/internal/dialect/mysql"
 )
 
 // AcquireMySQLDSN is AcquireMySQL for callers that need to hand the
