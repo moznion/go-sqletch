@@ -20,13 +20,13 @@ authored the sqlc way.**
 
 ## The problem
 
-Every sqlc user eventually hits the same wall: a search screen with
-optional filters. The escape hatches are all bad —
+Every sqlc user eventually reaches the same question: a search screen
+with optional filters. The usual answers all carry a real cost —
 
 - `WHERE (:status IS NULL OR u.status = :status)` pessimizes the query
   plan for *every* caller, and
-- runtime query builders (squirrel, goqu, …) throw away static
-  verification entirely.
+- runtime query builders (squirrel, goqu, …) trade away static
+  verification.
 
 sqletch is the third option: conditional SQL that stays statically
 verified.
@@ -120,10 +120,41 @@ builds run **fully offline**.
 | GORM / Ent (ORMs)            | ✗         | ✓               | partial             |
 | **sqletch**                  | ✓         | ✓               | ✓                   |
 
-sqletch deliberately does **not** replace sqlc — it uses the same
-authoring conventions (`-- name:` headers, `DBTX`/`Queries`/`WithTx`)
-so both generators coexist in one codebase and one transaction. Keep
-your static queries in sqlc; move the conditional ones to sqletch.
+Each of these tools is excellent at what it set out to do; sqletch
+aims at the one cell none of them targets, and holding it is what the
+design buys you:
+
+- **Verification scales with the template, not with the shape count.**
+  Adding an optional filter doubles the reachable shapes and adds one
+  conjunct to check.
+- **Types come from the database itself.** Parameter and result types
+  are whatever `PREPARE` / `Describe` answered, cached in your
+  repository so CI never opens a connection.
+- **What was verified is byte-for-byte what runs**, pinned by a
+  conformance test over every shape and every bind position — and
+  values travel exclusively through bind parameters, so SQL injection
+  is impossible by construction.
+- **One row type for every shape.** Result columns, names, types, and
+  nullability are identical across all reachable shapes, and
+  nullability never narrows because a guarded join happens to be
+  active — the analysis only claims non-null when it holds in *all* of
+  them.
+- **Plans are checked, not just syntax.** Each shape is a plain static
+  query with its own optimal plan and its own prepared statement — no
+  `IS NULL OR` idiom pessimizing every caller — and
+  `check --exhaustive` prepares and `EXPLAIN`s every one of them.
+- **Builder-grade composition stays typed.** `@filter-tree` accepts
+  filters composed across layer boundaries, and `@order-by`
+  multi-key sorts, from a closed vocabulary fixed at compile time.
+- **The editor sees the same compiler.** `sqletch lsp` reports the
+  same `SQLETCHnnn` diagnostics as `check` while you type, without
+  ever opening a database.
+
+sqlc is a great tool, and sqletch deliberately does **not** replace it
+— sqletch owes it the whole authoring model and uses the same
+conventions (`-- name:` headers, `DBTX`/`Queries`/`WithTx`) so both
+generators coexist in one codebase and one transaction. Keep your
+static queries in sqlc; move the conditional ones to sqletch.
 
 ## Quick start
 
