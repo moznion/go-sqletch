@@ -523,3 +523,27 @@ func itoa(i int) string {
 	}
 	return string(digits)
 }
+
+// Diagnostic spans are indexed into the source by the excerpt renderer
+// and by the LSP's UTF-16 position conversion, so they must stay within
+// bounds even when the construct that triggered them ends at EOF. The
+// "empty body" diagnostics point at the character *after* the marker,
+// which does not exist there. Found by FuzzScan; the corpus entry under
+// testdata/fuzz/FuzzScan pins the exact input.
+func TestScan_DiagnosticSpansStayInBounds(t *testing.T) {
+	// Each input ends exactly where a construct wants to point one past.
+	inputs := []string{
+		"--name:A :many\n@order-by(A)@key(A)",
+		"-- name: A :many\nSELECT 1 FROM t WHERE TRUE\n  AND @filter-tree(s)\n@predicate(a)",
+		"-- name: A :many\n@choose(s)@case(a)",
+		"-- name: A :many\n@order-by(s)\n@key(a)",
+	}
+	for _, src := range inputs {
+		_, diags := scan(t, src)
+		for _, d := range diags {
+			if d.Span.Start < 0 || d.Span.End < d.Span.Start || d.Span.End > len(src) {
+				t.Errorf("%q: %s span %+v out of bounds (len %d)", src, d.Code, d.Span, len(src))
+			}
+		}
+	}
+}

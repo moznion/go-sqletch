@@ -129,7 +129,27 @@ func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.D
 	return file, fs.diags
 }
 
+// span builds a file span, clamped to the source bounds. Several call
+// sites point at "the character after X" (`fs.span(p, p+1)`) to mark an
+// empty body; when X ends at EOF there is no such character and the
+// naive span runs one past the end. Consumers index the source with
+// these — the excerpt renderer, and the LSP's UTF-16 position
+// conversion — so the clamp lives in the single constructor rather than
+// at each call site, making the in-bounds invariant structural.
 func (fs *fileScan) span(start, end int) diagnostics.Span {
+	n := len(fs.src)
+	if start > n {
+		start = n
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > n {
+		end = n
+	}
+	if end < start {
+		end = start
+	}
 	return diagnostics.Span{File: fs.path, Start: start, End: end}
 }
 

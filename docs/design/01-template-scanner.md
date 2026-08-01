@@ -173,6 +173,13 @@ fragments) but naturally share bits per atom.
   invented).
 - Every `Span` is within file bounds, non-overlapping, ordered.
 - No construct tokens remain inside any `Skeleton.Text` or `Body`.
+- **Diagnostic spans are in bounds too**, not just item spans. Several
+  "empty body" diagnostics point at the character *after* a marker
+  (`span(p, p+1)`); when the marker ends at EOF there is no such
+  character. Because consumers index the source with these spans — the
+  excerpt renderer, and the LSP's UTF-16 position conversion — the
+  clamp lives in `fileScan.span`, the single span constructor, making
+  the invariant structural rather than a per-call-site obligation.
 
 ## 10. Testing & acceptance criteria
 
@@ -185,7 +192,16 @@ fragments) but naturally share bits per atom.
   yields its documented diagnostic where the scanner is the detecting
   layer).
 - Fuzz test: `FuzzScan` must never panic and must uphold the §9
-  reconstruction invariant on arbitrary input that scans successfully.
+  invariants on arbitrary input — item-span contiguity on input that
+  scans successfully, and in-bounds diagnostic spans (plus a panic-free
+  `RenderExcerpt`, whose caret geometry does rune arithmetic over bytes
+  that need not be valid UTF-8) on input that does not. It runs **every
+  lexer profile** per input: the quoting rules are what differ between
+  dialects (dollar quoting, backticks, bracket quoting) and are exactly
+  where a scanner mis-tracks state, so a postgres-only target left two
+  of the three unexercised. Crashing inputs are committed under
+  `testdata/fuzz/FuzzScan/` to pin the regression; CI uploads any it
+  finds as an artifact, since the runner's copy is otherwise discarded.
 - Acceptance: all Use Case 1/3 templates scan into the expected
   structure; diagnostics carry correct spans (verified by golden
   `.diag` files rendering file excerpts).
