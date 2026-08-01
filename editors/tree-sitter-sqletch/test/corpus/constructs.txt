@@ -1,0 +1,287 @@
+==================
+header and guarded conjunct
+==================
+
+-- name: SearchUsers :many
+SELECT u.id FROM users AS u
+WHERE TRUE
+@if-present(status)
+  AND u.status = :status
+@endif
+;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (if_present_block
+    (parameter_list
+      (parameter))
+    (sql_token)
+    (sql_token)
+    (sql_token)
+    (param_ref))
+  (sql_token))
+
+==================
+when block with literal
+==================
+
+-- name: T :many
+SELECT 1 FROM t
+WHERE TRUE
+@when(include_cron = false)
+  AND t.actor_id IS NOT NULL
+@end
+;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (when_block
+    (parameter)
+    (comparison)
+    (literal)
+    (sql_token)
+    (sql_token)
+    (sql_token)
+    (sql_token)
+    (sql_token))
+  (sql_token))
+
+==================
+choose with cases and default
+==================
+
+-- name: S :many
+SELECT u.id FROM users AS u
+@choose(sort)
+@case(email_asc)
+ORDER BY u.email ASC
+@default
+ORDER BY u.id ASC
+@end
+LIMIT :limit;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (choose_block
+    (parameter)
+    (case_clause
+      (case_name)
+      (sql_token)
+      (sql_token)
+      (sql_token)
+      (sql_token))
+    (default_clause
+      (sql_token)
+      (sql_token)
+      (sql_token)
+      (sql_token)))
+  (sql_token)
+  (param_ref)
+  (sql_token))
+
+==================
+order-by with keys
+==================
+
+-- name: O :many
+SELECT u.id FROM u
+WHERE TRUE
+@order-by(sort)
+@key(created_at)
+u.created_at
+@key(email)
+u.email
+@default
+ORDER BY u.id ASC
+@end
+;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (order_by_block
+    (parameter)
+    (key_clause
+      (key_name)
+      (sql_token))
+    (key_clause
+      (key_name)
+      (sql_token))
+    (default_clause
+      (sql_token)
+      (sql_token)
+      (sql_token)
+      (sql_token)))
+  (sql_token))
+
+==================
+filter tree required with directives
+==================
+
+-- name: F :many
+-- @param scope_tenant_id: integer
+-- @column n: integer
+SELECT count(*) AS n
+FROM users AS u
+WHERE TRUE
+  AND @filter-tree!(scope)
+@predicate(tenant)
+u.tenant_id = :scope_tenant_id
+@end
+;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (param_directive
+    (directive_marker)
+    (parameter)
+    (type_name))
+  (column_directive
+    (directive_marker)
+    (column_name)
+    (type_name))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (filter_tree_block
+    (parameter)
+    (predicate_clause
+      (predicate_name)
+      (sql_token)
+      (sql_token)
+      (param_ref)))
+  (sql_token))
+
+==================
+in expression and multi guard
+==================
+
+-- name: I :many
+SELECT u.id FROM users AS u
+WHERE u.status @in(:statuses)
+@if-present(a, b)
+  AND u.a = :a AND u.b = :b
+@endif
+;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (in_expr
+    (param_ref))
+  (if_present_block
+    (parameter_list
+      (parameter)
+      (parameter))
+    (sql_token)
+    (sql_token)
+    (sql_token)
+    (param_ref)
+    (sql_token)
+    (sql_token)
+    (sql_token)
+    (param_ref))
+  (sql_token))
+
+==================
+adversarial: constructs inside strings and comments stay opaque
+==================
+
+-- name: A :many
+-- a comment with @if-present and :fake
+SELECT '@when(x = 1)', ':param', "quo""ted @end"
+FROM t /* block @endif :nope */
+WHERE t.v = :real;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (comment)
+  (sql_token)
+  (string)
+  (sql_token)
+  (string)
+  (sql_token)
+  (quoted_ident)
+  (sql_token)
+  (sql_token)
+  (block_comment)
+  (sql_token)
+  (sql_token)
+  (sql_token)
+  (param_ref)
+  (sql_token))

@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "sqletch",
+      "scope": "source.sqletch",
+      "injection-regex": "^sqletch$",
+      "file-types": ["sql"],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "tree-sitter grammar for sqletch SQL templates",
+    "links": {
+      "repository": "https://github.com/moznion/sqletch"
+    }
+  }
+}

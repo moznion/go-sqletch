@@ -1,0 +1,32 @@
+{
+  "name": "tree-sitter-sqletch",
+  "version": "0.1.0",
+  "description": "tree-sitter grammar for sqletch SQL templates",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moznion/sqletch"
+  },
+  "main": "bindings/node",
+  "keywords": [
+    "tree-sitter",
+    "sqletch",
+    "sql"
+  ],
+  "files": [
+    "grammar.js",
+    "queries/*",
+    "src/**"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.sqletch",
+      "file-types": [
+        "sql"
+      ],
+      "injection-regex": "^sqletch$",
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
+    }
+  ]
+}
