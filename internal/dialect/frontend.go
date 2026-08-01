@@ -52,12 +52,30 @@ const (
 	StmtDelete
 )
 
+// ColRef is one column reference anywhere in the statement.
+type ColRef struct {
+	Fields     []string // qualified parts, e.g. ["u", "id"] or ["id"]
+	Star       bool     // reference ends in * (e.g. u.*)
+	Loc        int      // byte offset in the parsed SQL
+	InSubquery bool     // inside a sublink/derived table/CTE scope
+}
+
+// TargetItem is one projection entry.
+type TargetItem struct {
+	Name      string // output alias ("" if none)
+	Star      bool   // item is * or qualifier.*
+	Qualifier string // "u" for u.*; "" for bare *
+	Loc       int
+}
+
 // Tree is the narrow dialect-AST facade the rules engine consumes.
 // Deliberately minimal: extending it is a compile-visible act.
 type Tree interface {
 	StmtCount() int
 	Kind() StmtKind
 	Relations() []RelRef
+	ColumnRefs() []ColRef
+	TargetItems() []TargetItem
 	// TopConjunctLocs returns the byte locations of the statement's
 	// top-level WHERE conjuncts (AND-flattened).
 	TopConjunctLocs() []int

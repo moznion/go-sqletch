@@ -114,8 +114,12 @@ type Param struct {
 	Name        string
 	Occurrences []Occurrence
 	// GuardBit is set iff the param is used as a presence-guard atom;
-	// -1 otherwise. Optionality classification happens in P3 (R9).
+	// -1 otherwise.
 	GuardBit int
+	// Optional is filled by the R9 classification (rules.CheckLexical):
+	// true iff every bind appearance lies in fragments guarded by this
+	// parameter — a pointer field in the generated params struct.
+	Optional bool
 }
 
 type QueryTemplate struct {

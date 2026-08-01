@@ -62,6 +62,15 @@ const (
 	CodeJoinTypeForbidden Code = "SQLETCH101" // optional join not INNER/LEFT (R2)
 	CodeNodeIncomplete    Code = "SQLETCH102" // fragment is not one complete node (R1)
 	CodeNotSingleDML      Code = "SQLETCH103" // not exactly one SELECT/UPDATE/INSERT/DELETE
+
+	CodeVacuousGuard     Code = "SQLETCH110" // required param used as guard (R9)
+	CodeGuardNeverBinds  Code = "SQLETCH111" // guard param binds nowhere under itself (R9)
+	CodeChooseParamBinds Code = "SQLETCH112" // @choose control param used as :name (R9)
+	CodeUnanchoredClause Code = "SQLETCH113" // all conjuncts optional, no anchor (R6)
+	CodeAmbiguousRef     Code = "SQLETCH114" // unqualified ref matches several relations
+	CodeScopeViolation   Code = "SQLETCH115" // reference into optional join w/o guard (R3)
+	CodePlannerSensitive Code = "SQLETCH116" // e.g. FOR UPDATE + optional LEFT JOIN
+	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
 )
 
 type Diagnostic struct {

@@ -127,6 +127,35 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 // case selection. This is the reference implementation of premise P2's
 // emission algorithm.
 func Render(profile dialect.LexerProfile, q *template.QueryTemplate, sel CaseSelection) (Rendering, error) {
+	return renderCore(profile, q, func(*template.IfPresent) bool { return true }, sel)
+}
+
+// RenderShape emits the SQL of one concrete shape: an @if-present
+// fragment is active iff every one of its guard atoms' bits is set in
+// guardMask (bit order = q.GuardAtoms). Used by shape enumeration,
+// `check --exhaustive`, and the property test.
+func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
+	guardMask uint64, sel CaseSelection) (Rendering, error) {
+
+	bit := map[template.GuardAtom]int{}
+	for i, g := range q.GuardAtoms {
+		bit[g] = i
+	}
+	active := func(v *template.IfPresent) bool {
+		for _, g := range v.Guards {
+			b, ok := bit[g]
+			if !ok || guardMask&(1<<uint(b)) == 0 {
+				return false
+			}
+		}
+		return true
+	}
+	return renderCore(profile, q, active, sel)
+}
+
+func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
+	active func(*template.IfPresent) bool, sel CaseSelection) (Rendering, error) {
+
 	r := &renderer{profile: profile, paramNum: map[string]int{}}
 	chooseIdx := 0
 	for _, it := range q.Items {
@@ -136,6 +165,9 @@ func Render(profile dialect.LexerProfile, q *template.QueryTemplate, sel CaseSel
 				return Rendering{}, err
 			}
 		case *template.IfPresent:
+			if !active(v) {
+				continue
+			}
 			r.emitSynth("\n", v.Span.Start)
 			fragStart := r.len()
 			if v.Sep == template.SepAnd {

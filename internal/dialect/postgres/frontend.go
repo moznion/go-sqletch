@@ -7,6 +7,7 @@ import (
 
 	pgquery "github.com/pganalyze/pg_query_go/v6"
 	pgparser "github.com/pganalyze/pg_query_go/v6/parser"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/moznion/sqletch/internal/dialect"
 )
@@ -229,6 +230,82 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, out *[]dialect.R
 		}
 		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join})
 	}
+}
+
+// ColumnRefs walks the whole statement (protobuf reflection) and
+// collects every ColumnRef, marking those inside subquery scopes
+// (SubLink, derived tables, CTEs) — the resolver treats those
+// conservatively (design 03 §6).
+func (t *tree) ColumnRefs() []dialect.ColRef {
+	n := t.stmt()
+	if n == nil {
+		return nil
+	}
+	var out []dialect.ColRef
+	collectColRefs(n.ProtoReflect(), false, &out)
+	return out
+}
+
+func collectColRefs(m protoreflect.Message, inSub bool, out *[]dialect.ColRef) {
+	switch v := m.Interface().(type) {
+	case *pgquery.ColumnRef:
+		cr := dialect.ColRef{Loc: int(v.Location), InSubquery: inSub}
+		for _, f := range v.Fields {
+			if s := f.GetString_(); s != nil {
+				cr.Fields = append(cr.Fields, s.Sval)
+			}
+			if f.GetAStar() != nil {
+				cr.Star = true
+			}
+		}
+		*out = append(*out, cr)
+		return
+	case *pgquery.SubLink, *pgquery.RangeSubselect, *pgquery.CommonTableExpr:
+		inSub = true
+	}
+	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+		switch {
+		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+			l := val.List()
+			for i := 0; i < l.Len(); i++ {
+				collectColRefs(l.Get(i).Message(), inSub, out)
+			}
+		case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
+			collectColRefs(val.Message(), inSub, out)
+		}
+		return true
+	})
+}
+
+func (t *tree) TargetItems() []dialect.TargetItem {
+	sel := t.sel()
+	if sel == nil {
+		return nil
+	}
+	var out []dialect.TargetItem
+	for _, n := range sel.TargetList {
+		rt := n.GetResTarget()
+		if rt == nil {
+			continue
+		}
+		item := dialect.TargetItem{Name: rt.Name, Loc: int(rt.Location)}
+		if cr := rt.Val.GetColumnRef(); cr != nil {
+			var quals []string
+			for _, f := range cr.Fields {
+				if s := f.GetString_(); s != nil {
+					quals = append(quals, s.Sval)
+				}
+				if f.GetAStar() != nil {
+					item.Star = true
+				}
+			}
+			if item.Star && len(quals) > 0 {
+				item.Qualifier = quals[len(quals)-1]
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (t *tree) TopConjunctLocs() []int {
