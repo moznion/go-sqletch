@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"runtime/pprof"
 	"strings"
 	"testing"
 
@@ -253,6 +254,47 @@ func TestServer_DegradedConfigFailure(t *testing.T) {
 		"textDocument": map[string]any{"uri": pathToURI("/x.sql"), "languageId": "sql", "version": 1, "text": "BAD"},
 	})
 	tc.shutdownExit(0)
+}
+
+// assertNoGoroutineLeaks pins the server's exit paths with the
+// runtime's goroutine-leak profile (stable since Go 1.27): collecting
+// it runs a GC reachability analysis, so a Serve goroutine still
+// blocked on an unreachable primitive is reported here, not just as a
+// hung test elsewhere.
+func assertNoGoroutineLeaks(t *testing.T) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := pprof.Lookup("goroutineleak").WriteTo(&buf, 1); err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(buf.String(), "\n")
+	if !strings.HasSuffix(first, "total 0") {
+		t.Errorf("goroutine leak profile:\n%s", buf.String())
+	}
+}
+
+func TestServer_ExitPathsLeakNoGoroutines(t *testing.T) {
+	// Orderly lifecycle: initialize → didOpen → shutdown → exit.
+	tc := startServer(t, &fakeWS{}, "")
+	tc.initialize()
+	tc.notify("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{"uri": pathToURI("/ws/q.sql"), "languageId": "sql", "version": 1, "text": "ok"},
+	})
+	tc.readNotification()
+	tc.shutdownExit(0)
+
+	// Abrupt disconnect: the client vanishes without shutdown (editor
+	// crash); Serve must return on the transport error, not block.
+	clientToServer, serverIn := io.Pipe()
+	_, serverToClient := io.Pipe()
+	done := make(chan int, 1)
+	go func() { done <- Serve(clientToServer, serverToClient, &fakeWS{}, "", io.Discard) }()
+	_ = serverIn.Close()
+	if code := <-done; code != 1 {
+		t.Errorf("abrupt disconnect must exit 1, got %d", code)
+	}
+
+	assertNoGoroutineLeaks(t)
 }
 
 const defTemplate = `-- name: FindT :many
