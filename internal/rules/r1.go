@@ -336,10 +336,12 @@ func probeMsg(err error) string {
 	return err.Error()
 }
 
-// rewriteParams replaces :name refs with $n placeholders so probe
-// inputs are valid dialect SQL. Numbering is per-occurrence; probe
-// checks are purely syntactic, so stable numbering is not required.
+// rewriteParams replaces :name refs with the dialect's placeholders
+// ($n or ?) so probe inputs are valid dialect SQL. Numbering is
+// per-occurrence; probe checks are purely syntactic, so stable
+// numbering is not required.
 func rewriteParams(profile dialect.LexerProfile, body string) string {
+	question := dialect.StyleOf(profile) == dialect.PlaceholderQuestion
 	src := []byte(body)
 	var b strings.Builder
 	pos, n := 0, 0
@@ -351,8 +353,12 @@ func rewriteParams(profile dialect.LexerProfile, body string) string {
 		}
 		if tok.Kind == dialect.KindParamRef {
 			b.Write(src[pos:tok.Start])
-			n++
-			fmt.Fprintf(&b, "$%d", n)
+			if question {
+				b.WriteByte('?')
+			} else {
+				n++
+				fmt.Fprintf(&b, "$%d", n)
+			}
 			pos = tok.End
 			continue
 		}
