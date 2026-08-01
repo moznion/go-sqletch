@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/moznion/sqletch/internal/cache"
 	"github.com/moznion/sqletch/internal/codegen"
 	"github.com/moznion/sqletch/internal/config"
+	"github.com/moznion/sqletch/internal/devdb"
 	"github.com/moznion/sqletch/internal/diagnostics"
 	"github.com/moznion/sqletch/internal/dialect"
 	"github.com/moznion/sqletch/internal/nullability"
@@ -43,6 +45,21 @@ type Result struct {
 	Offline     bool
 	QueryCount  int
 	ShapesTotal int // exhaustive mode: shapes verified against the DB
+}
+
+// versionPinDiag converts a dev-database version-pin mismatch into
+// SQLETCH200. It is a user mistake in sqletch.yaml, not an environment
+// failure, so it belongs in the diagnostic stream — coded, attached to
+// the config file, and carried by `--format json` to editors.
+func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
+	var vme *devdb.VersionMismatchError
+	if !errors.As(err, &vme) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodeServerVersionMismatch,
+		diagnostics.Span{File: cfg.Path}, "%v", vme)
+	d.Hint = fmt.Sprintf("set `server_version: \"%s\"`, or point database.dsn at a matching server", vme.Actual)
+	return d, true
 }
 
 type compiledQuery struct {
@@ -163,6 +180,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	if !haveCat || len(misses) > 0 {
 		o, err := acquireOracle()
+		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -214,6 +235,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	// ---- exhaustive: prepare + plan every shape -------------------------
 	if mode == ModeCheckExhaustive {
 		o, err := acquireOracle()
+		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
 		if err != nil {
 			return nil, err
 		}

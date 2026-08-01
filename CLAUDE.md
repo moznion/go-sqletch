@@ -159,8 +159,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   need `-- @param` like MySQL. Affinity mapping has BOOLEAN/date-time
   carve-outs. @in arity-0 emission is per-dialect via Frag.Text /
   dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
-  is a file path, reset = drop all tables/views, version pin compares
-  dotted prefix ("3.50" vs "3.50.x").
+  is a file path resolved config-relative via `cli.sqliteDSNPath`
+  (`:memory:` and `file:` URIs pass through), reset = drop all
+  tables/views, version pin compares dotted prefix ("3.50" vs
+  "3.50.x").
+- Version-pin mismatch is a DIAGNOSTIC, not an environment error:
+  `devdb.VersionMismatchError` (which names its own engine — it is
+  shared by all three dialects) maps to SQLETCH200 against
+  `config.Config.Path` via `cli.versionPinDiag`, in both pipeline.Run
+  and explain --analyze. Exit 1, and it reaches `--format json`/LSP.
 - Embedded-PG WASM spike (docs/design/09, harness spike/wasm-oracle):
   feasible — unmodified pgx oracle over libpglite WASI PG 16.6 under
   wazero, warm cold-start 1.7s. NOT shipped: today's build aborts the

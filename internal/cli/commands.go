@@ -226,6 +226,11 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		schemaSQL = append(schemaSQL, string(content))
 	}
 	o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
+	if d, ok := versionPinDiag(cfg, err); ok {
+		// Same user mistake, same code, whichever command hits it.
+		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
+		return ExitDiagnostics
+	}
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
 		return ExitEnvironment

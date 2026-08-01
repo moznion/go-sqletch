@@ -48,7 +48,7 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 		}
 		if !versionPrefixMatch(cfg.ServerVersion, actual) {
 			closeAll()
-			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual}
+			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual, Server: "SQLite"}
 		}
 	}
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 
 	"github.com/moznion/sqletch/internal/config"
 	"github.com/moznion/sqletch/internal/devdb"
@@ -37,6 +38,22 @@ type driver struct {
 	acquire             func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error)
 }
 
+// sqliteDSNPath resolves `database.dsn` for SQLite, where the DSN is a
+// database FILE PATH rather than a URL. Relative paths resolve against
+// the config directory like every other path in sqletch.yaml
+// (config.Config.Dir's invariant) — otherwise the dev database would
+// follow the caller's working directory, so `--config ../x/sqletch.yaml`
+// and a `//go:generate` one level down would silently use different
+// files. The URI spellings SQLite accepts are not paths and pass
+// through untouched.
+func sqliteDSNPath(cfg config.Config) string {
+	dsn := cfg.Database.DSN
+	if dsn == "" || dsn == ":memory:" || strings.HasPrefix(dsn, "file:") {
+		return dsn
+	}
+	return cfg.Abs(dsn)
+}
+
 // planTexter is the optional oracle capability behind explain
 // --analyze; both shipped oracles implement it.
 type planTexter interface {
@@ -56,7 +73,7 @@ func driverFor(cfg config.Config) driver {
 			columnHintsRequired: true,
 			acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
 				conn, cleanup, err := devdb.AcquireSQLite(ctx, devdb.Config{
-					DSN:           cfg.Database.DSN,
+					DSN:           sqliteDSNPath(cfg),
 					ServerVersion: cfg.ServerVersion,
 					SchemaSQL:     schemaSQL,
 				})
