@@ -13,7 +13,7 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v0.3, experimental.** PostgreSQL only. The template
+> **Status: v0.4, experimental.** PostgreSQL and MySQL. The template
 > language and generated API may change before 1.0.
 
 ## The problem
@@ -179,8 +179,11 @@ design is under [docs/design/](docs/design/).
   `@filter-tree` (typed, composable filters across layer boundaries —
   with a required mode for multi-tenant safety), `@order-by` multi-key
   sorting, `explain --analyze`
-- **v0.4** — MySQL/SQLite drivers, `@in`, embedded PostgreSQL oracle
-  (no Docker), editor support (LSP)
+- **v0.4 (in progress)** — shipped: `@in` (`= ANY` on PostgreSQL,
+  arity-expanded `IN (?, …)` on MySQL), `-- @param` type annotations,
+  and the MySQL driver (TiDB-parser frontend, COM_STMT_PREPARE oracle,
+  `database/sql` codegen). Remaining: SQLite driver, embedded
+  PostgreSQL oracle (no Docker), editor support (LSP)
 
 ## Development
 

@@ -115,8 +115,29 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - `@in(:param)`: v0.4-1 supports depth-0 WHERE/HAVING skeleton
   positions only; inside guarded bodies it is rejected with a
   diagnostic pointing at the PostgreSQL workaround (`= ANY(:param)`).
-  PG rendering is `= ANY($n)` — one static shape, no arity dimension;
-  arity expansion arrives with the MySQL/SQLite drivers.
+  PG rendering is `= ANY($n)` — one static shape, no arity dimension.
+- MySQL driver (Tier 2): placeholder style is a dialect property
+  (`dialect.PlaceholderStyle`); question style emits one '?' per
+  occurrence and repeats binds. @in arity is a shape-key dimension
+  (`;n=` segment); verification quotients arities to {non-empty≡1, 0}
+  because IN-list growth is parse-invariant; arity 0 renders
+  `IN (SELECT NULL FROM DUAL WHERE FALSE)` (FALSE even for NULL
+  operands, matching PG). Generated MySQL code uses database/sql,
+  GetBindsStyle + ResolveArgs (Bind.Elem selects slice elements).
+- TiDB parser: expression nodes carry byte offsets, relation nodes do
+  NOT — relation locations are recovered lexically (FROM-position
+  predecessors: FROM/JOIN/','/'('/'.'/INTO/UPDATE; subqueries skipped
+  whole). Parser needs the test_driver blank import.
+- MySQL oracle: COM_STMT_PREPARE column metadata is reliable
+  (org_table/org_name resolve to synthetic-OID catalog positions);
+  parameter slots are untyped — `-- @param` annotations are MANDATORY
+  for every bind parameter (control-only params exempt). Plan =
+  prepared `EXPLAIN` executed with all-NULL params (plans without
+  touching data). TypeRef.OID encodes wire type code + unsigned/binary
+  flag bits; TEXT vs BLOB splits on the binary charset (63).
+- go-mysql client: ExecuteMultiple hides per-statement errors (only
+  the callback sees them) — devdb splits schema SQL on top-level
+  semicolons via the lexer profile and executes one at a time.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

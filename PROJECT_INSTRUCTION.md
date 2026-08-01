@@ -281,14 +281,22 @@ configured target dialect only.
 
 **Tier 2 — annotation-assisted types.**
 
--   **MySQL**: an existing production-grade Go parser (TiDB's or
-    Vitess's) as the frontend; `COM_STMT_PREPARE` metadata as the
-    oracle. Result column metadata is reliable; **parameter types are
-    not inferred by the protocol** and must come from per-query
-    overrides (configuration or template comment annotations, e.g.
-    `-- @param status: varchar(16)`). Missing overrides are a compile
-    error, not a guess. Parser/server version drift is pinned via a
-    conformance suite per supported server version.
+-   **MySQL** *(shipped in v0.4)*: TiDB's parser as the frontend;
+    `COM_STMT_PREPARE` metadata as the oracle. Result column metadata
+    is reliable (including `org_table`/`org_name` source identity,
+    resolved against an information_schema snapshot with synthetic
+    stable table OIDs); **parameter types are not inferred by the
+    protocol** and must come from template comment annotations
+    (`-- @param status: varchar(16)`). Missing annotations are a
+    compile error, not a guess. The plan check prepares `EXPLAIN
+    <sql>` and executes it with all parameters NULL — executing an
+    EXPLAIN plans without touching data. Placeholders are `?` per
+    occurrence (repeated named params repeat the bind); generated code
+    is the `database/sql` flavor. One documented approximation: the
+    TiDB AST has no byte offsets on relation nodes, so relation
+    locations are recovered lexically (a FROM-position name is always
+    preceded by FROM/JOIN/','/'('/'.'/INTO/UPDATE, with subqueries
+    skipped whole); the real-database property suite backstops it.
 -   **SQLite**: `sqlite3_prepare_v2` plus declared column types as the
     oracle. The protocol supplies **no parameter type information at
     all**, so parameter annotations are always required (same mechanism
@@ -528,17 +536,23 @@ Rationale: on Tier 1 the author can simply write `= ANY(:ids)` by hand;
 `@in` exists so the *same need* is expressible on Tier 2 dialects,
 keeping the everyday dynamic-SQL vocabulary dialect-complete.
 
-Status (v0.4-1): implemented on PostgreSQL. `@in` is accepted at
-depth-0 WHERE/HAVING skeleton positions; inside guarded fragment bodies
-it is rejected with a diagnostic (on PostgreSQL, write `= ANY(:param)`
-directly there) — lifting that restriction is deferred until the
-arity-expansion machinery lands with the Tier 2 drivers. `-- @param
-name: type` annotations are likewise implemented: on PostgreSQL they
-are optional explicit overrides (useful where inference falls short);
-on Tier 2 they will be the mandatory source of parameter types. Type
-names are matched case-insensitively with length/precision arguments
-stripped (`varchar(16)` → `varchar`); an unknown parameter or type
-name is a compile diagnostic.
+Status (v0.4): implemented on PostgreSQL and MySQL. `@in` is accepted
+at depth-0 WHERE/HAVING skeleton positions; inside guarded fragment
+bodies it is rejected with a diagnostic (on PostgreSQL, write
+`= ANY(:param)` directly there). On MySQL the arity is a shape-key
+dimension (canonical `;n=` segment); verification quotients the
+unbounded arity space to two representative classes — arity 1 stands
+for every non-empty list (IN-list growth is parse-invariant) and arity
+0 is its own verified rendering, emitted as
+`IN (SELECT NULL FROM DUAL WHERE FALSE)` so the empty list is FALSE
+even for a NULL operand, exactly like `= ANY('{}')`. `-- @param name:
+type` annotations: on PostgreSQL optional explicit overrides; on Tier
+2 the mandatory source of parameter types (a missing annotation is a
+compile diagnostic naming the parameter; on expanding dialects the
+annotation gives the @in ELEMENT type). Type names are matched
+case-insensitively with length/precision arguments stripped
+(`varchar(16)` → `varchar`; `bigint unsigned` folds the modifier); an
+unknown parameter or type name is a compile diagnostic.
 
 ## Structural Rules
 
