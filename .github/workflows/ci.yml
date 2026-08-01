@@ -65,3 +65,21 @@ jobs:
           go-version-file: go.mod
       - name: Scanner fuzz (30s)
         run: go test ./internal/template -fuzz=FuzzScan -fuzztime=30s
+
+  grammars:
+    name: editor grammars
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: tree-sitter corpus tests
+        working-directory: editors/tree-sitter-sqletch
+        run: |
+          npx --yes tree-sitter-cli@0.25 generate
+          git diff --exit-code -- src/  # committed parser must match grammar.js
+          npx --yes tree-sitter-cli@0.25 test
+      - name: TextMate grammar tests
+        working-directory: editors/vscode
+        run: npx --yes vscode-tmgrammar-test -g syntaxes/sqletch.injection.tmLanguage.json 'tests/*.sql'

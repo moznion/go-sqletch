@@ -157,7 +157,9 @@ Mechanical extensions of existing paths (conjunct machinery; the
   independent; oracle hits cache). tree-sitter grammar for the
   template constructs layered over SQL highlighting.
 - Full design: doc 10 (`sqletch lsp`, `internal/lsp` +
-  `cli.OfflineChecker`). Grammars remain unscheduled.
+  `cli.OfflineChecker`). Grammars: doc 11 (`editors/` — TextMate
+  injection + VS Code extension, tree-sitter with SQL injection; both
+  with executable tests in the `grammars` CI job). **Shipped.**
 
 ## Beyond 1.0 (recorded, unscheduled)
 

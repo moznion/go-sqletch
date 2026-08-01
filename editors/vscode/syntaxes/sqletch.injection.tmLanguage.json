@@ -1,0 +1,102 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "sqletch (injection)",
+  "scopeName": "source.sql.sqletch",
+  "injectionSelector": "L:source.sql - (string | comment)",
+  "patterns": [
+    { "include": "#header" },
+    { "include": "#directive" },
+    { "include": "#if-present" },
+    { "include": "#when" },
+    { "include": "#named-clause" },
+    { "include": "#in" },
+    { "include": "#bare-keyword" },
+    { "include": "#param-ref" }
+  ],
+  "repository": {
+    "header": {
+      "match": "(--[ \\t]*name:)[ \\t]*([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(:[a-z]+)[ \\t]*$",
+      "captures": {
+        "1": { "name": "keyword.other.directive.sqletch" },
+        "2": { "name": "entity.name.function.sqletch" },
+        "3": { "name": "storage.modifier.sqletch" }
+      }
+    },
+    "directive": {
+      "match": "(--[ \\t]*@(?:param|column))[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]*(:)[ \\t]*(.+?)[ \\t]*$",
+      "captures": {
+        "1": { "name": "keyword.other.directive.sqletch" },
+        "2": { "name": "variable.parameter.sqletch" },
+        "3": { "name": "punctuation.separator.sqletch" },
+        "4": { "name": "storage.type.sqletch" }
+      }
+    },
+    "if-present": {
+      "begin": "(@if-present)(\\()",
+      "end": "(\\))",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.sqletch" },
+        "2": { "name": "punctuation.definition.parameters.begin.sqletch" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.parameters.end.sqletch" }
+      },
+      "patterns": [
+        { "match": "[A-Za-z_][A-Za-z0-9_]*", "name": "variable.parameter.sqletch" },
+        { "match": ",", "name": "punctuation.separator.sqletch" }
+      ]
+    },
+    "when": {
+      "begin": "(@when)(\\()",
+      "end": "(\\))",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.sqletch" },
+        "2": { "name": "punctuation.definition.parameters.begin.sqletch" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.parameters.end.sqletch" }
+      },
+      "patterns": [
+        { "match": "'(?:[^']|'')*'", "name": "string.quoted.single.sqletch" },
+        { "match": "\\b(?:true|false)\\b", "name": "constant.language.sqletch" },
+        { "match": "-?[0-9]+", "name": "constant.numeric.sqletch" },
+        { "match": "=|!=|<>", "name": "keyword.operator.comparison.sqletch" },
+        { "match": "[A-Za-z_][A-Za-z0-9_]*", "name": "variable.parameter.sqletch" }
+      ]
+    },
+    "named-clause": {
+      "begin": "(@(?:choose|case|order-by|key|filter-tree!|filter-tree|predicate))(\\()",
+      "end": "(\\))",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.sqletch" },
+        "2": { "name": "punctuation.definition.parameters.begin.sqletch" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.parameters.end.sqletch" }
+      },
+      "patterns": [
+        { "match": "[A-Za-z_][A-Za-z0-9_]*", "name": "variable.parameter.sqletch" }
+      ]
+    },
+    "in": {
+      "begin": "(@in)(\\()",
+      "end": "(\\))",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.sqletch" },
+        "2": { "name": "punctuation.definition.parameters.begin.sqletch" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.parameters.end.sqletch" }
+      },
+      "patterns": [{ "include": "#param-ref" }]
+    },
+    "bare-keyword": {
+      "match": "(@(?:endif|end|default))\\b",
+      "name": "keyword.control.sqletch"
+    },
+    "param-ref": {
+      "match": "(?<![:A-Za-z0-9_])(:[A-Za-z_][A-Za-z0-9_]*)",
+      "name": "variable.parameter.sqletch"
+    }
+  }
+}
