@@ -8,6 +8,7 @@ package lsp
 import (
 	"bufio"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -34,9 +35,16 @@ type ResponseError struct {
 
 // JSON-RPC 2.0 error codes (the ones this server emits).
 const (
+	codeParseError     = -32700
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 )
+
+// errMalformedBody marks a framed body that failed to decode as a
+// JSON-RPC message. The Content-Length boundary is still intact, so
+// the stream remains usable: the caller may answer with a parse error
+// and keep reading instead of tearing the transport down.
+var errMalformedBody = errors.New("lsp: malformed message body")
 
 func rawID(s string) *json.RawMessage {
 	r := json.RawMessage(s)
@@ -86,9 +94,13 @@ func (c *conn) read() (*Message, error) {
 	if _, err := io.ReadFull(c.r, body); err != nil {
 		return nil, err
 	}
+	// Inbound bodies decode with json/v2: duplicate members and
+	// invalid UTF-8 are rejected, and member names match
+	// case-sensitively, as JSON-RPC requires. Outbound marshaling
+	// stays on v1 so the wire output is unchanged.
 	var msg Message
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return nil, fmt.Errorf("lsp: malformed message: %w", err)
+	if err := jsonv2.Unmarshal(body, &msg); err != nil {
+		return nil, fmt.Errorf("%w: %v", errMalformedBody, err)
 	}
 	return &msg, nil
 }

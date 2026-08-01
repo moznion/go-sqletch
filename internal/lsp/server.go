@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"log"
@@ -64,6 +65,14 @@ func (s *server) run() int {
 	for {
 		msg, err := s.conn.read()
 		if err != nil {
+			if errors.Is(err, errMalformedBody) {
+				// JSON-RPC 2.0: a body that fails to parse gets a
+				// -32700 response with a null id; the frame boundary
+				// is intact, so keep serving.
+				s.log.Printf("read: %v", err)
+				s.writeErr(rawID("null"), codeParseError, err.Error())
+				continue
+			}
 			if !errors.Is(err, io.EOF) {
 				s.log.Printf("read: %v", err)
 			}
@@ -135,7 +144,7 @@ func (s *server) dispatch(msg *Message) {
 // docParams decodes a document notification's params and resolves its
 // URI; protocol-level garbage is logged and dropped, never fatal.
 func (s *server) docParams(msg *Message, into any, uri func() string) (string, bool) {
-	if err := json.Unmarshal(msg.Params, into); err != nil {
+	if err := jsonv2.Unmarshal(msg.Params, into); err != nil {
 		s.log.Printf("%s: %v", msg.Method, err)
 		return "", false
 	}
@@ -219,7 +228,7 @@ func toLSPDiagnostic(src []byte, d diagnostics.Diagnostic) Diagnostic {
 
 func (s *server) definition(msg *Message) {
 	var p DefinitionParams
-	if err := json.Unmarshal(msg.Params, &p); err != nil {
+	if err := jsonv2.Unmarshal(msg.Params, &p); err != nil {
 		s.writeErr(msg.ID, codeInvalidParams, err.Error())
 		return
 	}

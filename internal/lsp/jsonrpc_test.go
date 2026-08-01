@@ -29,6 +29,56 @@ func TestConn_ReadMessage(t *testing.T) {
 	}
 }
 
+func frame(body string) string {
+	return fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(body), body)
+}
+
+func TestConn_ReadRejectsDuplicateMembers(t *testing.T) {
+	for name, body := range map[string]string{
+		"top-level": `{"jsonrpc":"2.0","method":"a","method":"b"}`,
+		"nested":    `{"jsonrpc":"2.0","method":"a","params":{"x":1,"x":2}}`,
+	} {
+		c := newConn(strings.NewReader(frame(body)), io.Discard)
+		if _, err := c.read(); !errors.Is(err, errMalformedBody) {
+			t.Errorf("%s: duplicate members must be errMalformedBody, got %v", name, err)
+		}
+	}
+}
+
+func TestConn_ReadRejectsInvalidUTF8(t *testing.T) {
+	body := "{\"jsonrpc\":\"2.0\",\"method\":\"\xff\"}"
+	c := newConn(strings.NewReader(frame(body)), io.Discard)
+	if _, err := c.read(); !errors.Is(err, errMalformedBody) {
+		t.Errorf("invalid UTF-8 must be errMalformedBody, got %v", err)
+	}
+}
+
+func TestConn_ReadMemberNamesCaseSensitive(t *testing.T) {
+	// JSON is case-sensitive: "Method" is an unknown member, not the
+	// "method" member, so the message decodes as method-less.
+	body := `{"jsonrpc":"2.0","id":1,"Method":"initialize"}`
+	c := newConn(strings.NewReader(frame(body)), io.Discard)
+	msg, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Method != "" {
+		t.Errorf(`"Method" must not populate method, got %q`, msg.Method)
+	}
+}
+
+func TestConn_WriteErrorNullID(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(strings.NewReader(""), &buf)
+	if err := c.writeError(rawID("null"), codeParseError, "bad body"); err != nil {
+		t.Fatal(err)
+	}
+	// JSON-RPC 2.0: a parse-error response carries an explicit null id.
+	if !strings.Contains(buf.String(), `"id":null`) {
+		t.Errorf("parse error must carry id null: %s", buf.String())
+	}
+}
+
 func TestConn_ReadMissingContentLength(t *testing.T) {
 	c := newConn(strings.NewReader("X-Nope: 1\r\n\r\n{}"), io.Discard)
 	if _, err := c.read(); err == nil {

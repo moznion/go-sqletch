@@ -3,6 +3,7 @@ package lsp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -182,6 +183,35 @@ func TestServer_DiagnosticsLifecycle(t *testing.T) {
 		t.Fatalf("fix must publish empty diagnostics: %+v", pub)
 	}
 
+	tc.shutdownExit(0)
+}
+
+// writeRawBody frames a verbatim body, bypassing Marshal, so tests can
+// send byte sequences a well-formed client never produces.
+func (tc *testClient) writeRawBody(body string) {
+	tc.t.Helper()
+	if _, err := fmt.Fprintf(tc.c.w, "Content-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+		tc.t.Fatal(err)
+	}
+}
+
+func TestServer_MalformedBodyParseErrorAndContinue(t *testing.T) {
+	tc := startServer(t, &fakeWS{}, "")
+	tc.initialize()
+	tc.writeRawBody(`{"jsonrpc":"2.0","id":9,"method":"m","method":"m"}`)
+	msg := tc.readNotification()
+	if msg.Error == nil || msg.Error.Code != codeParseError {
+		t.Fatalf("want a %d parse-error response, got %+v", codeParseError, msg)
+	}
+	// The frame boundary was intact, so the server must keep serving.
+	tc.shutdownExit(0)
+}
+
+func TestServer_GarbageParamsDroppedNotFatal(t *testing.T) {
+	tc := startServer(t, &fakeWS{}, "")
+	tc.initialize()
+	// Wrong-shaped params on a notification are logged and dropped.
+	tc.notify("textDocument/didOpen", map[string]any{"textDocument": 42})
 	tc.shutdownExit(0)
 }
 
