@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,9 +35,7 @@ output:
   path: gen
 `,
 	}
-	for name, content := range files {
-		base[name] = content
-	}
+	maps.Copy(base, files)
 	for name, content := range base {
 		path := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

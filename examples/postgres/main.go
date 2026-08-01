@@ -29,7 +29,7 @@ func main() {
 	})
 
 	users, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: gen.Ptr("active"),
+		Status: new("active"),
 		Sort:   gen.SearchUsersSortCreatedAtDesc,
 		Limit:  20,
 	})

@@ -487,17 +487,17 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 		}
 		for _, it := range cq.q.Items {
 			if c, ok := it.(*template.Choose); ok {
-				cases := ""
+				var cases strings.Builder
 				for i, cs := range c.Cases {
 					if i > 0 {
-						cases += ", "
+						cases.WriteString(", ")
 					}
-					cases += cs.Name
+					cases.WriteString(cs.Name)
 				}
 				if c.Default != nil {
-					cases += ", (default)"
+					cases.WriteString(", (default)")
 				}
-				d.Chooses = append(d.Chooses, fmt.Sprintf("%s: %s", c.Param, cases))
+				d.Chooses = append(d.Chooses, fmt.Sprintf("%s: %s", c.Param, cases.String()))
 			}
 		}
 		for _, name := range cq.q.ParamOrder {

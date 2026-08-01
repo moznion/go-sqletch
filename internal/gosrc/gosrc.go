@@ -123,10 +123,7 @@ func (e *extractor) view(lit *ast.BasicLit) []byte {
 	// strips carriage returns out of a raw literal's value, so the
 	// value can be shorter than the source it came from.
 	start := e.offset(lit.Pos()) + 1
-	end := e.offset(lit.End()) - 1
-	if end < start {
-		end = start
-	}
+	end := max(e.offset(lit.End())-1, start)
 	buf := make([]byte, end)
 	for i := 0; i < start && i < len(buf); i++ {
 		if e.src[i] == '\n' {
@@ -181,10 +178,7 @@ func parseDiag(path string, src []byte, err error) diagnostics.Diagnostic {
 	if off > len(src) {
 		off = len(src)
 	}
-	end := off + 1
-	if end > len(src) {
-		end = len(src)
-	}
+	end := min(off+1, len(src))
 	return diagnostics.Errorf(diagnostics.CodeGoParse,
 		diagnostics.Span{File: path, Start: off, End: end},
 		"cannot read templates from this file: %s", msg).

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"runtime/pprof"
 	"strings"
 	"testing"
@@ -31,9 +32,7 @@ func (f *fakeWS) Check(overlay map[string][]byte) (WorkspaceResult, error) {
 	if res.Files == nil {
 		res.Files = map[string]*template.QueryFile{}
 	}
-	for p, src := range f.sources {
-		res.Sources[p] = src
-	}
+	maps.Copy(res.Sources, f.sources)
 	for p, src := range overlay {
 		res.Sources[p] = src
 		res.Diags[p] = nil

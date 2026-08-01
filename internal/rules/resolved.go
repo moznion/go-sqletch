@@ -243,12 +243,12 @@ func atomsString(atoms []template.GuardAtom) string {
 }
 
 func atomsParamList(atoms []template.GuardAtom) string {
-	s := ""
+	var s strings.Builder
 	for i, a := range atoms {
 		if i > 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += a.Param
+		s.WriteString(a.Param)
 	}
-	return s
+	return s.String()
 }

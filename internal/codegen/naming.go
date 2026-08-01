@@ -16,7 +16,7 @@ var initialisms = map[string]string{
 // detect (SQLETCH310) — this function never disambiguates silently.
 func GoName(name string) string {
 	var b strings.Builder
-	for _, part := range strings.Split(name, "_") {
+	for part := range strings.SplitSeq(name, "_") {
 		if part == "" {
 			continue
 		}

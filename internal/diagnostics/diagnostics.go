@@ -195,14 +195,8 @@ func (d Diagnostic) RenderExcerpt(src []byte) string {
 	if spanEnd > lineEnd || spanEnd <= d.Span.Start {
 		spanEnd = d.Span.Start + 1
 	}
-	capEnd := spanEnd
-	if lineEnd < capEnd {
-		capEnd = lineEnd
-	}
-	caretRunes := len([]rune(string(src[d.Span.Start:capEnd])))
-	if caretRunes < 1 {
-		caretRunes = 1
-	}
+	capEnd := min(lineEnd, spanEnd)
+	caretRunes := max(len([]rune(string(src[d.Span.Start:capEnd]))), 1)
 
 	gutter := fmt.Sprintf("%d", line)
 	pad := strings.Repeat(" ", len(gutter))

@@ -48,7 +48,7 @@ func main() {
 
 	fmt.Println("active users, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: gen.Ptr("active"),
+		Status: new("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})
@@ -71,7 +71,7 @@ func main() {
 	fmt.Println("PATCH update (nickname only):")
 	n, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: gen.Ptr("allie"),
+		Nickname: new("allie"),
 	})
 	must(err)
 	fmt.Printf("  %d row(s) updated\n", n)

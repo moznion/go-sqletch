@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -76,12 +77,7 @@ type TreeCaps struct {
 }
 
 func (c Config) Expanded(query string) bool {
-	for _, q := range c.Expansion.Queries {
-		if q == query {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Expansion.Queries, query)
 }
 
 var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)

@@ -73,7 +73,7 @@ func TestViewsPreserveOffsetsAndLines(t *testing.T) {
 	if got := string(v[start:end]); got != body {
 		t.Errorf("template bytes = %q, want %q", got, body)
 	}
-	for i := 0; i < start; i++ {
+	for i := range start {
 		want := byte(' ')
 		if src[i] == '\n' {
 			want = '\n'
@@ -346,7 +346,7 @@ var searchSQL = ~
 func TestViewsDeterministic(t *testing.T) {
 	src := bt(oneQuery)
 	first, _ := Views("repo/users.go", src)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		got, _ := Views("repo/users.go", src)
 		if len(got) != len(first) {
 			t.Fatalf("view count changed between runs")

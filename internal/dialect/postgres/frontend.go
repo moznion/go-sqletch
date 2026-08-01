@@ -28,8 +28,7 @@ func (Frontend) Parse(sql string) (dialect.Tree, error) {
 func toParseError(err error) error {
 	pos := 0
 	msg := err.Error()
-	var pe *pgparser.Error
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*pgparser.Error](err); ok {
 		// Cursorpos is 1-based; 0 means unknown.
 		if pe.Cursorpos > 0 {
 			pos = pe.Cursorpos - 1

@@ -497,7 +497,7 @@ ORDER BY t.score - :min_score
 func TestScan_GuardLimit(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("-- name: Big :many\nSELECT 1 FROM t WHERE TRUE\n")
-	for i := 0; i < 65; i++ {
+	for i := range 65 {
 		b.WriteString("@if-present(g")
 		b.WriteString(strings.Repeat("x", i%3+1)) // vary names: gx, gxx, gxxx …
 		b.WriteString(itoa(i))

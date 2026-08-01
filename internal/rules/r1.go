@@ -73,10 +73,9 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 	for i, r := range rs {
 		tree, err := fe.Parse(r.SQL)
 		if err != nil {
-			var pe *dialect.ParseError
 			span := q.HeaderSpan
 			msg := err.Error()
-			if errors.As(err, &pe) {
+			if pe, ok := errors.AsType[*dialect.ParseError](err); ok {
 				tOff, _ := r.Map.ToTemplate(pe.Pos)
 				span = diagnostics.Span{File: q.HeaderSpan.File, Start: tOff, End: tOff + 1}
 				msg = pe.Msg
@@ -329,8 +328,7 @@ func checkOrderByContainment(tree dialect.Tree, r ast.Rendering) []diagnostics.D
 }
 
 func probeMsg(err error) string {
-	var pe *dialect.ParseError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*dialect.ParseError](err); ok {
 		return pe.Msg
 	}
 	return err.Error()

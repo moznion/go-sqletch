@@ -161,7 +161,7 @@ SELECT u.id FROM users AS u
 WHERE u.id = :a AND u.id = :b AND u.id = :c;
 `
 	var first []string
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		_, diags := runResolvedChecks(t, "postgres", src, []dialect.TypeRef{
 			{OID: 20, Name: "int8"}, {OID: 20, Name: "int8"}, {OID: 20, Name: "int8"},
 		})

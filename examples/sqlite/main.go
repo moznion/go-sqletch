@@ -56,7 +56,7 @@ func main() {
 
 	fmt.Println("active, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: gen.Ptr("active"),
+		Status: new("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})

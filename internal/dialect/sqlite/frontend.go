@@ -29,8 +29,7 @@ func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
 }
 
 func toParseError(err error) error {
-	var pe *rsql.Error
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*rsql.Error](err); ok {
 		return &dialect.ParseError{Pos: pe.Pos.Offset, Msg: pe.Msg}
 	}
 	return &dialect.ParseError{Pos: 0, Msg: err.Error()}

@@ -133,7 +133,7 @@ func TestFilterTree_RuntimeShapes(t *testing.T) {
 
 	// Caps: a runaway tree errors before any SQL is produced.
 	deep := runtime.NewLeaf(0, int64(1))
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		deep = runtime.And(deep, runtime.NewLeaf(1, int64(2)))
 	}
 	if _, _, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, deep, runtime.DefaultTreeCaps); err == nil {

@@ -163,7 +163,7 @@ func orderOptions(numKeys int, emit func([]uint8) bool) bool {
 	var used uint32
 	var rec func() bool
 	rec = func() bool {
-		for k := 0; k < numKeys; k++ {
+		for k := range numKeys {
 			if used&(1<<uint(k)) != 0 {
 				continue
 			}

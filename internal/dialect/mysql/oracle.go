@@ -265,8 +265,7 @@ func typeCodeName(oid uint32) string {
 }
 
 func toOracleError(err error) error {
-	var me *gomysql.MyError
-	if errors.As(err, &me) {
+	if me, ok := errors.AsType[*gomysql.MyError](err); ok {
 		return &dialect.OracleError{Pos: -1, SQLState: me.State, Msg: me.Message}
 	}
 	return &dialect.OracleError{Pos: -1, Msg: err.Error()}

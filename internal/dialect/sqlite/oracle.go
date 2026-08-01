@@ -211,8 +211,7 @@ func (o *Oracle) catalog(ctx context.Context) (*cache.Catalog, error) {
 }
 
 func toOracleError(sql string, err error) error {
-	var se *sqlite3.Error
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*sqlite3.Error](err); ok {
 		pos := -1
 		// Error.SQL() is the query text FROM the error offset.
 		if tail := se.SQL(); tail != "" && strings.HasSuffix(sql, tail) {

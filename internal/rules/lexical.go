@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/moznion/sqletch/internal/diagnostics"
@@ -261,12 +262,7 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 }
 
 func containsAtom(atoms []template.GuardAtom, a template.GuardAtom) bool {
-	for _, g := range atoms {
-		if g == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(atoms, a)
 }
 
 // guardSpan finds the span of the first @if-present using the atom.
