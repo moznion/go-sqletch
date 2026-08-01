@@ -49,7 +49,6 @@ type compiledQuery struct {
 	q          *template.QueryTemplate
 	rs         []ast.Rendering
 	descs      []dialect.Desc
-	maxTree    dialect.Tree
 	paramTypes map[string]dialect.TypeRef
 	nullable   []bool
 }
@@ -196,55 +195,12 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	// ---- catalog-dependent checks, types, nullability -------------------
 	for _, cq := range queries {
-		tree, err := frontend.Parse(cq.rs[0].SQL)
+		types, d, err := resolvedChecks(drv, cfg.Dialect, cq.q, cq.rs, cq.descs, cat)
 		if err != nil {
-			return nil, fmt.Errorf("internal: maximal rendering re-parse: %w", err)
+			return nil, err
 		}
-		cq.maxTree = tree
-		res.Diags = append(res.Diags, rules.CheckResolved(cq.q, cq.rs[0], tree, cat)...)
-		cq.paramTypes = map[string]dialect.TypeRef{}
-		if !drv.annotationsRequired {
-			// Tier 1: the oracle types parameters; agreement is checked
-			// across renderings.
-			res.Diags = append(res.Diags, rules.CheckTypeAgreement(cq.q, cq.rs, cq.descs)...)
-			types, d := rules.ResolveParamTypes(cq.q, cq.rs, cq.descs)
-			res.Diags = append(res.Diags, d...)
-			for _, pt := range types {
-				cq.paramTypes[pt.Name] = pt.Type
-			}
-		}
-		// `-- @param` hints override (Tier 1) or supply (Tier 2) the
-		// oracle's parameter types.
-		for name, hint := range cq.q.TypeHints {
-			if _, known := cq.q.Params[name]; !known {
-				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
-					hint.Span, "@param hint for unknown parameter %q", name))
-				continue
-			}
-			tr, ok := drv.typeByName(hint.SQLType)
-			if !ok {
-				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
-					hint.Span, "unknown SQL type %q in @param hint", hint.SQLType))
-				continue
-			}
-			cq.paramTypes[name] = tr
-		}
-		if drv.annotationsRequired {
-			// Tier 2: the protocol does not type parameters; every
-			// non-control parameter needs its annotation.
-			for _, name := range cq.q.ParamOrder {
-				if _, ok := cq.paramTypes[name]; ok {
-					continue
-				}
-				if isControlOnlyParam(cq.q, name) {
-					continue
-				}
-				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType,
-					paramSpan(cq.q, name),
-					"parameter %q needs a `-- @param %s: <type>` annotation (the %s protocol does not type parameters)",
-					name, name, cfg.Dialect))
-			}
-		}
+		res.Diags = append(res.Diags, d...)
+		cq.paramTypes = types
 		nullable, err := nullability.AnalyzeAll(frontend, cq.rs, cq.descs, cat, cfg.NullOverridesFor(cq.q.Name))
 		if err != nil {
 			return nil, err

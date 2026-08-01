@@ -152,7 +152,15 @@ Other commands:
 ```console
 $ sqletch check --exhaustive   # prepare + EXPLAIN every reachable shape
 $ sqletch explain SearchUsers  # guards, cases, types, shape counts
+$ sqletch lsp                  # language server over stdio (offline)
 ```
+
+The language server reports the same `SQLETCHnnn` diagnostics as
+`check` while you type — scanner and structural rules always, the
+oracle-backed checks whenever the committed cache covers the query —
+and provides go-to-definition between `:param` occurrences and their
+`-- @param` annotations. It never touches a database. Point any LSP
+client at `sqletch lsp` for `.sql` template files.
 
 ## Guarantees and limits
 
@@ -181,9 +189,10 @@ design is under [docs/design/](docs/design/).
   sorting, `explain --analyze`
 - **v0.4 (in progress)** — shipped: `@in` (`= ANY` on PostgreSQL,
   arity-expanded `IN (?, …)` on MySQL), `-- @param` type annotations,
-  and the MySQL driver (TiDB-parser frontend, COM_STMT_PREPARE oracle,
-  `database/sql` codegen). Remaining: SQLite driver, embedded
-  PostgreSQL oracle (no Docker), editor support (LSP)
+  the MySQL driver (TiDB-parser frontend, COM_STMT_PREPARE oracle,
+  `database/sql` codegen), and the LSP server (`sqletch lsp`).
+  Remaining: SQLite driver, embedded PostgreSQL oracle (no Docker),
+  editor grammars (tree-sitter / TextMate)
 
 ## Development
 
