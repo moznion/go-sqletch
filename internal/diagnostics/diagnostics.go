@@ -86,6 +86,7 @@ const (
 	CodePairedGuards     Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
 	CodeOrderByDistinct  Code = "SQLETCH122" // @order-by under DISTINCT ON (prefix-sensitive)
 	CodeOrderByNeedsDflt Code = "SQLETCH123" // WITH TIES requires an @order-by @default
+	CodePolicyUnweavable Code = "SQLETCH125" // a policy applies but cannot be woven into this query
 )
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).
@@ -104,6 +105,7 @@ const (
 	CodeConfigParse     Code = "SQLETCH300" // sqletch.yaml unreadable/unknown keys
 	CodeConfigInvalid   Code = "SQLETCH301" // sqletch.yaml field validation
 	CodeExpansionLarge  Code = "SQLETCH302" // static expansion exceeds max_shapes
+	CodePolicyInvalid   Code = "SQLETCH303" // a policy declaration is malformed
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
 )

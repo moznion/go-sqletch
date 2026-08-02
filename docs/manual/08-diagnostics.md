@@ -52,6 +52,7 @@ codes).
 | SQLETCH119 | `INSERT` guarded column/value pairing is broken (rule R7): for each guard set, column items and `VALUES` items must be equinumerous, positionally aligned, and at the tail of their clauses. |
 | SQLETCH122 | `@order-by` under `DISTINCT ON` (PostgreSQL): validity there depends on the sort prefix, which reordering breaks. Use `@choose` with whole verified cases instead. |
 | SQLETCH123 | The skeleton uses `FETCH FIRST … WITH TIES`, so `ORDER BY` may never vanish: the `@order-by` needs a `@default`. |
+| SQLETCH125 | A policy applies to this query but cannot be woven: the designated table sits in a position sqletch cannot scope (inside a subquery/CTE, on the null-extended side of an outer join, introduced by a guarded join), its bound name is not a bare identifier, or the query declares a conflicting type for the policy parameter. Opt out explicitly (`-- @policy-optout`) or restructure. |
 
 ## SQLETCH2xx — type oracle
 
@@ -72,5 +73,6 @@ codes).
 | SQLETCH300 | `sqletch.yaml` is unreadable or contains unknown keys (strict decoding). |
 | SQLETCH301 | `sqletch.yaml` field validation (unsupported dialect, missing `server_version`, …). |
 | SQLETCH302 | Static expansion would exceed `static_expansion.max_shapes`, or the query's shape space is unbounded (`@filter-tree`, `@in` on expanding dialects). |
+| SQLETCH303 | A policy declaration in `sqletch.yaml` is malformed (bad name, empty or non-identifier `tables`, unknown `applies_to` kind, …), or its predicate does not parse as one complete boolean expression in the dialect. |
 | SQLETCH310 | Generated Go identifiers collide (two queries or columns mapping to the same name). Rename or alias one. |
 | SQLETCH311 | No Go mapping for a database type. Cast to a supported type, or on Tier 2 dialects add/fix the `-- @param` / `-- @column` annotation. |

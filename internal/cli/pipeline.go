@@ -21,7 +21,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/nullability"
-	"github.com/moznion/go-sqletch/internal/rules"
+	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 	"github.com/moznion/go-sqletch/runtime"
@@ -63,7 +63,8 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 }
 
 type compiledQuery struct {
-	q          *template.QueryTemplate
+	q          *template.QueryTemplate // woven: every phase past scanChecks reads this
+	woven      []policy.WovenPolicy    // policy coverage (enforcement, explain)
 	rs         []ast.Rendering
 	descs      []dialect.Desc
 	paramTypes map[string]dialect.TypeRef
@@ -124,14 +125,17 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		}
 	}
 	res.QueryCount = len(queries)
+	pols, polDiags := compilePolicies(drv, cfg)
+	res.Diags = append(res.Diags, polDiags...)
 	for _, cq := range queries {
-		res.Diags = append(res.Diags, rules.CheckLexical(profile, cq.q)...)
-		rs, err := ast.Renderings(profile, cq.q)
+		wres, rs, d, err := scanChecks(drv, pols, cq.q)
 		if err != nil {
 			return nil, err
 		}
+		res.Diags = append(res.Diags, d...)
+		cq.q = wres.Query
+		cq.woven = wres.Woven
 		cq.rs = rs
-		res.Diags = append(res.Diags, rules.CheckR1(profile, frontend, cq.q, rs)...)
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil

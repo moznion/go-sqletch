@@ -109,6 +109,9 @@ func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.D
 		if pos < len(src) && src[pos] == '@' {
 			if name, nameEnd := matchConstruct(src, pos); name != "" {
 				pos = fs.handleConstruct(name, pos, nameEnd)
+				if fs.qb != nil && !fs.qb.statementEnded {
+					fs.qb.q.StmtEnd = pos
+				}
 				continue
 			}
 		}
@@ -213,6 +216,9 @@ func (fs *fileScan) startQuery(name, ann string, headerTok dialect.Token) {
 			Annotation: annotation,
 			HeaderSpan: fs.span(headerTok.Start, headerTok.End),
 			Params:     map[string]*Param{},
+			WhereKwEnd: -1,
+			TailStart:  -1,
+			StmtEnd:    -1,
 		},
 		skelStart: headerTok.End,
 		ctx:       ctxNone,
@@ -233,6 +239,13 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 			}
 			return
 		}
+	}
+	switch tok.Kind {
+	case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment, dialect.KindSemicolon:
+	default:
+		// The weaver's fallback insertion point: end of the last
+		// statement token, semicolon excluded.
+		qb.q.StmtEnd = tok.End
 	}
 	switch tok.Kind {
 	case dialect.KindLParen:
@@ -280,12 +293,12 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 			"positional parameter %q is not allowed; use a named parameter (:name)", tok.Text)
 	case dialect.KindIdent:
 		if qb.depth == 0 {
-			qb.transition(strings.ToUpper(tok.Text))
+			qb.transition(strings.ToUpper(tok.Text), tok)
 		}
 	}
 }
 
-func (qb *queryBuilder) transition(kw string) {
+func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 	switch kw {
 	case "SELECT":
 		qb.ctx = ctxProjection
@@ -293,14 +306,21 @@ func (qb *queryBuilder) transition(kw string) {
 		qb.ctx = ctxFrom
 	case "WHERE":
 		qb.ctx = ctxWhere
+		if qb.q.WhereKwEnd < 0 {
+			qb.q.WhereKwEnd = tok.End
+		}
 	case "GROUP":
 		qb.ctx = ctxGroupBy
+		qb.markTail(tok.Start)
 	case "HAVING":
 		qb.ctx = ctxHaving
+		qb.markTail(tok.Start)
 	case "ORDER":
 		qb.ctx = ctxOrderBy
+		qb.markTail(tok.Start)
 	case "LIMIT", "OFFSET", "FETCH", "FOR":
 		qb.ctx = ctxTail
+		qb.markTail(tok.Start)
 	case "UPDATE":
 		qb.ctx = ctxUpdateTarget
 	case "SET":
@@ -313,6 +333,16 @@ func (qb *queryBuilder) transition(kw string) {
 		qb.ctx = ctxValues
 	case "RETURNING":
 		qb.ctx = ctxReturning
+		qb.markTail(tok.Start)
+	}
+}
+
+// markTail records where a synthesized WHERE clause would be inserted:
+// the start of the first post-WHERE clause of a statement that has no
+// WHERE of its own.
+func (qb *queryBuilder) markTail(start int) {
+	if qb.q.WhereKwEnd < 0 && qb.q.TailStart < 0 {
+		qb.q.TailStart = start
 	}
 }
 
@@ -380,6 +410,9 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 	case "choose":
 		return fs.parseChoose(pos, nameEnd)
 	case "order-by":
+		// The construct replaces the statement-level ORDER BY clause,
+		// so it bounds the WHERE slot like the literal keyword would.
+		fs.qb.markTail(pos)
 		return fs.parseOrderBy(pos, nameEnd)
 	case "filter-tree":
 		return fs.parseFilterTree(pos, nameEnd)
