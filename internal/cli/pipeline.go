@@ -148,7 +148,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		cq.descs = make([]dialect.Desc, len(cq.rs))
 		for i, r := range cq.rs {
 			if e, ok := store.LoadOracle(fp, r.SQL); ok {
-				cq.descs[i] = entryToDesc(e)
+				cq.descs[i] = dialect.DescFromEntry(e)
 				res.OracleHits++
 			} else {
 				misses = append(misses, miss{cq, i})
@@ -205,7 +205,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 				continue
 			}
 			m.cq.descs[m.ri] = desc
-			if err := store.SaveOracle(descToEntry(fp, r.SQL, desc)); err != nil {
+			if err := store.SaveOracle(dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 				return nil, err
 			}
 		}
@@ -371,34 +371,6 @@ func oracleDiag(q *template.QueryTemplate, r ast.Rendering, err error) diagnosti
 		return d
 	}
 	return diagnostics.Errorf(diagnostics.CodeOracleFailure, q.HeaderSpan, "oracle failure: %v", err)
-}
-
-func entryToDesc(e *cache.OracleEntry) dialect.Desc {
-	var d dialect.Desc
-	for _, p := range e.Params {
-		d.Params = append(d.Params, dialect.TypeRef{OID: p.OID, Name: p.Name})
-	}
-	for _, c := range e.Columns {
-		d.Columns = append(d.Columns, dialect.ColumnDesc{
-			Name: c.Name, Type: dialect.TypeRef{OID: c.OID, Name: c.TypeName},
-			SrcRel: c.SrcRel, SrcAtt: c.SrcAtt,
-		})
-	}
-	return d
-}
-
-func descToEntry(fp, sql string, d dialect.Desc) *cache.OracleEntry {
-	e := &cache.OracleEntry{SchemaFP: fp, RenderedSQL: sql}
-	for _, p := range d.Params {
-		e.Params = append(e.Params, cache.EntryType{OID: p.OID, Name: p.Name})
-	}
-	for _, c := range d.Columns {
-		e.Columns = append(e.Columns, cache.EntryColumn{
-			Name: c.Name, OID: c.Type.OID, TypeName: c.Type.Name,
-			SrcRel: c.SrcRel, SrcAtt: c.SrcAtt,
-		})
-	}
-	return e
 }
 
 // expandShapes precomposes every reachable shape via the SAME runtime

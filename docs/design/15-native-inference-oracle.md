@@ -425,14 +425,28 @@ written blind". Three harness modes:
    an *intentional* subset exclusion, asserted against an allowlist of
    refusal diagnostics so scope-creep in rejection stays visible.
 2. **Corpus replay** (offline, plain `go test ./...`): committed
-   caches under `examples/mysql/` and a dedicated
-   `testdata/corpus/` (schema + entries captured from real-engine
-   runs) replayed against the native backend — schema in, `Describe`
-   out, byte-compare against the stored entry. This is the mode that
-   runs on every contributor's machine with no Docker, and the mode
-   that makes a captured regression permanent: any live-mode
+   corpus cases replayed against the native backend — schema in,
+   `Describe` out, byte-compare against the stored entry. This is the
+   mode that runs on every contributor's machine with no Docker, and
+   the mode that makes a captured regression permanent: any live-mode
    disagreement gets its triple checked into the corpus, doc 04
    §6-style.
+
+   *Implemented (phase 1) as `internal/corpus`*: a case is a
+   directory under `internal/corpus/testdata/<case>/` holding a
+   `corpus.json` manifest (dialect, server_version, ordered schema
+   paths — the fingerprint inputs verbatim), the schema files, and a
+   verbatim committed-cache tree (`cache/catalog-<fp>.json`,
+   `cache/oracle/<qh>.json`) so `cache.Store` is the loader and its
+   canonical bytes are the comparison form. `corpus.Load` re-validates
+   store-and-compare, fingerprint recomputability, and canonical
+   form; `corpus.Replay(ctx, case, backend)` reports `Mismatch`es
+   (kind `diff`/`error`, catalog first, entries in path order). The
+   devdb-tagged `TestMySQLCorpusGroundTruth` re-derives every case
+   from real MySQL (verify mode; `SQLETCH_UPDATE_CORPUS=1` rewrites),
+   seeded from the `examples/mysql` committed cache. `Desc`↔entry
+   conversion moved to `dialect.EntryFromDesc`/`DescFromEntry` so the
+   pipeline and the harness share one serialization path.
 3. **Differential fuzz** (devdb job): fuzz the *query* side against a
    fixed adversarial schema — generate SQL from a small grammar over
    the v1 subset, require verdict agreement (accept+equal or

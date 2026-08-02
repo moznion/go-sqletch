@@ -278,7 +278,7 @@ func warmCache(t *testing.T, cfg config.Config, relPath, entries string) {
 		if strings.Contains(r.SQL, "$1") {
 			desc.Params = []dialect.TypeRef{{OID: 20, Name: "int8"}}
 		}
-		if err := store.SaveOracle(descToEntry(fp, r.SQL, desc)); err != nil {
+		if err := store.SaveOracle(dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 			t.Fatal(err)
 		}
 	}

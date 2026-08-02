@@ -217,7 +217,7 @@ func loadDescs(store *cache.Store, fp string, rs []ast.Rendering) ([]dialect.Des
 		if !ok {
 			return nil, false
 		}
-		descs[i] = entryToDesc(e)
+		descs[i] = dialect.DescFromEntry(e)
 	}
 	return descs, true
 }
