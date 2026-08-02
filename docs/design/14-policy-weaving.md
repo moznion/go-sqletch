@@ -269,6 +269,19 @@ an analogous planner-sensitive case for `FOR UPDATE`
 weaving stays a deferred refinement (§10 step 4). Detection uses
 `RelRef.NullableSide`, not `RelRef.Join` — see §11.2.
 
+**Refined 2026-08-02 (second settlement, the §10 step 4 follow-up):
+(a), automatic.** A designated table on a null-extended side is woven
+into its own join's `ON` clause instead of `WHERE`: the outer join's
+row set is preserved and only the joined rows are scoped — the
+*correct* scoping for an outer join, so it replaces the rejection
+rather than hiding behind a config flag. The rejection remains for
+the cases `ON`-weaving cannot express: `USING`/`NATURAL` joins (no
+`ON` expression to extend), guarded joins (D5, unchanged), and any
+occurrence whose computed insertion point does not land in skeleton
+text. Enforcement (§6.1) is extended in kind: for a nullable-side
+occurrence the matching conjunct must be unconditional skeleton text
+of *that join's* `ON` clause.
+
 ### D3 — How the woven parameter reaches the call site
 
 The largest open question. `:tenant_id` must get a value at runtime.
@@ -298,6 +311,18 @@ not be a prerequisite.
 parameter in the affected queries' `Params` structs, typed by the
 oracle (Tier 1) or the policy's `param.type` (Tier 2). (b) remains a
 possible later layer (§10 step 4), never a replacement.
+
+**(b)'s design was settled 2026-08-02 for when it is picked up**
+(implementation deliberately not scheduled): a compile-time switch —
+`param.binding: ambient` in the policy declaration — excludes the
+parameter from the affected queries' `Params` structs; the generated
+constructor gains variadic options (`gen.New(db, gen.WithTenantID(v))`,
+source-compatible with existing `New(DBTX)` callers) and the option is
+mandatory: a handle constructed without it errors on first use of any
+affected query, before any SQL is composed. Ambient-as-overridable-
+default was rejected: a zero tenant ID and "unset" would be
+indistinguishable, which is exactly the failure mode a security
+feature must not have.
 
 ### D4 — Diagnostic span attribution
 
@@ -505,6 +530,12 @@ rejected inputs asserted down to their `SQLETCHnnn` code.
    subquery/CTE weaving (D6).
 
 Steps 1–2 are the security-relevant core; 3 is what makes it auditable.
+
+Step 4 status (2026-08-02): D2(a) `ON`-clause weaving is
+**implemented** (see the D2 refinement note); D3(b) is designed but
+unscheduled (see the D3 note); subquery/CTE weaving stays rejected —
+its scope-resolution model is the same unmodeled territory R3
+deliberately skips, and loud rejection remains the design.
 
 ## 11. Mechanical resolutions (pre-implementation reconnaissance)
 

@@ -16,6 +16,7 @@ type Querier interface {
 	ListUsersSorted(ctx context.Context, arg ListUsersSortedParams) ([]ListUsersSortedRow, error)
 	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error)
+	UserAuditActions(ctx context.Context, arg UserAuditActionsParams) ([]UserAuditActionsRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

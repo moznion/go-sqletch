@@ -23,7 +23,7 @@ func enforceOn(t *testing.T, q *template.QueryTemplate, pols ...Policy) []diagno
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Enforce(postgres.Profile{}, pols, q, tree)
+	return Enforce(postgres.Profile{}, pols, q, tree, r)
 }
 
 // The every-shape quantifier is what makes the check a proof rather
