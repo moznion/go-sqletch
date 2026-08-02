@@ -2,7 +2,8 @@
 
 Every sqletch diagnostic carries a stable code. **Codes are part of
 the v1 compatibility surface — their meanings do not change**; message
-wording may improve between releases. `--json` emits machine-readable
+wording may improve between releases
+([compatibility](11-compatibility.md)). `--json` emits machine-readable
 diagnostics with the same codes; the LSP server reports them as you
 type.
 

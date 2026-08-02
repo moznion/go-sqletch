@@ -38,7 +38,8 @@ unnecessary — and with it, the sqlc dependency.
 sqletch remains **sqlc-compatible in spirit and in practice**:
 
 -   Same authoring style: `-- name: QueryName :many` annotations in
-    `.sql` files (multiple queries per file).
+    `.sql` files (multiple queries per file); optionally the same
+    templates as `//sqletch:query` consts inside `.go` files.
 -   Compatible generated-code conventions (`DBTX`, `Queries`, `WithTx`;
     see Generated API Conventions) so sqlc- and sqletch-generated code
     share a transaction naturally.
@@ -49,7 +50,8 @@ sqletch remains **sqlc-compatible in spirit and in practice**:
 Pipeline:
 
 ``` text
-Template SQL (.sql files, multiple queries per file)
+Template SQL (.sql files, or //sqletch:query consts in .go files;
+              multiple queries per file)
     ↓  template scanner (construct layer; lexically dialect-aware)
 Skeleton + guarded fragments (with source positions)
     ↓  dialect frontend parses the maximal rendering (+ per-case renderings)
@@ -225,9 +227,10 @@ A dialect driver provides:
     and result column names/types by asking a dev database, plus a
     **catalog snapshot** (columns, `NOT NULL`, defaults) for offline
     analysis.
--   **Placeholder style and Go driver binding** — `$1`/`?`/`:name`, and
-    the typed-bind mechanism upholding premise P1 (pgx for PostgreSQL,
-    `go-sql-driver/mysql`, a maintained SQLite driver).
+-   **Placeholder style and Go driver binding** — `$1` or `?`, and the
+    typed-bind mechanism upholding premise P1: pgx for PostgreSQL,
+    `database/sql` on MySQL and SQLite (any driver works; the tested
+    ones are `go-sql-driver/mysql` and `ncruces/go-sqlite3`).
 -   **Type mapping** — database types to Go types, including the
     pointer/enum conventions for optional and `@choose` parameters.
 
@@ -236,17 +239,17 @@ A dialect driver provides:
 The type oracle is an interface; *where the dialect's type semantics
 live* is a backend choice invisible to the core:
 
-1.  **Server-backed** (v0.1): a disposable container or user-supplied
-    DSN, mitigated by the committed cache — the database is needed
-    only on cache misses.
-2.  **Embedded engine** (planned): the same oracle served in-process.
-    SQLite is inherently embedded; PostgreSQL via a WASM build of the
-    real engine (or auto-fetched local binaries as a fallback). This
-    removes the external-database dependency entirely **without
-    reimplementing type semantics** — the design principle stays "the
-    database is the type checker", the database just moves in-process.
-    The pinned `server_version` doubles as the embedded engine's
-    version.
+1.  **Server-backed**: a disposable container or user-supplied DSN,
+    mitigated by the committed cache — the database is needed only on
+    cache misses. This is how PostgreSQL and MySQL are served.
+2.  **Embedded engine**: the same oracle served in-process, removing
+    the external-database dependency entirely **without reimplementing
+    type semantics** — the design principle stays "the database is the
+    type checker", the database just moves in-process. The pinned
+    `server_version` doubles as the embedded engine's version. SQLite
+    is served this way today (the real engine compiled to WASM, run
+    under wazero). The same treatment for PostgreSQL is designed and
+    proven feasible but not yet shipped; see Beyond v1.0.
 3.  **Native inference** (long-term option): a self-implemented
     inference engine à la sqlc. Deliberately last, and only once the
     project has accumulated a large corpus of oracle results — every
@@ -267,7 +270,7 @@ expressions), so sqletch owns nullability analysis on every dialect
 are the template author's concern: sqletch verifies against the
 configured target dialect only.
 
-## Planned drivers and support tiers
+## Drivers and support tiers
 
 **Tier 1 — protocol-inferred types.**
 
@@ -281,7 +284,7 @@ configured target dialect only.
 
 **Tier 2 — annotation-assisted types.**
 
--   **MySQL** *(shipped in v0.4)*: TiDB's parser as the frontend;
+-   **MySQL**: TiDB's parser as the frontend;
     `COM_STMT_PREPARE` metadata as the oracle. Result column metadata
     is reliable (including `org_table`/`org_name` source identity,
     resolved against an information_schema snapshot with synthetic
@@ -297,7 +300,7 @@ configured target dialect only.
     locations are recovered lexically (a FROM-position name is always
     preceded by FROM/JOIN/','/'('/'.'/INTO/UPDATE, with subqueries
     skipped whole); the real-database property suite backstops it.
--   **SQLite** *(shipped in v0.4)*: `sqlite3_prepare` plus declared
+-   **SQLite**: `sqlite3_prepare` plus declared
     column types as the oracle — over ncruces/go-sqlite3, the real
     SQLite compiled to WASM and run in-process under wazero, so this
     driver needs **no external database and no Docker at all**.
@@ -337,6 +340,17 @@ constant SQL skeleton with template constructs attached at fixed
 grammatical positions ("slots"); construct placement is validated
 against the dialect's parsed AST. Anything else is a compile error.
 
+## Template inputs
+
+A template lives either in a `.sql` file or in a Go file, as a `const`
+marked `//sqletch:query` whose value is a single raw string literal.
+The two forms are the same language and produce byte-identical
+generated code and cache entries; extraction from Go is purely
+syntactic (`go/parser`, never `go/types`), so the package need not
+compile. The `const` requirement is load-bearing: the SQL that was
+verified must be the SQL that runs, and conditionality must stay in
+the constructs rather than migrating into Go control flow.
+
 Lexing: constructs are recognized only as an exact, lowercase,
 hyphenated keyword from the fixed vocabulary (`@if-present(`,
 `@choose(`, …). PostgreSQL operators containing `@` (`@>`, `<@`, `@@`)
@@ -362,12 +376,12 @@ fields (see Generated API Conventions).
 Allowed slots:
 
 -   a conjunct of the statement-level `WHERE` (an `AND …` term),
--   a conjunct of the statement-level `HAVING` (v0.3),
+-   a conjunct of the statement-level `HAVING`,
 -   a join item in the `FROM` clause (filter-only; see R2; `INNER` or
     `LEFT` only),
--   a `SET` item in `UPDATE` (v0.2),
+-   a `SET` item in `UPDATE`,
 -   a column item and its positionally paired `VALUES` item in `INSERT`
-    (v0.2; see R7) — omitting the pair lets the database apply the
+    (see R7) — omitting the pair lets the database apply the
     column's `DEFAULT`.
 
 Multiple blocks may share the same guard parameters; they switch on and
@@ -376,8 +390,7 @@ uses a multi-parameter guard: `@if-present(a, b)`.
 
 Note: presence pointers mean `nil` = "omit the fragment". They cannot
 express "filter where the column IS NULL" (SQL `NULL` as a *value* of
-an optional filter). That case is `@when`'s job (v0.3); until then it
-needs its own query. See Design Boundary.
+an optional filter). That case is `@when`'s job. See Design Boundary.
 
 ### `@choose(param)` / `@case(value)` / `@default` / `@end`
 
@@ -387,9 +400,10 @@ the parameter is required, and passing the zero value makes the
 generated function return an error before touching the database. A
 `@default` block may be empty (meaning: emit nothing).
 
-Allowed slots (v0.1): the statement-level `ORDER BY` clause.
-Allowed slots (v0.2): a projection expression and `GROUP BY`, under
-rule R2 — all cases must produce the same column alias, the same type,
+Allowed slots: the statement-level `ORDER BY` clause, a projection
+expression, and `GROUP BY`. Projection and `GROUP BY` cases are
+governed by rule R2 — all cases must produce the same column alias,
+the same type,
 **and are analyzed per case for nullability, the nullable-most case
 winning** (see Phase 3).
 
@@ -400,12 +414,12 @@ parameters cannot interact (R8), so per-case verification remains
 sound without checking case combinations. Case bodies have an empty
 guard set: they may not reference optional-join relations (R3).
 
-## Planned Constructs (specified now, scheduled later)
+## Further Constructs
 
 These extend the same verification model; none of them reintroduces
 enumeration or unverified SQL.
 
-### `@when(param op literal)` … `@end` — value-conditioned guards (v0.3)
+### `@when(param op literal)` … `@end` — value-conditioned guards
 
 ``` sql
 @when(include_deleted = false)
@@ -433,7 +447,7 @@ unrelated atoms). This is also the idiomatic way to express "filter
 where column IS NULL": `@when(status_mode = 'null') AND u.status IS
 NULL @end`.
 
-### `@filter-tree(param)` / `@predicate(name)` … `@end` — user-composed boolean trees (v0.3)
+### `@filter-tree(param)` / `@predicate(name)` … `@end` — user-composed boolean trees
 
 Covers advanced-search UIs (arbitrary AND/OR nesting over a **closed
 predicate set**):
@@ -486,14 +500,14 @@ Specification details:
 -   The runtime enforces configurable tree caps (default: 32 nodes,
     depth 8; `filter_tree_caps` in sqletch.yaml, baked into generated
     code) to bound adversarially large inputs.
--   v0.3 implementation constraints: at most **one** `@filter-tree`
+-   Implementation constraints: at most **one** `@filter-tree`
     per query, and it occupies a WHERE-conjunct slot (written after an
     unconditional `AND`). Both are local restrictions, not model
     limits; lifting them is future work.
 -   Statement/text caches key on the canonical tree encoding (hash as
     index, full encoding compared on hit) and are LRU-bounded.
 
-### `@order-by(param)` / `@key(name)` … `@end` — multi-key sorting (v0.3)
+### `@order-by(param)` / `@key(name)` … `@end` — multi-key sorting
 
 Covers data-grid style multi-column sort (any subset of a closed key
 set, in any order, each ascending or descending) without `@choose`'s
@@ -527,7 +541,7 @@ whole); and in statements whose skeleton makes ORDER BY mandatory
 (PostgreSQL's `FETCH FIRST … WITH TIES`), a `@default` is required so
 the clause can never vanish.
 
-### `expr @in(:param)` — variable-arity membership (v0.4, with Tier 2 drivers)
+### `expr @in(:param)` — variable-arity membership
 
 ``` sql
 WHERE TRUE
@@ -551,15 +565,16 @@ Rationale: on Tier 1 the author can simply write `= ANY(:ids)` by hand;
 `@in` exists so the *same need* is expressible on Tier 2 dialects,
 keeping the everyday dynamic-SQL vocabulary dialect-complete.
 
-Status (v0.4): implemented on PostgreSQL and MySQL. `@in` is accepted
-at depth-0 WHERE/HAVING skeleton positions; inside guarded fragment
-bodies it is rejected with a diagnostic (on PostgreSQL, write
-`= ANY(:param)` directly there). On MySQL the arity is a shape-key
-dimension (canonical `;n=` segment); verification quotients the
+Implementation constraints: `@in` is accepted at depth-0 WHERE/HAVING
+skeleton positions; inside guarded fragment bodies it is rejected with
+a diagnostic (on PostgreSQL, write `= ANY(:param)` directly there). On
+the expanding dialects the arity is a shape-key dimension (canonical
+`;n=` segment); verification quotients the
 unbounded arity space to two representative classes — arity 1 stands
 for every non-empty list (IN-list growth is parse-invariant) and arity
-0 is its own verified rendering, emitted as
-`IN (SELECT NULL FROM DUAL WHERE FALSE)` so the empty list is FALSE
+0 is its own verified rendering, emitted per dialect
+(`IN (SELECT NULL FROM DUAL WHERE FALSE)` on MySQL,
+`IN (SELECT NULL WHERE 0)` on SQLite) so the empty list is FALSE
 even for a NULL operand, exactly like `= ANY('{}')`. `-- @param name:
 type` annotations are **optional assertions on Tier 1 and the
 mandatory source of parameter types on Tier 2** (a missing annotation
@@ -834,11 +849,11 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 ```
 
 Call site (`ptr` is the one-line generic helper
-`func ptr[T any](v T) *T`, generated into the output package):
+`func Ptr[T any](v T) *T`, generated into the output package):
 
 ``` go
 rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: ptr("active"),
+    Status: Ptr("active"),
     Sort:   gen.SearchUsersSortCreatedAtDesc,
     Limit:  50,
 })
@@ -849,7 +864,7 @@ predicate inside the same guard; both are filter-only and verify the
 same way. Authors who worry about row multiplication from joins should
 prefer the `EXISTS` form.
 
-## Use Case 2: Partial UPDATE — PATCH semantics (v0.2)
+## Use Case 2: Partial UPDATE — PATCH semantics
 
 Alongside faceted search, this is the most common dynamic-SQL need in
 practice: update only the fields the caller provided (a REST `PATCH`
@@ -876,7 +891,7 @@ RETURNING id, email, nickname, bio, updated_at;
 ``` go
 row, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
     ID:    userID,
-    Email: ptr("new@example.com"), // nickname and bio remain untouched
+    Email: Ptr("new@example.com"), // nickname and bio remain untouched
 })
 ```
 
@@ -938,17 +953,16 @@ page1, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: t, Limit: 100
 // next page
 page2, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{
     TenantID: t,
-    AfterID:  ptr(page1[len(page1)-1].ID),
+    AfterID:  Ptr(page1[len(page1)-1].ID),
     Limit:    100,
 })
 ```
 
 Each shape is a plain static query as far as the database is concerned,
-so both shapes get their own optimal plan (and, in `prepared` mode,
-their own prepared statement) — unlike the `IS NULL OR` workaround,
-which pessimizes the plan for every caller.
+so both shapes get their own optimal plan — unlike the `IS NULL OR`
+workaround, which pessimizes the plan for every caller.
 
-## Use Case 4: Dashboard Time Bucketing (v0.2)
+## Use Case 4: Dashboard Time Bucketing
 
 `@choose` in a projection slot, valid because every case yields the
 same alias and type, with nullability unioned across cases (R2). The
@@ -977,7 +991,7 @@ rows, _ := q.SignupsByBucket(ctx, gen.SignupsByBucketParams{
 })
 ```
 
-## Use Case 5: Advanced Search and Cross-Layer Filters (v0.3)
+## Use Case 5: Advanced Search and Cross-Layer Filters
 
 Two shapes of the same `@filter-tree` mechanism (specification above):
 
@@ -1074,10 +1088,11 @@ errors). Repeat the oracle call once per remaining `@choose` case (and
 per `@order-by` `@default` body) to confirm case-wise agreement on
 names and types.
 
-**Schema setup** is either a list of plain ordered `.sql` files/globs
-that sqletch applies itself, or a user command (`schema_setup_cmd`,
-e.g. invoking goose/Atlas/Flyway) run against the provided DSN —
-sqletch does not reimplement migration tooling.
+**Schema setup** is a list of plain ordered `.sql` files/globs that
+sqletch applies itself; sqletch does not reimplement migration
+tooling. (Handing schema setup to a user command, so goose/Atlas/Flyway
+users can reuse their migrations directly, is designed but not shipped
+— see Beyond v1.0.)
 
 **Nullability** is not reliably provided by any prepare/describe
 protocol. It is computed by sqletch's own analysis under a
@@ -1149,7 +1164,7 @@ codebase and one transaction:
     exposing the composed SQL text for logging and tracing — "what SQL
     did this call actually run" is observable at runtime, not only via
     `sqletch explain`.
--   A generated `ptr[T any](v T) *T` helper for presence parameters.
+-   A generated `Ptr[T any](v T) *T` helper for presence parameters.
 -   Designed to run under `//go:generate sqletch generate`.
 
 ------------------------------------------------------------------------
@@ -1158,7 +1173,7 @@ codebase and one transaction:
 
 At runtime, a call computes its **shape key**: a bitmask of active
 guards (`@if-present` and `@when`), the ordinal of each `@choose`
-selection, plus (v0.3+) the canonical encoding of each `@filter-tree`
+selection, plus the canonical encoding of each `@filter-tree`
 value, the key sequence of each `@order-by` value, and the arity of
 each `@in` list on expanding dialects. Composition then:
 
@@ -1185,26 +1200,16 @@ Properties:
 -   **No runtime parsing**: composition is table-driven concatenation,
     O(fragments).
 
-## Statement caching modes
+## Statement caching
 
-`statement_cache: text | prepared` (per target, default `text`).
-
--   `text`: cache only the composed SQL string per shape key; execute
-    unnamed/ad-hoc. Safe under transaction-pooling proxies (PgBouncer
-    transaction mode, RDS Proxy) where server-side prepared statements
-    are unreliable.
--   `prepared`: additionally use server-side prepared statements by
-    delegating to the driver's own per-connection statement cache
-    (pgx's automatic prepared-statement cache) — connection affinity
-    and deallocation are the driver's responsibility, which is the only
-    place they can live. Best latency on direct connections.
-
-## Schema drift (optional check)
-
-Generated code embeds the catalog snapshot fingerprint it was verified
-against. An opt-in helper compares it with the live database's catalog
-at startup and reports drift — the same class of risk sqlc has, made
-observable.
+The composed SQL string is cached per shape key in a per-`Queries`
+LRU, and statements execute unnamed/ad-hoc. That is safe under
+transaction-pooling proxies (PgBouncer transaction mode, RDS Proxy),
+where server-side prepared statements are unreliable. Opting into
+server-side prepared statements — by delegating to the driver's own
+per-connection statement cache, which is the only place connection
+affinity and deallocation can live — is designed but not shipped; see
+Beyond v1.0.
 
 ## Strict static expansion (optional mode)
 
@@ -1285,7 +1290,8 @@ compile time where detectable):
     wrong annotations produce wrong Go types, not silent corruption
     (the database still checks at execution).
 -   Verification is against the dev schema at compile time; production
-    drift is the same risk sqlc carries (see Schema drift).
+    drift is the same risk sqlc carries (a startup drift check is
+    designed but not shipped; see Beyond v1.0).
 
 ------------------------------------------------------------------------
 
@@ -1318,8 +1324,8 @@ database/sql, a builder) alongside sqletch in the same repository:
     struct per query possible; two shapes are two queries. The split
     also keeps each query independently plannable and auditable.
 -   **NULL-as-value filters** — presence pointers reserve `nil` for
-    "absent"; "filter where column IS NULL" is expressed with `@when`
-    (v0.3), not by overloading the pointer.
+    "absent"; "filter where column IS NULL" is expressed with `@when`,
+    not by overloading the pointer.
 -   **Caller-supplied SQL fragments** — a use-case layer passing WHERE
     snippets as strings into a repository is rejected on principle:
     runtime SQL text is unverifiable. The supported form is a typed
@@ -1335,8 +1341,9 @@ database/sql, a builder) alongside sqletch in the same repository:
     spaces, exact-text allow-listing is infeasible under any design
     that supports conditional SQL. `sqletch explain --enumerate`
     provides the audit surface.
--   **Transaction-pooling proxies**: use the default `text` statement
-    cache mode (see Runtime Model).
+-   **Transaction-pooling proxies**: nothing to configure — statements
+    execute unnamed/ad-hoc, which is what such proxies require (see
+    Runtime Model).
 
 ------------------------------------------------------------------------
 
@@ -1361,20 +1368,26 @@ sqletch check        # verify only (CI-friendly; offline on cache hit)
                      #   --exhaustive: EXPLAIN every enumerable shape
                      #                 (always needs the dev DB)
 sqletch explain      # per query: guards, cases, vocabularies, shape count
-                     #   --enumerate (v0.2): print every reachable shape
-                     #   --analyze  (v0.3): EXPLAIN per shape on the dev DB
-sqletch fmt          # (v0.2) canonical template formatting (inserts
-                     #   anchors, normalizes construct layout)
+                     #   --enumerate: print every reachable shape
+                     #   --analyze:   EXPLAIN per shape on the dev DB
+sqletch fmt          # canonical template formatting (inserts anchors,
+                     #   normalizes construct layout); --check for CI
+sqletch lsp          # language server over stdio; strictly offline
+sqletch version      # release identification
 ```
 
+Exit codes are 0 (success), 1 (diagnostics — something in the user's
+templates or configuration), 2 (environment — database unreachable,
+version mismatch, unreadable files). The split is deliberate for CI.
+
 Configuration (`sqletch.yaml`): `dialect`, `server_version` (pinned;
-part of the cache key), schema inputs (ordered `.sql`
-files/globs, or `schema_setup_cmd` for goose/Atlas/Flyway users), query
-file globs, output package/path, dev database strategy (auto-managed
-ephemeral instance or user-supplied DSN), cache path (committed to the
-repository), `statement_cache` mode and size, tree/arity caps,
-per-query options (static expansion, Tier-2 parameter type overrides,
-nullability overrides).
+part of the cache key), schema inputs (ordered `.sql` files/globs),
+query file globs, output package/path, dev database strategy
+(auto-managed ephemeral instance or user-supplied DSN), cache path
+(committed to the repository), filter-tree caps, per-query static
+expansion, and per-column nullability overrides. Unknown keys are
+rejected. Parameter and result types on Tier 2 dialects come from
+template annotations, not configuration.
 
 ------------------------------------------------------------------------
 
@@ -1384,6 +1397,7 @@ nullability overrides).
 cmd/sqletch/
 internal/
     template/      # template scanner + per-dialect lexer profiles
+    gosrc/         # //sqletch:query const extraction from .go inputs
     ast/           # shared view over dialect ASTs + source maps
     rules/         # structural rules R1–R9, guard/scope/case analysis
     shape/         # shape keys, enumeration, hashing
@@ -1392,11 +1406,14 @@ internal/
     diagnostics/
     dialect/       # driver interface
         postgres/  # pg_query frontend + Describe oracle (Tier 1)
-        mysql/     # (v0.4) parser frontend + COM_STMT_PREPARE oracle
-        sqlite/    # (v0.4) prepare + decltype oracle
+        mysql/     # TiDB parser frontend + COM_STMT_PREPARE oracle
+        sqlite/    # rqlite/sql frontend + prepare/decltype oracle
     devdb/         # ephemeral dev-database lifecycle per dialect
     cache/         # committed oracle results + catalog snapshots
+    lsp/           # language server (stdlib only; offline checker seam)
 runtime/           # small public package imported by generated code
+editors/           # TextMate injection grammar + VS Code extension,
+                   #   tree-sitter grammar
 examples/
 testdata/          # shared dialect conformance suite
 ```
@@ -1442,56 +1459,24 @@ Regression tests
 
 ------------------------------------------------------------------------
 
-# Future Roadmap
+# Stability and Beyond v1.0
 
-Version 0.1
+Everything specified above is implemented and stable as of v1.0. The
+compatibility promises — what may change within v1 and what may not —
+are stated in `manual/11-compatibility.md`: the template language, the
+generated API, the `runtime` package, `sqletch.yaml`, the CLI surface,
+and the *meanings* of diagnostic codes are fixed; diagnostic message
+wording is not. The committed cache is self-describing, and an
+unrecognized format degrades to a re-describe, never to a misread. The
+pre-freeze audit behind those promises is `design/12-v1.md`.
 
--   Dialect driver interface in place; PostgreSQL driver (Tier 1).
--   `@if-present` (WHERE conjuncts, filter-only INNER/LEFT joins,
-    multi-parameter guards), `@choose`/`@default` (ORDER BY slot).
--   Oracle-based type extraction with committed cache (including
-    catalog snapshots); nullability analysis under the per-shape-sound
-    discipline (conservative first, precise iteratively).
--   `generate`, `check` (with `--exhaustive`), `explain` (basic
-    listing).
+Recorded, unscheduled, and none of it changes the verification model:
 
-Version 0.2 — the second half of everyday dynamic SQL
-
--   Partial UPDATE: `@if-present` on SET items, anchor rule R6.
--   Optional INSERT column/value pairs (R7) with `NOT NULL`-without-
-    default warnings.
--   `@choose` in projection and GROUP BY slots (alias/type agreement,
-    nullability union).
--   Strict static expansion mode; `explain --enumerate`; `fmt`.
-
-Version 0.3 — expressiveness within the model
-
--   `@when` value-conditioned guards.
--   `@filter-tree` boolean trees over closed predicate sets (with
-    caps, mandatory parenthesization, and the required mode
-    `@filter-tree!` + `Unscoped` constructor).
--   `@order-by` multi-key sorting (subsets/permutations of closed key
-    sets; excluded under `DISTINCT ON`).
--   HAVING slot; `explain --analyze`; diagnostics polish.
-
-Version 0.4 — dialect breadth and adoption
-
--   MySQL driver (Tier 2), SQLite driver (Tier 2), `@in`, conformance
-    suite hardening, per-dialect documentation.
 -   **Embedded PostgreSQL oracle backend** (WASM build of the real
     engine, or auto-fetched binaries as fallback): cold
-    `generate`/`check` with no external database at all.
--   Editor support: syntax highlighting grammars (VS Code / TextMate,
-    tree-sitter) and an LSP server (diagnostics, go-to-definition for
-    params/predicates). Treated as adoption-critical, not cosmetic.
-
-Version 1.0
-
--   Stable template language and generated API.
--   Comprehensive documentation; sqlc coexistence/migration guide.
-
-Beyond 1.0 (exploratory)
-
+    `generate`/`check` with no external database at all, the way SQLite
+    already works. The spike is complete and the approach is feasible;
+    shipping waits on upstream libpglite (`design/09-embedded-oracle.md`).
 -   Native inference oracle backend, differential-tested against the
     accumulated `(schema, query, types)` corpus from caches and the
     conformance suite — pursued only where no embedded real engine
@@ -1504,6 +1489,20 @@ Beyond 1.0 (exploratory)
     unscoped (opt-outs are explicit per-query annotations). Compile-
     time expansion only — verification runs on the woven result, so
     the soundness model is untouched.
+-   Lifting the local restrictions noted per construct (one
+    `@filter-tree` per query; `@in` at depth-0 skeleton positions
+    only). These are implementation limits, not model limits.
+
+Specified above and designed, but deliberately not shipped in v1.0:
+
+-   `schema_setup_cmd` — delegating dev-database schema setup to a user
+    command (goose/Atlas/Flyway) instead of applying `.sql` files.
+-   An opt-in `prepared` statement-cache mode, alongside the shipped
+    text-cache behavior.
+-   A schema-drift check: generated code embedding the catalog
+    fingerprint it was verified against, plus a startup helper that
+    compares it with the live database's catalog — the same class of
+    risk sqlc has, made observable.
 
 ------------------------------------------------------------------------
 

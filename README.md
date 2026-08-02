@@ -13,10 +13,11 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v1.0 candidate.** PostgreSQL, MySQL, and SQLite. The
-> template language and generated API are frozen for v1 (see the
-> [stability audit](docs/design/12-v1.md)); the remaining steps to the
-> tag are release mechanics.
+> **Status: v1.0.** PostgreSQL, MySQL, and SQLite. The template
+> language, the generated API, the `runtime` package, `sqletch.yaml`,
+> the CLI, and the meanings of the `SQLETCHnnn` diagnostic codes are
+> stable for all of v1 — see
+> [compatibility and versioning](docs/manual/11-compatibility.md).
 
 ## The problem
 
@@ -82,7 +83,7 @@ prepared statement. No `IS NULL OR` tricks, no string building.
 
 Every construct, side by side with the Go it generates and the SQL it
 composes, is documented in
-[docs/template-language.md](docs/template-language.md).
+[the template language reference](docs/manual/02-template-language.md).
 
 ## How it works
 
@@ -159,8 +160,9 @@ static queries in sqlc; move the conditional ones to sqletch.
 ## Quick start
 
 Requirements: Go 1.27+ (currently the 1.27 rc; `go.mod` pins the
-toolchain), and Docker (or a disposable PostgreSQL 16 via
-`database.dsn`) for cold generates.
+toolchain). Cold generates need a disposable dev database — Docker, or
+a DSN you point at via `database.dsn`. On SQLite there is nothing to
+install: the oracle is the real engine, in-process.
 
 ```console
 $ cat sqletch.yaml
@@ -236,39 +238,52 @@ optional `LEFT JOIN`) are rejected statically where known and covered
 by `check --exhaustive` otherwise.
 
 Deliberately out of scope: dynamic table/column names, shape-changing
-projections, and caller-supplied SQL strings. The template-language
-reference is [docs/template-language.md](docs/template-language.md);
-the full boundary — and the reasoning behind every rule — lives in
-[docs/spec.md](docs/spec.md); the implementation
-design is under [docs/design/](docs/design/). **User documentation lives in
-the [manual](docs/manual/README.md)** — getting started, the template
-language reference, per-dialect guides, and the
+projections, and caller-supplied SQL strings. The full boundary — and
+the reasoning behind every rule — lives in
+[docs/spec.md](docs/spec.md); the implementation design is under
+[docs/design/](docs/design/). **User documentation lives in the
+[manual](docs/manual/README.md)** — getting started, the
+[template language reference](docs/manual/02-template-language.md),
+per-dialect guides, and the
 [sqlc migration guide](docs/manual/10-sqlc-migration.md).
 
-## Roadmap
+## What's in the box
 
-- **v0.2 (shipped)** — partial `UPDATE` (PATCH semantics), optional
-  `INSERT` column/value pairs, `@choose` in projections and GROUP BY,
-  `sqletch fmt`, strict static expansion, `explain --enumerate`
-- **v0.3 (shipped)** — `@when` value guards, HAVING slot,
-  `@filter-tree` (typed, composable filters across layer boundaries —
-  with a required mode for multi-tenant safety), `@order-by` multi-key
-  sorting, `explain --analyze`
-- **v0.4 (shipped)** — `@in` (`= ANY` on PostgreSQL, arity-expanded
-  `IN (?, …)` on MySQL/SQLite), `-- @param` / `-- @column` type
-  annotations, the MySQL driver (TiDB-parser frontend,
-  COM_STMT_PREPARE oracle, `database/sql` codegen), the SQLite driver
-  (rqlite/sql frontend, in-process WASM SQLite oracle — no Docker at
-  all), the LSP server (`sqletch lsp`), and editor grammars
-  (`editors/`: VS Code extension with TextMate injection + LSP client,
-  tree-sitter). The embedded PostgreSQL oracle spike is done
-  (feasible; see `docs/design/09-embedded-oracle.md` — shipping waits
-  on upstream libpglite)
-- **v1.0 (in progress)** — stability freeze with written compatibility
-  promises (`docs/design/12-v1.md`), self-describing cache format, the
-  [user manual](docs/manual/README.md) and
-  [sqlc migration guide](docs/manual/10-sqlc-migration.md), per-dialect
-  examples. Remaining: CHANGELOG, the `v1.0.0` tag
+- **Constructs**: `@if-present` (optional WHERE/HAVING conjuncts,
+  filter-only INNER/LEFT joins, `UPDATE SET` items for PATCH
+  semantics, paired `INSERT` column/value items), `@when` value
+  guards, `@choose` closed choices (ORDER BY, projections, GROUP BY),
+  `@order-by` multi-key sorting, `@filter-tree` typed filters
+  composable across layer boundaries (with a required mode for
+  multi-tenant safety), and `@in` variable-arity membership.
+- **Dialects**: PostgreSQL (types inferred by the server),
+  MySQL and SQLite (types from `-- @param` / `-- @column`
+  annotations). SQLite needs no Docker and no server at all — its
+  oracle is the real engine, in-process.
+- **Authoring**: `.sql` files or `//sqletch:query` consts in Go files;
+  `sqletch fmt` for canonical layout; strict static expansion when
+  every SQL text must exist on disk for audit.
+- **Tooling**: `generate`, `check [--exhaustive]`,
+  `explain [--enumerate|--analyze]`, `fmt`, and `lsp` — plus editor
+  grammars under [`editors/`](editors/) (a VS Code extension with a
+  TextMate injection grammar and an LSP client, and a tree-sitter
+  grammar).
+
+## Beyond v1.0
+
+Recorded, unscheduled, and none of it changes the verification model:
+
+- **Embedded PostgreSQL oracle** — cold `generate`/`check` with no
+  external database, the way SQLite already works. The spike is done
+  and feasible; shipping waits on upstream libpglite
+  ([docs/design/09-embedded-oracle.md](docs/design/09-embedded-oracle.md)).
+- **Native inference backend**, differential-tested against the
+  `(schema, query, types)` corpus every cache entry already
+  produces — for MySQL first, which has no embeddable real engine.
+- **Cross-query policy weaving** — a config-declared predicate (tenant
+  scoping, say) expanded into every query touching designated tables
+  at compile time, with a lint proving no reachable shape crosses the
+  boundary unscoped.
 
 ## Development
 

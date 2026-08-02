@@ -10,6 +10,7 @@
 8. [Diagnostics reference](08-diagnostics.md)
 9. [Editor support](09-editors.md)
 10. [Coming from sqlc](10-sqlc-migration.md)
+11. [Compatibility and versioning](11-compatibility.md)
 
 The language specification (rules R1–R9 with their soundness argument)
 is [docs/spec.md](../spec.md); the
