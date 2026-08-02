@@ -1,12 +1,12 @@
 # sqletch Design — 14: Cross-query policy weaving and enforcement
 
-**Status: DRAFT — not implemented, not scheduled.** This document
-expands the two recorded notes (spec "Future Roadmap"; `08-later-phases.md`
-§"Beyond 1.0") into a design. Several points below are marked
-**DECISION NEEDED** — they change the template language or the
-generated API surface, so per `CLAUDE.md` §"Document authority" they
-must be settled with the user before implementation, and the outcome
-reflected into `docs/spec.md`.
+**Status: ACCEPTED — decisions D1–D6 settled with the user
+2026-08-02, all per the recommendations recorded below; implementation
+scheduled per §10.** This document expands the two recorded notes
+(spec §"Stability and Beyond v1.0"; `08-later-phases.md` §"Beyond
+1.0") into a design. The settled outcomes are reflected in
+`docs/spec.md` §"Cross-Query Policies". §11 records the mechanical
+resolutions made during pre-implementation reconnaissance.
 
 A *policy* is a boolean predicate declared once in `sqletch.yaml` and
 woven, at compile time, into every query that touches a designated
@@ -223,7 +223,9 @@ policies that break under `@if-present` joins.
 ## 5. Decisions the spec must make
 
 Each item below changes observable behavior. Options and a
-recommendation are given; none is settled.
+recommendation are given. **All six were settled with the user on
+2026-08-02, each per its recommendation**; the settled outcome is
+restated at the end of each item.
 
 ### D1 — The designated table appears more than once
 
@@ -239,6 +241,9 @@ the outer query and in a subquery.
 occurrences inside subqueries** (see D6). A policy means "every row of
 this table you read is scoped"; skipping one occurrence would silently
 weaken that, and (c) keeps the unmodeled case loud rather than wrong.
+
+**Settled 2026-08-02: as recommended** — one conjunct per top-level
+occurrence; subquery occurrences are rejected (D6).
 
 ### D2 — The designated table is on the nullable side of an outer join
 
@@ -258,6 +263,10 @@ returns is exactly the class of surprise this project exists to avoid.
 Note that `rules.CheckResolved` already has `RelRef.Join` and detects
 an analogous planner-sensitive case for `FOR UPDATE`
 (`internal/rules/resolved.go:118`), so the detection is cheap.
+
+**Settled 2026-08-02: (b)** — reject with `SQLETCH125`; `ON`-clause
+weaving stays a deferred refinement (§10 step 4). Detection uses
+`RelRef.NullableSide`, not `RelRef.Join` — see §11.2.
 
 ### D3 — How the woven parameter reaches the call site
 
@@ -284,6 +293,11 @@ current contract intact — which `12-v1.md` freezes — and delivers the
 enforcement benefit in full. (b) is a strictly larger change and should
 not be a prerequisite.
 
+**Settled 2026-08-02: (a)** — the woven parameter is an ordinary
+parameter in the affected queries' `Params` structs, typed by the
+oracle (Tier 1) or the policy's `param.type` (Tier 2). (b) remains a
+possible later layer (§10 step 4), never a replacement.
+
 ### D4 — Diagnostic span attribution
 
 A woven fragment can fail R1 (not a complete node), fail to type, or
@@ -304,6 +318,12 @@ requires `diagnostics.Span` to carry config-file spans, which it can
 already do (`Span.File` is a path), plus a dedup so a broken policy
 does not emit one diagnostic per query.
 
+**Settled 2026-08-02: the hybrid as recommended** — policy-intrinsic
+defects (`SQLETCH303`) attribute to `config.Config.Path` once;
+per-query interaction defects (`SQLETCH124`/`125`) attribute to the
+query's `HeaderSpan` and name the policy and config path in the
+message.
+
 ### D5 — Guard set of the woven predicate
 
 **Recommendation, not expected to be controversial:** the woven
@@ -316,6 +336,10 @@ such a relation, the query is rejected (it cannot be unconditionally
 scoped). Nullability is unaffected, since the analyzer's
 "never narrow from guarded fragments" rule concerns guarded fragments
 and this one is not guarded.
+
+**Settled 2026-08-02: as recommended** — empty guard set. (This falls
+out of the implementation for free: a woven `template.Skeleton`
+produces no `FragRange`, so `rules.resolver.fragAt` finds no guards.)
 
 ### D6 — Subqueries, CTEs, and `INSERT … SELECT`
 
@@ -332,6 +356,12 @@ incomplete beats silent and incomplete. `INSERT … SELECT` is covered
 insofar as its `SELECT` is a top-level statement body; a plain
 `INSERT … VALUES` cannot be row-filtered at all and is simply not a
 policy target (see `applies_to`).
+
+**Settled 2026-08-02: as recommended** — top-level weaving only; a
+designated table visible only inside a subquery or CTE body is
+`SQLETCH125`. Note the premise correction in §11.1: `Relations()`
+does *not* report subquery/CTE relations, so this detection needs a
+new `Tree` capability.
 
 ## 6. Enforcement
 
@@ -395,7 +425,7 @@ otherwise.
 | Code | Meaning |
 | --- | --- |
 | `SQLETCH124` | A query touches a policy-designated table without the scoping conjunct in every shape, and has no opt-out. |
-| `SQLETCH125` | A policy-designated table appears in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2). |
+| `SQLETCH125` | A policy applies to this query but cannot be woven: the designated table is in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2, guarded-join relation per D5), its bound name is not a bare identifier (§11.3), or the query declares a conflicting type for the policy parameter (§11.4). Opt out explicitly or restructure. |
 | `SQLETCH126` | `-- @policy-optout` names an unknown policy, or one that does not apply to this query. |
 | `SQLETCH303` | A policy declaration in `sqletch.yaml` is malformed, or its predicate does not parse as one complete boolean node. |
 
@@ -470,3 +500,76 @@ rejected inputs asserted down to their `SQLETCHnnn` code.
    subquery/CTE weaving (D6).
 
 Steps 1–2 are the security-relevant core; 3 is what makes it auditable.
+
+## 11. Mechanical resolutions (pre-implementation reconnaissance)
+
+Recorded per `CLAUDE.md` §"Document authority": minor mechanical
+choices made directly, reflected here. Each was forced by a gap
+between this doc's assumptions and the code as it exists.
+
+### 11.1 `Relations()` does not see subqueries — new `Tree` capability
+
+§D6 assumed `Tree.Relations()` reports relations inside subqueries and
+CTE bodies. It does not: the PostgreSQL frontend walks only the
+statement's own FROM/USING/target relations and emits a placeholder
+`RelRef` with empty `Table` for a `RangeSubselect`
+(`postgres/frontend.go:292`). A designated table hidden in a subquery
+would be *invisible*, so D6's loud rejection needs a new capability:
+
+`dialect.Tree` gains `DeepTables() []TableRef` with
+`TableRef{Name string; Loc int}` — every base-table name referenced
+anywhere in the statement, including subquery and CTE bodies
+(`Loc` is -1 where the parser exposes no offset, e.g. TiDB relation
+nodes; the diagnostic then falls back to the query's `HeaderSpan`).
+It deliberately includes references to CTE *names*: a CTE shadowing a
+designated table is conservatively treated as touching it — a false
+positive is a loud diagnostic with an opt-out, never a silent leak.
+Extending `Tree` is compile-visible across all three frontends, which
+is exactly the property we want for a soundness-relevant capability.
+
+### 11.2 D2 detection uses `RelRef.NullableSide`
+
+`RelRef.Join` describes only how the relation itself was introduced;
+`RelRef.NullableSide` is the propagated answer through nested joins
+(right of LEFT, left of RIGHT, either side of FULL — the nullability
+analysis input). The FOR UPDATE precedent uses `Join` because it cares
+about one directly-guarded LEFT JOIN; the policy check needs the
+general property, so D2 rejects when the designated relation has
+`NullableSide == true`.
+
+### 11.3 `{}` substitution is restricted to bare identifiers
+
+No identifier-quoting facility exists in `internal/dialect`, and
+adding one for this feature alone is surface for little gain: aliases
+and table names in real templates are bare `snake_case` identifiers.
+v1 rule: the name bound to `{}` (alias if present, else table name —
+`relInfo.name()`'s exact rule) must match `[A-Za-z_][A-Za-z0-9_]*`;
+otherwise the query is rejected with `SQLETCH125`. Likewise a policy's
+`tables:` entries must be bare lowercase identifiers (`SQLETCH303`
+otherwise). Revisit only if a real schema demands quoted names.
+
+### 11.4 The policy parameter's type hint
+
+The woven `:param` flows through the ordinary machinery (it lands in
+`ParamsSeq` via `emitVerbatim`, and into the generated `Params` struct
+via D3(a)). Its `param.type` from the config is injected into the
+woven template's `TypeHints` — exactly as if the author had written
+`-- @param` — but only when the query does not already hint that name.
+An existing hint with the *same* type is fine (idempotent); a
+*different* type is `SQLETCH125` (the query and the policy disagree
+about one parameter — loud, per-query, opt-out-able). Tier 2 dialects
+get their mandatory annotation this way; Tier 1 gets the normal
+assert-against-oracle behavior (`SQLETCH213`).
+
+### 11.5 Wiring: one shared weave point, not two
+
+`pipeline.Run` and `lsp`'s `OfflineChecker.analyzeFile` today
+hand-duplicate the per-query catalog-free sequence
+(`CheckLexical` → `ast.Renderings` → `CheckR1`). Weaving slots between
+`CheckLexical` (which must see the **unwoven** template, §4.2's R6
+rule) and `ast.Renderings` (which must see the **woven** one). Rather
+than duplicating the weave call too, the sequence is factored into one
+shared helper in `internal/cli`, mirroring the `resolvedChecks`
+discipline — extend it, don't fork it. Everything downstream of the
+helper reads the woven template, so codegen picks up the woven
+parameter with no changes.

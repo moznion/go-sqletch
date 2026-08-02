@@ -1043,6 +1043,123 @@ leaks are structurally impossible.
 
 ------------------------------------------------------------------------
 
+# Cross-Query Policies
+
+*Added after the v1.0 freeze (design record: `design/14-policy-weaving.md`;
+decisions settled 2026-08-02). Additive only: templates and configs
+that declare no policy are byte-identically unaffected.*
+
+`@filter-tree!` protects the queries that declare it; a query added
+next month with no filter is silently unscoped. A **policy** inverts
+that default at the codebase level: a boolean predicate declared once
+in `sqletch.yaml` is woven, at compile time, into every query that
+touches a designated table — and a check proves that **no reachable
+shape of any query touches a designated table unscoped**. Forgetting
+becomes impossible; opting out becomes one explicit, reviewable
+annotation.
+
+## Declaration
+
+```yaml
+policies:
+  - name: tenant_scope
+    tables: [orders, order_items, invoices]
+    predicate: "{} .tenant_id = :tenant_id"
+    param:
+      name: tenant_id
+      type: bigint            # Tier 2 dialects require it; Tier 1 asserts it
+    applies_to: [select, update, delete]   # default: select, update, delete
+```
+
+- `tables` entries and `param.name` are bare lowercase identifiers.
+- `{}` in the predicate stands for the designated relation as it is
+  named *in the target query*: its alias if it has one, else the table
+  name. The substituted name must be a bare identifier
+  (`[A-Za-z_][A-Za-z0-9_]*`); anything needing dialect quoting is
+  rejected.
+- The predicate may reference only the designated relation (via `{}`)
+  and its own `:param`s. It must parse as one complete boolean
+  expression in the dialect (`SQLETCH303` otherwise).
+- Multiple policies weave in declaration order, each as its own
+  conjunct. `INSERT … VALUES` is not a policy target (no rows are
+  filtered); `INSERT … SELECT` is covered through its `SELECT` body.
+
+## Weaving semantics
+
+Weaving happens **after scanning and before rendering**: every
+downstream phase — structural rules, the type oracle, nullability,
+shape enumeration, codegen — sees an ordinary template and cannot tell
+a woven conjunct from a hand-written one. The SQL that is verified is
+the scoped SQL; there is no window in which the verified statement and
+the executed statement differ. The soundness argument applies
+verbatim.
+
+The woven conjunct is **unconditional skeleton text with the empty
+guard set** (the same discipline as `@filter-tree` predicates): it is
+present in every shape, appended to the WHERE clause as a final
+`AND`-conjunct, or as a synthesized `WHERE` when the query has none
+(the `DELETE FROM orders` case). It does not count as the author's R6
+anchor: the anchor rule is checked on the *unwoven* template, so a
+template's validity never depends on configuration. Nullability is
+unaffected.
+
+Rules, settled deliberately (D1–D6 in the design record):
+
+- **Every top-level occurrence** of a designated table gets its own
+  conjunct (self-joins get one per side). Skipping one would silently
+  weaken "every row you read is scoped".
+- **A designated table on the null-extended side of an outer join is
+  rejected** (`SQLETCH125`): weaving into WHERE would silently turn
+  the outer join into an inner join, changing the query's results —
+  the class of surprise this project exists to prevent. Restructure or
+  opt out.
+- **A designated table visible only inside a subquery or CTE body is
+  rejected** (`SQLETCH125`): v1 weaves at the top level only, and loud
+  incompleteness beats silent incompleteness. A CTE whose *name*
+  shadows a designated table is conservatively treated as touching it.
+- **A designated table introduced by a guarded (`@if-present`) join is
+  rejected** (`SQLETCH125`): it cannot be unconditionally scoped.
+- **The policy parameter is an ordinary parameter**: it appears in the
+  affected queries' generated `Params` structs, typed by the oracle
+  (Tier 1, where `param.type` is asserted like a `-- @param` hint) or
+  by `param.type` (Tier 2, where it is mandatory). No ambient state,
+  no context extraction; the generated API contract is unchanged.
+
+## Enforcement and opt-out
+
+Weaving covers what the weaver reaches; the enforcement check states
+the invariant: for every relation whose table is designated by a
+policy, a conjunct matching that policy is present in the query's
+WHERE clause **in every reachable shape** (`SQLETCH124` otherwise). A
+hand-written scoping conjunct inside `@if-present` satisfies only the
+guard-on shapes and therefore fails — the quantifier is what makes
+this a proof rather than a formality.
+
+The opt-out is a per-query annotation with a mandatory reason:
+
+```sql
+-- name: ListAllOrdersForBackfill :many
+-- @policy-optout: tenant_scope (batch job; runs outside any tenant)
+SELECT ...
+```
+
+An opt-out naming an unknown policy, or one that does not apply to the
+query, is `SQLETCH126` — renaming a policy can never silently disarm
+its opt-outs. `sqletch explain` reports per-query policy coverage
+(woven / opted out with reason), machine-readably under
+`--format json`.
+
+## Boundary
+
+Policies constrain only sqletch-generated queries; they express
+conjunctive row filters, not column masking or per-role rules; and
+they guarantee the predicate is *present*, not that its runtime
+argument is *correct*. They complement, not replace, `@filter-tree!`
+(caller-chosen filters) and database RLS (runtime defense in depth for
+non-sqletch clients).
+
+------------------------------------------------------------------------
+
 # Compiler Architecture
 
 ## Phase 1 — Scanning and parsing (two layers)
@@ -1461,7 +1578,9 @@ Regression tests
 
 # Stability and Beyond v1.0
 
-Everything specified above is implemented and stable as of v1.0. The
+Everything specified above is implemented and stable as of v1.0,
+except §"Cross-Query Policies", which was specified after the freeze
+(design/14) and ships in v1.1 as an additive extension. The
 compatibility promises — what may change within v1 and what may not —
 are stated in `manual/11-compatibility.md`: the template language, the
 generated API, the `runtime` package, `sqletch.yaml`, the CLI surface,
@@ -1482,13 +1601,6 @@ Recorded, unscheduled, and none of it changes the verification model:
     conformance suite — pursued only where no embedded real engine
     exists (MySQL first) or where the corpus makes correctness
     demonstrable.
--   Cross-query policy weaving and enforcement: a configuration-
-    declared predicate (e.g. tenant scoping) woven at compile time
-    into every query touching designated tables, plus a lint proving
-    that no reachable shape in the codebase crosses the boundary
-    unscoped (opt-outs are explicit per-query annotations). Compile-
-    time expansion only — verification runs on the woven result, so
-    the soundness model is untouched.
 -   Lifting the local restrictions noted per construct (one
     `@filter-tree` per query; `@in` at depth-0 skeleton positions
     only). These are implementation limits, not model limits.
