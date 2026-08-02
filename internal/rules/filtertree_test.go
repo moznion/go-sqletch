@@ -102,6 +102,79 @@ func TestFilterTree_ComposeConformance(t *testing.T) {
 	}
 }
 
+// The empty-tree form is a verified rendering: the construct renders
+// TRUE and the whole statement is parsed, described, and planned like
+// any other rendering — the runtime TRUE fallback is never unverified.
+func TestFilterTree_TrueRenderingVerified(t *testing.T) {
+	q := scanOne(t, filterTemplate)
+	rs, err := ast.Renderings(postgres.Profile{}, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var empties []ast.Rendering
+	for _, r := range rs {
+		if r.Kind == ast.RenderTreeEmpty {
+			empties = append(empties, r)
+		}
+	}
+	if len(empties) != 1 {
+		t.Fatalf("RenderTreeEmpty renderings = %d, want 1", len(empties))
+	}
+	re := empties[0]
+	if !strings.Contains(re.SQL, "AND TRUE") {
+		t.Fatalf("empty-tree rendering:\n%s", re.SQL)
+	}
+	// Predicate params are absent; the remaining params renumber densely.
+	if len(re.ParamsSeq) != 1 || re.ParamsSeq[0] != "min_total" {
+		t.Fatalf("ParamsSeq = %v", re.ParamsSeq)
+	}
+	if diags := CheckR1(postgres.Profile{}, postgres.Frontend{}, q, rs); len(diags) != 0 {
+		t.Fatalf("R1 over the extended rendering set: %+v", diags)
+	}
+
+	// Conformance: the runtime composition of the nil tree (and of the
+	// explicit Unscoped tree) is byte-identical to the verified
+	// empty-tree rendering, with identical bind order.
+	frags := codegen.BuildFrags(postgres.Profile{}, q)
+	for _, tree := range []*runtime.Tree{nil, runtime.Unscoped()} {
+		sql, binds, err := runtime.ComposeTree(frags, runtime.ShapeKey{Guards: 1}, tree, runtime.DefaultTreeCaps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sql != re.SQL {
+			t.Fatalf("runtime empty tree != verified rendering:\nruntime:\n%q\nrenderer:\n%q", sql, re.SQL)
+		}
+		if len(binds) != len(re.ParamsSeq) {
+			t.Fatalf("binds = %d, ParamsSeq = %d", len(binds), len(re.ParamsSeq))
+		}
+		for i, b := range binds {
+			if b.FromTree || q.ParamOrder[b.Idx] != re.ParamsSeq[i] {
+				t.Fatalf("bind %d = %+v, renderer expects %q", i, b, re.ParamsSeq[i])
+			}
+		}
+	}
+}
+
+// R1 membership on the empty-tree rendering: the construct's TRUE must
+// be exactly one top-level conjunct. The scanner's lexical anchor check
+// cannot see precedence — `a OR b AND @filter-tree(…)` follows an AND
+// but sits under the OR, so the empty tree would vanish into the second
+// disjunct only.
+func TestFilterTree_ConjunctMembership(t *testing.T) {
+	precedence := `-- name: Bad :many
+SELECT o.id FROM orders AS o
+WHERE o.a = 1
+  OR o.b = 2 AND @filter-tree(scope)
+@predicate(x)
+o.c = :c
+@end
+;
+`
+	if diags := checkR1(t, precedence); !hasCode(diags, diagnostics.CodeNodeIncomplete) {
+		t.Fatalf("want SQLETCH102 for a filter-tree under OR precedence, got %+v", diags)
+	}
+}
+
 func TestFilterTree_RuntimeShapes(t *testing.T) {
 	q := scanOne(t, filterTemplate)
 	frags := codegen.BuildFrags(postgres.Profile{}, q)

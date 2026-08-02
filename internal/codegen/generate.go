@@ -642,6 +642,9 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		if filter.Required {
 			fmt.Fprintf(w, "\tif %s == nil {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
 		}
+		// Mirror the cache's own key derivation so the OnQuery hook
+		// observes the full key including the `;t=` tree segment.
+		fmt.Fprintf(w, "\tkey.Trees = []string{%s.Encode()}\n", treeField)
 		method := "GetTree"
 		if g.style == runtime.StyleQuestion {
 			method = "GetTreeStyle"

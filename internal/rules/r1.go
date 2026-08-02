@@ -115,6 +115,39 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 		diags = append(diags, checkOrderByContainment(trees[i], r)...)
 	}
 
+	// @filter-tree conjunct membership runs on the empty-tree rendering,
+	// not the maximal: the maximal conjunction AND-flattens through its
+	// parentheses into several top-level conjuncts, but the empty form
+	// is the single constant TRUE — it must be exactly one top-level
+	// conjunct, or the runtime's TRUE fallback would not substitute the
+	// whole construct (e.g. under OR precedence).
+	for i, r := range rs {
+		if r.Kind != ast.RenderTreeEmpty || trees[i] == nil {
+			continue
+		}
+		treeIdx := 0
+		for _, fr := range r.Frags {
+			ft, ok := fr.Item.(*template.FilterTree)
+			if !ok {
+				continue
+			}
+			if treeIdx == r.TreeIdx {
+				n := 0
+				for _, loc := range trees[i].TopConjunctLocs() {
+					if loc >= fr.Start && loc < fr.End {
+						n++
+					}
+				}
+				if n != 1 {
+					diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, ft.Span,
+						"@filter-tree does not occupy one whole WHERE conjunct: its empty rendering TRUE maps to %d top-level conjuncts, want exactly 1 (R1)", n).
+						WithHint("give the construct its own conjunct: `WHERE TRUE` then `AND @filter-tree(...)`"))
+				}
+			}
+			treeIdx++
+		}
+	}
+
 	// @order-by clause-coupling restrictions (review fixes F2/F1a of
 	// the spec cycle): DISTINCT ON is prefix-order-sensitive, and
 	// WITH TIES makes ORDER BY mandatory.
