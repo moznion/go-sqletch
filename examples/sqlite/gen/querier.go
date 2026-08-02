@@ -9,6 +9,7 @@ import (
 // Querier lets user code mock the generated queries.
 type Querier interface {
 	CountByStatus(ctx context.Context, arg CountByStatusParams) ([]CountByStatusRow, error)
+	FilterUsers(ctx context.Context, arg FilterUsersParams) ([]FilterUsersRow, error)
 	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
 	UsersInStatuses(ctx context.Context, arg UsersInStatusesParams) ([]UsersInStatusesRow, error)
 }

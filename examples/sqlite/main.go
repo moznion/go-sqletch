@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +15,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 
 	gen "github.com/moznion/go-sqletch/examples/sqlite/gen"
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 func main() {
@@ -75,6 +77,43 @@ func main() {
 	for _, u := range in {
 		fmt.Printf("  %d %s (%s)\n", u.ID, u.Email, u.Status)
 	}
+
+	// @filter-tree!: the filter crosses the call boundary as a typed
+	// value over the query's closed predicate vocabulary, never as SQL.
+	fmt.Println("filter tree (tenant AND active):")
+	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+		Limit: 10,
+	})
+	must(err)
+	for _, u := range scoped {
+		fmt.Printf("  %d %s\n", u.ID, u.Email)
+	}
+
+	fmt.Println("filter tree (banned OR alice*):")
+	either, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+		Limit: 10,
+	})
+	must(err)
+	for _, u := range either {
+		fmt.Printf("  %d %s\n", u.ID, u.Email)
+	}
+
+	// The `!` makes the filter required: a forgotten scope fails before
+	// any SQL is sent, and unfiltered access is one greppable call.
+	fmt.Println("filter tree (required mode):")
+	_, err = q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 10})
+	if !errors.Is(err, runtime.ErrFilterRequired) {
+		log.Fatalf("expected ErrFilterRequired, got %v", err)
+	}
+	fmt.Printf("  nil scope: %v\n", err)
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
+		Scope: gen.FilterUsersUnscoped(), // the explicit opt-out — renders TRUE
+		Limit: 10,
+	})
+	must(err)
+	fmt.Printf("  Unscoped(): %d users\n", len(unscoped))
 
 	fmt.Println("counts by status:")
 	counts, err := q.CountByStatus(ctx, gen.CountByStatusParams{TenantID: 1})

@@ -919,6 +919,11 @@ multi-tenant robustness: *forgetting* the filter is an error, and
 *opting out* is one greppable, reviewable line at the call site.
 Without the `!`, an empty or nil tree simply renders `TRUE`.
 
+Every example project carries a runnable `FilterUsers` query in this
+mode — see [`examples/sqlite/`](../../examples/sqlite/) for the
+no-setup version (`go run .`), and `examples/postgres/`,
+`examples/mysql/` for the same query per dialect.
+
 ### Constraints
 
 - One `@filter-tree` per query, occupying a WHERE-conjunct slot (write
