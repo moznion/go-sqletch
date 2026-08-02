@@ -75,6 +75,18 @@ jobs:
           # Drop this once golangci-lint ships go1.27-built binaries.
           install-mode: goinstall
           args: --build-tags devdb
+      # staticcheck + unused run standalone (they are disabled in
+      # .golangci.yml): golangci's bundled honnef.co/go/tools v0.7.0
+      # predates Go 1.27 and panics building IR for the go1.27rc2
+      # linux stdlib. 2026.2rc1 is the first staticcheck that analyzes
+      # Go 1.27 code. Generated packages (examples/*/gen) are skipped —
+      # the standalone binary has no generated-file exclusion, and
+      # golangci already skipped them. Fold this back into golangci
+      # once it bundles honnef.co/go/tools >= v0.8.0.
+      - name: staticcheck (standalone, go1.27-compatible)
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.0-rc.1
+          staticcheck -tags devdb -checks all $(go list ./... | grep -v '/gen$')
 
   fuzz-smoke:
     name: fuzz (short)

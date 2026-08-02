@@ -23,6 +23,9 @@ composition of pre-verified constant fragments.
 go test ./...                              # unit suites (no DB)
 go test -tags devdb ./internal/e2e/        # real-DB E2E (needs Docker or SQLETCH_TEST_DSN)
 golangci-lint run --build-tags devdb ./... # must be 0 issues before "done"
+staticcheck -tags devdb -checks all $(go list ./... | grep -v '/gen$')
+                                           # ALSO required 0 issues: staticcheck+unused
+                                           # are disabled in .golangci.yml (see policy)
 goimports -w .                             # run after every change
 go run ./cmd/sqletch generate --config examples/postgres/sqletch.yaml
 go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=15s
@@ -45,7 +48,17 @@ regression test.
   Go and refuse newer targets: build it from source with the module's
   toolchain (`GOTOOLCHAIN=go1.27rc2 go install .../golangci-lint@latest`);
   CI does the same via `install-mode: goinstall`. Drop both once
-  golangci-lint ships go1.27-built binaries.
+  golangci-lint ships go1.27-built binaries. Separately, golangci's
+  bundled honnef.co/go/tools v0.7.0 predates Go 1.27 and its buildir
+  panics on the go1.27rc2 LINUX stdlib (macOS happens not to trip it),
+  so staticcheck+unused are disabled in .golangci.yml and run via the
+  standalone staticcheck 2026.2rc1
+  (`GOTOOLCHAIN=go1.27rc2 go install honnef.co/go/tools/cmd/staticcheck@v0.8.0-rc.1`),
+  skipping generated `/gen` packages (no generated-file exclusion in
+  the standalone binary). Fold back into golangci-lint once it bundles
+  honnef.co/go/tools >= v0.8.0. CI's setup-go pins `1.27.0-rc.2`
+  explicitly (`go-version-file` cannot parse an rc directive); return
+  it to `go-version-file: go.mod` at 1.27.0.
 - **JSON v1/v2 split**: byte-pinned outputs (cache JSON, `--json`
   diagnostics, LSP outbound frames) marshal with the v1 API; external
   input (LSP inbound, doc 10 §3) decodes with `encoding/json/v2` for
