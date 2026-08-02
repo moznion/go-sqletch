@@ -18,7 +18,7 @@ type AllAuditActionsRow struct {
 }
 
 var allAuditActionsFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n"},
+	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n"},
 }
 
 func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams) ([]AllAuditActionsRow, error) {

@@ -24,3 +24,13 @@ SELECT a.action, count(*) AS occurrences
 FROM audit_logs AS a
 GROUP BY a.action
 ORDER BY occurrences DESC;
+
+-- name: UserAuditActions :many
+-- audit_logs sits on the null-extended side here, so the policy
+-- weaves into the JOIN's ON clause: every user row survives, and only
+-- the tenant's audit rows join (a WHERE conjunct would have turned
+-- the LEFT JOIN into an inner join).
+SELECT u.id, a.action
+FROM users AS u
+LEFT JOIN audit_logs AS a ON a.actor_id = u.id
+ORDER BY u.id, a.id;

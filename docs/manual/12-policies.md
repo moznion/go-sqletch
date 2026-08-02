@@ -54,13 +54,19 @@ statement and the executed statement differ.
   `INSERT … SELECT` that reads a designated table is rejected
   (`SQLETCH125`) — opt out or restructure.
 
+- A designated table on the null-extended side of an outer join
+  (e.g. the right side of a `LEFT JOIN`) is woven into **that join's
+  `ON` clause** instead: a `WHERE` conjunct would silently turn the
+  outer join into an inner join, while the `ON` conjunct preserves
+  the outer row set and scopes only the joined rows.
+
 Positions sqletch cannot scope are rejected with `SQLETCH125` rather
 than silently skipped: a designated table inside a subquery, CTE, or
-set-operation branch; on the null-extended side of an outer join
-(weaving `WHERE` there would silently turn your `LEFT JOIN` into an
-inner join); introduced by a guarded `@if-present` join; or bound to
-a name that is not a bare identifier. Restructure the query, or opt
-out.
+set-operation branch; joined with `USING`/`NATURAL` on a
+null-extended side (no `ON` expression to extend — rewrite as an
+explicit `ON`); introduced by a guarded `@if-present` join; or bound
+to a name that is not a bare identifier. Restructure the query, or
+opt out.
 
 ## Opting out
 

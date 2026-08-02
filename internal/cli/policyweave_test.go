@@ -66,10 +66,12 @@ func TestOffline_PolicyWeaves(t *testing.T) {
 }
 
 func TestOffline_PolicyUnweavableIsDiagnosed(t *testing.T) {
+	// A USING join on the null-extended side has no ON expression to
+	// extend (a plain ON join would be woven there, design 14 §D2(a)).
 	cfg := writeOfflineProject(t, map[string]string{
 		"sqletch.yaml": policyProjectYAML,
 		"queries/leaky.sql": "-- name: Leaky :many\n" +
-			"SELECT u.id FROM u LEFT JOIN orders o ON o.id = u.id WHERE u.name = :name;\n",
+			"SELECT u.id FROM u LEFT JOIN orders USING (id) WHERE u.name = :name;\n",
 	})
 	res, err := NewOfflineChecker(cfg).Check(nil)
 	if err != nil {
@@ -83,7 +85,7 @@ func TestOffline_PolicyUnweavableIsDiagnosed(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("no SQLETCH125 for the nullable-side join: %+v", res.Diags[path])
+		t.Errorf("no SQLETCH125 for the nullable-side USING join: %+v", res.Diags[path])
 	}
 }
 

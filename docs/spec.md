@@ -1152,10 +1152,12 @@ Rules, settled deliberately (D1–D6 in the design record):
   conjunct (self-joins get one per side). Skipping one would silently
   weaken "every row you read is scoped".
 - **A designated table on the null-extended side of an outer join is
-  rejected** (`SQLETCH125`): weaving into WHERE would silently turn
-  the outer join into an inner join, changing the query's results —
-  the class of surprise this project exists to prevent. Restructure or
-  opt out.
+  woven into its own join's `ON` clause**, not WHERE: a WHERE conjunct
+  would silently turn the outer join into an inner join, while an `ON`
+  conjunct preserves the outer row set and scopes only the joined
+  rows. `USING`/`NATURAL` joins have no `ON` expression to extend and
+  are rejected (`SQLETCH125`): rewrite as an explicit `ON`, or opt
+  out.
 - **A designated table visible only inside a subquery or CTE body is
   rejected** (`SQLETCH125`): v1 weaves at the top level only, and loud
   incompleteness beats silent incompleteness. A CTE whose *name*
@@ -1181,8 +1183,10 @@ Rules, settled deliberately (D1–D6 in the design record):
 
 Weaving covers what the weaver reaches; the enforcement check states
 the invariant: for every relation whose table is designated by a
-policy, a conjunct matching that policy is present in the query's
-WHERE clause **in every reachable shape** (`SQLETCH124` otherwise). A
+policy, a conjunct matching that policy is present **in every
+reachable shape** (`SQLETCH124` otherwise) — in the query's WHERE
+clause, or in the relation's own `ON` clause for a null-extended
+outer-join occurrence. A
 hand-written scoping conjunct inside `@if-present` satisfies only the
 guard-on shapes and therefore fails — the quantifier is what makes
 this a proof rather than a formality.
