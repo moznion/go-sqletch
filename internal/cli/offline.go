@@ -349,5 +349,34 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 				q.ColumnHints[name].Span, "@column hint for unknown result column %q", name))
 		}
 	}
+	// `-- @column` hints ASSERT against any column type the oracle
+	// supplied (SQLETCH216, the SQLETCH213 rule applied to columns):
+	// under the native backend hints SUPPLY expression types, so
+	// whenever an oracle answer exists to check them against — a
+	// server-backed run, or a catalog-typed direct column — a wrong
+	// hint must be loud, never silently overridden. Sorted, and the
+	// oracle wins.
+	colHintNames := make([]string, 0, len(q.ColumnHints))
+	for name := range q.ColumnHints {
+		colHintNames = append(colHintNames, name)
+	}
+	sort.Strings(colHintNames)
+	for _, name := range colHintNames {
+		hint := q.ColumnHints[name]
+		tr, ok := drv.typeByName(hint.SQLType)
+		if !ok {
+			continue // reported above where hints are load-bearing
+		}
+		for _, col := range descs[0].Columns {
+			if col.Name != name || col.Type.OID == 0 || col.Type.OID == tr.OID {
+				continue
+			}
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeColumnHintConflict,
+				hint.Span,
+				"@column says %q is %s, but the oracle typed it %s — the oracle wins; fix or drop the annotation",
+				name, hint.SQLType, col.Type.Name))
+			break
+		}
+	}
 	return paramTypes, diags, nil
 }

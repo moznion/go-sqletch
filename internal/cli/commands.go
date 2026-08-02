@@ -57,8 +57,12 @@ func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat b
 	if res.Offline {
 		offline = "yes"
 	}
-	fmt.Fprintf(out, "sqletch: %d queries ok (oracle cache: %d hits, %d misses; offline: %s)\n",
-		res.QueryCount, res.OracleHits, res.OracleMiss, offline)
+	backend := ""
+	if cfg.NativeOracle() {
+		backend = "; oracle: native"
+	}
+	fmt.Fprintf(out, "sqletch: %d queries ok (oracle cache: %d hits, %d misses; offline: %s%s)\n",
+		res.QueryCount, res.OracleHits, res.OracleMiss, offline, backend)
 	if mode == ModeCheckExhaustive {
 		if res.NativePlan {
 			// D2 (design 15): the native backend has no planner, so an

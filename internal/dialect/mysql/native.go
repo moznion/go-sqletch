@@ -226,17 +226,23 @@ func typeRefForColumn(c *cache.Column, pos int) (dialect.TypeRef, error) {
 			Construct: fmt.Sprintf("projecting the %s column %q", tr.Name, c.Name),
 			Hint:      "ENUM/SET wire types differ from their catalog form; cast the column or switch to database.oracle: \"server\""}
 	}
-	// Wire normalization, pinned by the differential gate: the
-	// protocol reports every TEXT/BLOB flavor as BLOB (only the
-	// binary charset distinguishes text from blob), and flags
-	// YEAR/BIT columns UNSIGNED.
-	switch base {
+	oid := wireNormalize(tr.OID)
+	return dialect.TypeRef{OID: oid, Name: typeCodeName(oid)}, nil
+}
+
+// wireNormalize maps a catalog-derived encoded type to what the
+// protocol actually reports, pinned by the differential gate: every
+// TEXT/BLOB flavor arrives as BLOB (only the binary charset
+// distinguishes text from blob), and YEAR/BIT carry the UNSIGNED
+// flag.
+func wireNormalize(oid uint32) uint32 {
+	switch oid &^ (FlagUnsigned | FlagBinary) {
 	case typeTinyBlob, typeMedumBlob, typeLongBlob:
-		tr.OID = typeBlob | (tr.OID & FlagBinary)
+		return typeBlob | (oid & FlagBinary)
 	case typeYear, typeBit:
-		tr.OID |= FlagUnsigned
+		return oid | FlagUnsigned
 	}
-	return dialect.TypeRef{OID: tr.OID, Name: typeCodeName(tr.OID)}, nil
+	return oid
 }
 
 // ---- SELECT ----------------------------------------------------------------
@@ -594,7 +600,8 @@ func parseColumnHints(sql string) map[string]dialect.TypeRef {
 	hints := map[string]dialect.TypeRef{}
 	for _, m := range colHintNativeRe.FindAllStringSubmatch(sql, -1) {
 		if tr, ok := (TypeMap{}).TypeByName(m[2]); ok {
-			hints[m[1]] = dialect.TypeRef{OID: tr.OID, Name: typeCodeName(tr.OID)}
+			oid := wireNormalize(tr.OID)
+			hints[m[1]] = dialect.TypeRef{OID: oid, Name: typeCodeName(oid)}
 		}
 	}
 	return hints

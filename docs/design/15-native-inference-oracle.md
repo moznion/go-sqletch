@@ -531,16 +531,22 @@ their code.
    the `testdata/corpus/` format and the replay runner (§7.2), seeded
    from existing example caches and a captured conformance run —
    merged before any inference code, so every subsequent PR is judged
-   by it.
+   by it. **Done 2026-08-02** (`internal/corpus`; seed case verified
+   against real MySQL 8.4).
 2. Config surface (D1) + catalog builder (§5.1) with its unit and
-   differential-snapshot tests.
+   differential-snapshot tests. **Done 2026-08-02.**
 3. Describe engine (§5.2) in the v1 subset + `SQLETCH214`/`215` +
    corpus replay green; dual-backend and fuzz modes wired into the
-   devdb CI job.
+   devdb CI job. **Done 2026-08-02** except the differential fuzz
+   mode (§7.3), which remains open.
 4. D7 assert (`SQLETCH216`), E2E cold-run/byte-identical-module gate,
    manual chapter (backend selection, what `--exhaustive` proves,
-   the annotation discipline delta), `explain` reporting the active
-   backend.
-5. Deferred: expression-inference widenings (D3b, corpus-gated,
-   one construct class at a time); `oracle_fallback: server` (D1b);
-   LSP live-miss serving.
+   the annotation discipline delta), the check summary reporting the
+   active backend. **Done 2026-08-02** (the summary line carries
+   `oracle: native`; a fuller `explain` coverage section remains
+   open).
+5. Deferred: differential fuzz (§7.3); expression-inference widenings
+   (D3b, corpus-gated, one construct class at a time);
+   `oracle_fallback: server` (D1b); LSP live-miss serving; corpus
+   growth beyond the seed case (capture more adversarial cases via
+   `SQLETCH_UPDATE_CORPUS`).

@@ -169,3 +169,105 @@ func TestRun_NativeExhaustiveSaysWhatItProves(t *testing.T) {
 		t.Fatal("exhaustive must still verify every shape natively")
 	}
 }
+
+// TestRun_NativeGenerateMatchesCommittedExample is the cold-run gate
+// (design 15 §7): generating the examples/mysql module natively —
+// fresh cache, no server — must reproduce the committed, server-built
+// module byte for byte.
+func TestRun_NativeGenerateMatchesCommittedExample(t *testing.T) {
+	src := filepath.Join("..", "..", "examples", "mysql")
+	dir := t.TempDir()
+	for _, rel := range []string{"db/schema.sql", "queries/users.sql"} {
+		data, err := os.ReadFile(filepath.Join(src, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sqletch.yaml"), []byte(`version: 1
+dialect: mysql
+server_version: "8.4"
+database:
+  oracle: native
+schema:
+  files: [db/schema.sql]
+queries: [queries/*.sql]
+output:
+  package: gen
+  path: gen
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, diags := config.Load(filepath.Join(dir, "sqletch.yaml"))
+	if len(diags) > 0 {
+		t.Fatalf("config: %+v", diags)
+	}
+	res, err := Run(context.Background(), cfg, ModeGenerate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.HasErrors(res.Diags) {
+		t.Fatalf("diagnostics: %+v", res.Diags)
+	}
+
+	want, err := os.ReadDir(filepath.Join(src, "gen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compared := 0
+	for _, e := range want {
+		if e.IsDir() {
+			continue
+		}
+		wantBytes, err := os.ReadFile(filepath.Join(src, "gen", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBytes, err := os.ReadFile(filepath.Join(dir, "gen", e.Name()))
+		if err != nil {
+			t.Fatalf("native generate did not produce %s: %v", e.Name(), err)
+		}
+		if string(wantBytes) != string(gotBytes) {
+			t.Errorf("%s: native-generated module differs from the committed server-built one", e.Name())
+		}
+		compared++
+	}
+	if compared == 0 {
+		t.Fatal("no committed generated files to compare against")
+	}
+}
+
+// TestRun_ColumnHintConflictIsSQLETCH216: a wrong `-- @column` must
+// be loud whenever an oracle answer exists to check it against — the
+// oracle wins, never the annotation (D7).
+func TestRun_ColumnHintConflictIsSQLETCH216(t *testing.T) {
+	dir := t.TempDir()
+	query := `-- name: OneUser :many
+-- @param id: bigint
+-- @column email: bigint
+SELECT u.email FROM users AS u WHERE u.id = :id;
+`
+	cfg := writeNativeMySQLProject(t, dir, nativeCLISchema, query)
+	res, err := Run(context.Background(), cfg, ModeCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range res.Diags {
+		if d.Code == diagnostics.CodeColumnHintConflict {
+			found = true
+			if !strings.Contains(d.Message, "oracle wins") {
+				t.Errorf("message must state the precedence rule, got %q", d.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("want SQLETCH216, got %+v", res.Diags)
+	}
+}
