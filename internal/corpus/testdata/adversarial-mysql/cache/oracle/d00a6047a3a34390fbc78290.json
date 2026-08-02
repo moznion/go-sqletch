@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT s.* FROM second AS s",
+  "params": null,
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 2,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "ref",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 2,
+      "src_att": 2,
+      "nullable": false
+    },
+    {
+      "name": "label",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 2,
+      "src_att": 3,
+      "nullable": false
+    }
+  ]
+}

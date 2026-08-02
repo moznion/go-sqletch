@@ -1,0 +1,300 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "tables": [
+    {
+      "schema": "sqletch",
+      "name": "every_type",
+      "oid": 1,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "c_int",
+          "att": 2,
+          "type_oid": 3,
+          "type_name": "int",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_uint",
+          "att": 3,
+          "type_oid": 259,
+          "type_name": "int unsigned",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_tiny",
+          "att": 4,
+          "type_oid": 1,
+          "type_name": "tinyint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_bool",
+          "att": 5,
+          "type_oid": 1,
+          "type_name": "tinyint(1)",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_small",
+          "att": 6,
+          "type_oid": 2,
+          "type_name": "smallint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_med",
+          "att": 7,
+          "type_oid": 9,
+          "type_name": "mediumint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_ubig",
+          "att": 8,
+          "type_oid": 264,
+          "type_name": "bigint unsigned",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_vchar",
+          "att": 9,
+          "type_oid": 253,
+          "type_name": "varchar(100)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_char",
+          "att": 10,
+          "type_oid": 254,
+          "type_name": "char(8)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_text",
+          "att": 11,
+          "type_oid": 252,
+          "type_name": "text",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_ttext",
+          "att": 12,
+          "type_oid": 249,
+          "type_name": "tinytext",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_mtext",
+          "att": 13,
+          "type_oid": 250,
+          "type_name": "mediumtext",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_ltext",
+          "att": 14,
+          "type_oid": 251,
+          "type_name": "longtext",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_blob",
+          "att": 15,
+          "type_oid": 764,
+          "type_name": "blob",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_tblob",
+          "att": 16,
+          "type_oid": 761,
+          "type_name": "tinyblob",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_mblob",
+          "att": 17,
+          "type_oid": 762,
+          "type_name": "mediumblob",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_lblob",
+          "att": 18,
+          "type_oid": 763,
+          "type_name": "longblob",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_vbin",
+          "att": 19,
+          "type_oid": 765,
+          "type_name": "varbinary(16)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_bin",
+          "att": 20,
+          "type_oid": 766,
+          "type_name": "binary(4)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_dec",
+          "att": 21,
+          "type_oid": 246,
+          "type_name": "decimal(10,2)",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_float",
+          "att": 22,
+          "type_oid": 4,
+          "type_name": "float",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_dbl",
+          "att": 23,
+          "type_oid": 5,
+          "type_name": "double",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_date",
+          "att": 24,
+          "type_oid": 10,
+          "type_name": "date",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_dt",
+          "att": 25,
+          "type_oid": 12,
+          "type_name": "datetime(3)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_ts",
+          "att": 26,
+          "type_oid": 7,
+          "type_name": "timestamp(6)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_time",
+          "att": 27,
+          "type_oid": 11,
+          "type_name": "time",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_year",
+          "att": 28,
+          "type_oid": 13,
+          "type_name": "year",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_json",
+          "att": 29,
+          "type_oid": 245,
+          "type_name": "json",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_bit",
+          "att": 30,
+          "type_oid": 16,
+          "type_name": "bit(5)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "c_mood",
+          "att": 31,
+          "type_oid": 247,
+          "type_name": "enum('a','b')",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "c_tags",
+          "att": 32,
+          "type_oid": 0,
+          "type_name": "set('x','y')",
+          "not_null": true,
+          "has_default": false
+        }
+      ]
+    },
+    {
+      "schema": "sqletch",
+      "name": "second",
+      "oid": 2,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "ref",
+          "att": 2,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "label",
+          "att": 3,
+          "type_oid": 253,
+          "type_name": "varchar(32)",
+          "not_null": true,
+          "has_default": false
+        }
+      ]
+    }
+  ]
+}

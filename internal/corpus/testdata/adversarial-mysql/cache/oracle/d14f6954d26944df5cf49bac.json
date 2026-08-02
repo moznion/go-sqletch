@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT t.c_blob, t.c_tblob, t.c_mblob, t.c_lblob, t.c_vbin, t.c_bin FROM every_type AS t",
+  "params": null,
+  "columns": [
+    {
+      "name": "c_blob",
+      "oid": 764,
+      "type_name": "blob",
+      "src_rel": 1,
+      "src_att": 15,
+      "nullable": false
+    },
+    {
+      "name": "c_tblob",
+      "oid": 764,
+      "type_name": "blob",
+      "src_rel": 1,
+      "src_att": 16,
+      "nullable": false
+    },
+    {
+      "name": "c_mblob",
+      "oid": 764,
+      "type_name": "blob",
+      "src_rel": 1,
+      "src_att": 17,
+      "nullable": false
+    },
+    {
+      "name": "c_lblob",
+      "oid": 764,
+      "type_name": "blob",
+      "src_rel": 1,
+      "src_att": 18,
+      "nullable": false
+    },
+    {
+      "name": "c_vbin",
+      "oid": 765,
+      "type_name": "varbinary",
+      "src_rel": 1,
+      "src_att": 19,
+      "nullable": false
+    },
+    {
+      "name": "c_bin",
+      "oid": 766,
+      "type_name": "binary",
+      "src_rel": 1,
+      "src_att": 20,
+      "nullable": false
+    }
+  ]
+}
