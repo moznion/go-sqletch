@@ -1,13 +1,14 @@
 # sqletch Design — 15: Native-inference oracle backend
 
-**Status: DRAFT — not implemented, not scheduled.** This document
-expands the recorded notes (spec §"Oracle backends" stage 3; spec
-"Future Roadmap"; `08-later-phases.md` §"Beyond 1.0") into a design.
-Several points below are marked **DECISION NEEDED** — they change the
-configuration surface, the annotation discipline, or what a diagnostic
-means, so per `CLAUDE.md` §"Document authority" they must be settled
-with the user before implementation, and the outcome reflected into
-`docs/spec.md`.
+**Status: ACCEPTED — in implementation (phase 1 started
+2026-08-02).** This document expands the recorded notes (spec
+§"Oracle backends" stage 3; spec "Future Roadmap";
+`08-later-phases.md` §"Beyond 1.0") into a design. The decisions
+D1–D8 (§6) were settled with the user on 2026-08-02, each on the
+recommended option; the settled outcome is recorded inline per item.
+Reflection into `docs/spec.md` happens with the phase that ships the
+first user-visible surface (the D1 config key, phase 2) — phase 1 is
+test infrastructure only and changes no observable behavior.
 
 The native-inference backend is a self-implemented `dialect.Oracle`
 (à la sqlc): `Describe` answered by sqletch's own resolution and
@@ -277,6 +278,9 @@ the initial test matrix. `Config` is v1.0-frozen surface, additive
 keys only — naming must be settled once. Note `database.dsn` is
 meaningless under `native` (validation: setting both is `SQLETCH301`).
 
+**Settled 2026-08-02: (a)** — `database.oracle: server | native`,
+strict, no fallback in v1.
+
 ### D2 — What `check --exhaustive` claims under native
 
 §5.3: recommendation (a) — `Plan` succeeds after describe-validation,
@@ -284,6 +288,8 @@ meaningless under `native` (validation: setting both is `SQLETCH301`).
 server-backed run. The alternative (b) refuses `--exhaustive`
 entirely. Either way the manual's verification-model chapter must say
 what a native-backed check does and does not prove.
+
+**Settled 2026-08-02: (a) with the printed notice.**
 
 ### D3 — Expression result columns: annotate or infer
 
@@ -301,6 +307,9 @@ cases for its edge behavior (signedness, DECIMAL scale, NULL-ability
 of aggregates). The widening path never changes config or annotations
 — hints simply become optional-but-asserted (D7) for constructs the
 engine learns.
+
+**Settled 2026-08-02: (a)**, with (b) as later corpus-gated
+widenings.
 
 ### D4 — Output names of expression columns
 
@@ -321,6 +330,9 @@ would consume the differential budget on names instead of types.
 Generated row-struct fields need stable names anyway — an aliased
 column is better sqletch style on every backend.
 
+**Settled 2026-08-02: (a)** — `AS` required on non-direct output
+columns under the native backend.
+
 ### D5 — The DDL subset
 
 §5.1 proposes `CREATE TABLE` (+ no-op statements) only, everything
@@ -338,6 +350,8 @@ builder.
 (b) safe to add later — an ALTER-handling bug shows up as a catalog
 byte-diff, so the subset can grow with evidence rather than up front.
 
+**Settled 2026-08-02: (a)** — CREATE-only in v1.
+
 ### D6 — `schema_setup_cmd` is incompatible
 
 The native backend cannot run goose/atlas — there is no server to run
@@ -347,6 +361,9 @@ validation error (`SQLETCH301`). Recorded as a decision because it is
 a visible capability cliff between backends, not just a limitation
 note. (No alternative is proposed; executing migration tools against
 a sqletch-embedded fake server is out of the question.)
+
+**Settled 2026-08-02: as proposed** — `native` requires `schema:`
+globs; the combination with `schema_setup_cmd` is `SQLETCH301`.
 
 ### D7 — Hints flip from SUPPLY to ASSERT when a server is present
 
@@ -362,6 +379,9 @@ column metadata, engine-wins, mirroring `SQLETCH213` semantics
 ordinary server-backed `generate` for users who annotate voluntarily
 (recommended: yes — it is the same check, and it hardens the corpus),
 or only inside the differential job?
+
+**Settled 2026-08-02: yes** — the assert runs wherever a server
+answers, including ordinary server-backed `generate`/`check`.
 
 ### D8 — May a native-backed run write the committed cache?
 
@@ -384,6 +404,9 @@ backend exists for. (a) is sound *provided* the differential job
 re-derives from `rendered_sql` + schema rather than comparing entries
 to each other — which is how it must work anyway (§7). Requires no
 `FormatVersion` bump.
+
+**Settled 2026-08-02: (a)** — native runs read and write the cache;
+corpus authority is the re-deriving differential CI job.
 
 ## 7. Differential testing — the acceptance gate
 
