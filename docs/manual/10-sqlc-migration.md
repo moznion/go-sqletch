@@ -74,3 +74,8 @@ sees the `OR IS NULL` de-optimization.
    template mistake, exit 2 = environment).
 5. Repeat per query family; sqlc keeps whatever never needed to be
    dynamic.
+6. Multi-tenant codebase? Once the tenant-scoped tables' queries are
+   in sqletch, declare a [cross-query policy](12-policies.md) over
+   them — the tenant filter becomes something the compiler proves
+   rather than something reviews catch. (Policies cover sqletch
+   queries only, so this lands naturally *after* a family migrates.)
