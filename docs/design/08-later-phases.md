@@ -75,6 +75,16 @@ starts; this file records the deltas and the landmines.
 
 ### `@filter-tree`
 
+Post-v1.0 delta: the WHERE-only slot restriction is lifted — the
+construct occupies a WHERE **or HAVING** conjunct slot
+(`FilterTree.Slot`), with the conjunct-anchor discipline enforced on
+both sides (scan-time: directly after an unconditional `AND`, conjunct
+ended after `@end`; R1: the empty rendering's `TRUE` maps to exactly
+one top-level conjunct of its clause via
+`TopConjunctLocs`/`HavingConjunctLocs`). The empty tree form is a
+verified rendering (`ast.RenderTreeEmpty`), conformance-pinned to the
+runtime's nil/`Unscoped` composition. One block per query remains.
+
 - runtime: `Tree` value type (And/Or/Leaf), canonical encoding
   (preorder, ordinals + arity) as cache key — full-encoding compare on
   LRU hit; caps (nodes/depth) checked before composition

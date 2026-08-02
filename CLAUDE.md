@@ -138,11 +138,18 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - @when literals: string/integer/boolean; `=`/`!=` (`<>` alias);
   modeled as IfPresent items carrying value atoms so all downstream
   machinery is shared.
-- @filter-tree: one block per query, WHERE-conjunct slot only (local
-  v0.3 restrictions, documented in the spec); caps configurable via
+- @filter-tree: one block per query (local restriction, documented in
+  the spec); WHERE or HAVING conjunct slot, and the conjunct-anchor
+  discipline is ENFORCED — directly after an unconditional `AND`,
+  conjunct ended after `@end` (SQLETCH008), plus R1 membership of the
+  empty rendering's TRUE as exactly one top-level conjunct
+  (SQLETCH102, via TopConjunctLocs/HavingConjunctLocs). The empty tree
+  form is a verified rendering (ast.RenderTreeEmpty), conformance-
+  pinned to nil/Unscoped composition. Caps configurable via
   `filter_tree_caps` and baked into generated code; predicate params
   are constructor arguments, never struct fields; composition caches
-  bind PLANS (positions), never values.
+  bind PLANS (positions), never values; generated code sets key.Trees
+  before composing so OnQuery logs the `;t=` segment.
 - @order-by: verification = maximal + @default renderings only; the
   full permutation space is enumerated for exhaustive/property checks.
 - `EXPLAIN (GENERIC_PLAN)` output must go through pgconn's raw simple

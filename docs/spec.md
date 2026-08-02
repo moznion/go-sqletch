@@ -496,14 +496,27 @@ Specification details:
     with the generated `<Query>Unscoped()` constructor (which renders
     `TRUE`). Required mode exists for multi-tenant robustness:
     *forgetting* the filter is an error; *opting out* is one
-    greppable, reviewable line at the call site.
+    greppable, reviewable line at the call site. The empty form is a
+    **verified rendering** of its own (the tree slot as the literal
+    `TRUE`), so the fallback is parsed, described, and planned like
+    any other rendering, and the runtime's nil/`Unscoped` composition
+    is conformance-pinned to it byte-for-byte.
 -   The runtime enforces configurable tree caps (default: 32 nodes,
     depth 8; `filter_tree_caps` in sqletch.yaml, baked into generated
     code) to bound adversarially large inputs.
--   Implementation constraints: at most **one** `@filter-tree`
-    per query, and it occupies a WHERE-conjunct slot (written after an
-    unconditional `AND`). Both are local restrictions, not model
-    limits; lifting them is future work.
+-   The construct occupies a **WHERE or HAVING conjunct slot** and
+    must be one whole conjunct: it is written directly after an
+    unconditional `AND` and nothing may extend its conjunct after
+    `@end`. This is enforced — lexically at scan time (both anchors)
+    and structurally by R1 on the empty rendering, whose `TRUE` must
+    map to exactly one top-level conjunct of its clause (which catches
+    precedence splicing like `a OR b AND @filter-tree(…)`). Anywhere
+    else the `TRUE` fallback would silently disarm or change the
+    filter (`OR TRUE`, `NOT TRUE`).
+-   Implementation constraint: at most **one** `@filter-tree` per
+    query — a local restriction, not a model limit; lifting it is
+    future work (its main use case, a required scope tree alongside an
+    optional criteria tree, is largely covered by policy weaving).
 -   Statement/text caches key on the canonical tree encoding (hash as
     index, full encoding compared on hit) and are LRU-bounded.
 
@@ -1226,9 +1239,10 @@ is the closed vocabulary, the caps, and `sqletch explain`.
 # Verification Model — Soundness Sketch
 
 Claim: under R1–R9 and runtime premises P1–P2, if the maximal query,
-each `@choose` case and `@order-by` `@default` substitution, and the
-minimal-shape structural checks pass, every reachable shape parses,
-resolves, and type-checks.
+each `@choose` case and `@order-by` `@default` substitution, each
+`@in` arity-0 form (expanding dialects), each `@filter-tree` empty
+form (`TRUE`), and the minimal-shape structural checks pass, every
+reachable shape parses, resolves, and type-checks.
 
 -   *Parsing*: shapes are produced by deleting guarded items from
     list-shaped clauses (conjunctions, SET items, paired INSERT items,
@@ -1491,7 +1505,11 @@ Recorded, unscheduled, and none of it changes the verification model:
     the soundness model is untouched.
 -   Lifting the local restrictions noted per construct (one
     `@filter-tree` per query; `@in` at depth-0 skeleton positions
-    only). These are implementation limits, not model limits.
+    only). These are implementation limits, not model limits. (The
+    `@filter-tree` WHERE-only slot restriction was lifted to
+    WHERE/HAVING conjunct slots; the one-block-per-query limit
+    remains, deferred alongside policy weaving, which covers the
+    two-tree scope+criteria use case.)
 
 Specified above and designed, but deliberately not shipped in v1.0:
 
