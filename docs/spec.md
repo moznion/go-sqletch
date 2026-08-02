@@ -250,14 +250,29 @@ live* is a backend choice invisible to the core:
     is served this way today (the real engine compiled to WASM, run
     under wazero). The same treatment for PostgreSQL is designed and
     proven feasible but not yet shipped; see Beyond v1.0.
-3.  **Native inference** (long-term option): a self-implemented
-    inference engine à la sqlc. Deliberately last, and only once the
-    project has accumulated a large corpus of oracle results — every
-    cache entry and conformance-suite run is a
-    `(schema, query, types)` ground-truth triple, so a native backend
-    is built and continuously **differential-tested against the real
-    engine's answers** instead of written blind. MySQL, which has no
-    embeddable real engine, is the first candidate to benefit.
+3.  **Native inference**: a self-implemented inference engine à la
+    sqlc. Deliberately last, and only once the project has
+    accumulated a large corpus of oracle results — every cache entry
+    and conformance-suite run is a `(schema, query, types)`
+    ground-truth triple, so a native backend is built and continuously
+    **differential-tested against the real engine's answers** instead
+    of written blind. MySQL, which has no embeddable real engine, is
+    the dialect this backend serves (the others use their real
+    engine). Selected with `database.oracle: native` (default
+    `server`); the selection changes no verification semantics, only
+    who answers. The backend is strict and fail-closed: constructs
+    outside its modeled subset are refused with a diagnostic naming
+    the escape hatches (`SQLETCH214` for query constructs,
+    `SQLETCH215` for schema DDL), never guessed. Its subset leans on
+    the Tier 2 annotation discipline: `-- @param` stays mandatory as
+    everywhere on MySQL, and expression result columns additionally
+    require an `AS` alias and a `-- @column` annotation. Acceptance
+    is gated on byte-identical cache entries versus the server
+    backend over the committed corpus (`internal/corpus`), and the
+    corpus itself is continuously re-derived against a real MySQL in
+    CI. Native runs assert nothing about planner-stage behavior
+    (`EXPLAIN` coverage requires a server-backed run; `check
+    --exhaustive` says so).
 
 Backends are swappable per driver without touching the template
 language, the structural rules, or the soundness argument.

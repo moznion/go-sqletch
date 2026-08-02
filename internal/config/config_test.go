@@ -163,3 +163,63 @@ func TestNullOverridesFor(t *testing.T) {
 		t.Error("no overrides must yield nil")
 	}
 }
+
+func TestLoad_OracleBackend(t *testing.T) {
+	mysqlYAML := strings.Replace(strings.Replace(validYAML,
+		"dialect: postgres", "dialect: mysql", 1),
+		"server_version: \"16\"", "server_version: \"8.4\"", 1)
+	noDSN := func(y string) string {
+		return strings.Replace(y, "database:\n  dsn: ${SQLETCH_TEST_CONFIG_DSN}\n", "", 1)
+	}
+	withOracle := func(y, backend string) string {
+		return strings.Replace(y, "database:\n", "database:\n  oracle: "+backend+"\n", 1)
+	}
+
+	t.Run("defaults to server", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg, diags := Load(write(t, dir, "sqletch.yaml", mysqlYAML))
+		if len(diags) != 0 {
+			t.Fatalf("unexpected diags: %+v", diags)
+		}
+		if cfg.Database.Oracle != OracleServer || cfg.NativeOracle() {
+			t.Fatalf("default backend must be server, got %q", cfg.Database.Oracle)
+		}
+	})
+	t.Run("native on mysql without dsn is valid", func(t *testing.T) {
+		dir := t.TempDir()
+		y := "database:\n  oracle: native\n" + noDSN(mysqlYAML)
+		cfg, diags := Load(write(t, dir, "sqletch.yaml", y))
+		if len(diags) != 0 {
+			t.Fatalf("unexpected diags: %+v", diags)
+		}
+		if !cfg.NativeOracle() {
+			t.Fatal("NativeOracle() must report true")
+		}
+	})
+
+	invalid := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"native on postgres", "database:\n  oracle: native\n" + noDSN(validYAML), "only available for dialect \"mysql\""},
+		{"native with dsn", withOracle(mysqlYAML, "native"), "database.dsn is meaningless"},
+		{"unknown backend", withOracle(mysqlYAML, "quantum"), "must be \"server\" or \"native\""},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SQLETCH_TEST_CONFIG_DSN", "user:pass@tcp(h:3306)/db")
+			dir := t.TempDir()
+			_, diags := Load(write(t, dir, "sqletch.yaml", tt.yaml))
+			found := false
+			for _, d := range diags {
+				if d.Code == diagnostics.CodeConfigInvalid && strings.Contains(d.Message, tt.want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want SQLETCH301 mentioning %q, got %+v", tt.want, diags)
+			}
+		})
+	}
+}

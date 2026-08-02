@@ -40,7 +40,22 @@ type Config struct {
 
 type Database struct {
 	DSN string `yaml:"dsn"`
+	// Oracle selects the type-oracle backend: "server" (default; a
+	// dev database serves cache misses) or "native" (sqletch's own
+	// corpus-validated inference — MySQL only, design 15). Strict by
+	// decision D1: no fallback, and no DSN to fall back to.
+	Oracle string `yaml:"oracle"`
 }
+
+// Oracle backend names.
+const (
+	OracleServer = "server"
+	OracleNative = "native"
+)
+
+// NativeOracle reports whether the native-inference backend is
+// selected.
+func (c Config) NativeOracle() bool { return c.Database.Oracle == OracleNative }
 
 type Schema struct {
 	Files []string `yaml:"files"`
@@ -117,6 +132,22 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	if cfg.ServerVersion == "" {
 		invalid("server_version is required (it pins the oracle and keys the cache)")
+	}
+	switch cfg.Database.Oracle {
+	case "":
+		cfg.Database.Oracle = OracleServer
+	case OracleServer:
+	case OracleNative:
+		// Design 15 D1: strict native — only where no embedded real
+		// engine exists (MySQL), and never silently backed by a server.
+		if cfg.Dialect != "mysql" {
+			invalid("database.oracle: \"native\" is only available for dialect \"mysql\" (%s has a real-engine backend; see docs/design/15-native-inference-oracle.md)", cfg.Dialect)
+		}
+		if cfg.Database.DSN != "" {
+			invalid("database.dsn is meaningless with database.oracle: \"native\" (no server is ever contacted); remove one of the two")
+		}
+	default:
+		invalid("database.oracle must be \"server\" or \"native\" (got %q)", cfg.Database.Oracle)
 	}
 	if len(cfg.Schema.Files) == 0 {
 		invalid("schema.files is required (ordered globs of plain .sql files)")
