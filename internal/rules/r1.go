@@ -102,7 +102,9 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 		case *template.IfPresent:
 			switch v.Slot {
 			case template.SlotWhereConjunct:
-				diags = append(diags, checkConjunctMembership(maxTree, v, fr)...)
+				diags = append(diags, checkConjunctMembership(maxTree.TopConjunctLocs(), "WHERE", v.BodySpan, fr)...)
+			case template.SlotHavingConjunct:
+				diags = append(diags, checkConjunctMembership(maxTree.HavingConjunctLocs(), "HAVING", v.BodySpan, fr)...)
 			case template.SlotJoinItem:
 				diags = append(diags, checkJoinMembership(maxTree, v, fr)...)
 			}
@@ -113,6 +115,43 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 			continue
 		}
 		diags = append(diags, checkOrderByContainment(trees[i], r)...)
+	}
+
+	// @filter-tree conjunct membership runs on the empty-tree rendering,
+	// not the maximal: the maximal conjunction AND-flattens through its
+	// parentheses into several top-level conjuncts, but the empty form
+	// is the single constant TRUE — it must be exactly one top-level
+	// conjunct, or the runtime's TRUE fallback would not substitute the
+	// whole construct (e.g. under OR precedence).
+	for i, r := range rs {
+		if r.Kind != ast.RenderTreeEmpty || trees[i] == nil {
+			continue
+		}
+		treeIdx := 0
+		for _, fr := range r.Frags {
+			ft, ok := fr.Item.(*template.FilterTree)
+			if !ok {
+				continue
+			}
+			if treeIdx == r.TreeIdx {
+				locs, clause := trees[i].TopConjunctLocs(), "WHERE"
+				if ft.Slot == template.SlotHavingConjunct {
+					locs, clause = trees[i].HavingConjunctLocs(), "HAVING"
+				}
+				n := 0
+				for _, loc := range locs {
+					if loc >= fr.Start && loc < fr.End {
+						n++
+					}
+				}
+				if n != 1 {
+					diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, ft.Span,
+						"@filter-tree does not occupy one whole %s conjunct: its empty rendering TRUE maps to %d top-level conjuncts, want exactly 1 (R1)", clause, n).
+						WithHint("give the construct its own conjunct: an unconditional `TRUE` anchor, then `AND @filter-tree(...)`"))
+				}
+			}
+			treeIdx++
+		}
 	}
 
 	// @order-by clause-coupling restrictions (review fixes F2/F1a of
@@ -259,18 +298,18 @@ func probeChooseCases(profile dialect.LexerProfile, fe dialect.Frontend,
 	return diags
 }
 
-func checkConjunctMembership(maxTree dialect.Tree, v *template.IfPresent,
+func checkConjunctMembership(locs []int, clause string, span diagnostics.Span,
 	fr ast.FragRange) []diagnostics.Diagnostic {
 
 	n := 0
-	for _, loc := range maxTree.TopConjunctLocs() {
+	for _, loc := range locs {
 		if loc >= fr.Start && loc < fr.End {
 			n++
 		}
 	}
 	if n != 1 {
-		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
-			"fragment maps to %d WHERE conjuncts, want exactly 1 (R1)", n)}
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNodeIncomplete, span,
+			"fragment maps to %d %s conjuncts, want exactly 1 (R1)", n, clause)}
 	}
 	return nil
 }

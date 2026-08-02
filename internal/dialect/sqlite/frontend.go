@@ -555,6 +555,16 @@ func (t *tree) TopConjunctLocs() []int {
 	return locs
 }
 
+func (t *tree) HavingConjunctLocs() []int {
+	sel, ok := t.first().(*rsql.SelectStatement)
+	if !ok {
+		return nil
+	}
+	var locs []int
+	flattenConjuncts(sel.HavingExpr, &locs)
+	return locs
+}
+
 // flattenConjuncts mirrors the other facades: parens are transparent
 // and nested ANDs flatten.
 func flattenConjuncts(e rsql.Expr, out *[]int) {

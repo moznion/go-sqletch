@@ -189,6 +189,21 @@ u.email LIKE concat(:scope_prefix, '%')
 ORDER BY u.id
 LIMIT :limit;
 `,
+	"filter_tree_having": `-- name: TenantVolumes :many
+-- @param vol_min_users: bigint
+-- @param vol_max_id: bigint
+SELECT u.tenant_id, count(*) AS n
+FROM users AS u
+GROUP BY u.tenant_id
+HAVING TRUE
+  AND @filter-tree(vol)
+@predicate(min_users)
+count(*) >= :vol_min_users
+@predicate(max_id_at_least)
+max(u.id) >= :vol_max_id
+@end
+ORDER BY u.tenant_id;
+`,
 }
 
 func acquireMySQL(t *testing.T) (*gomysqlclient.Conn, context.Context) {

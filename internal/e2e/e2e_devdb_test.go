@@ -213,6 +213,19 @@ u.email LIKE :scope_prefix || '%'
 ORDER BY u.id
 LIMIT :limit;
 `,
+	"filter_tree_having": `-- name: TenantVolumes :many
+SELECT u.tenant_id, count(*) AS n
+FROM users AS u
+GROUP BY u.tenant_id
+HAVING TRUE
+  AND @filter-tree(vol)
+@predicate(min_users)
+count(*) >= :vol_min_users
+@predicate(max_id_at_least)
+max(u.id) >= :vol_max_id
+@end
+ORDER BY u.tenant_id;
+`,
 	"in_list": `-- name: UsersInStatuses :many
 -- @param statuses: text[]
 SELECT u.id, u.email, u.status

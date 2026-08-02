@@ -20,6 +20,7 @@ const (
 	RenderCase
 	RenderOrderDefault // an @order-by @default body substituted
 	RenderInEmpty      // an @in at arity 0 (expanding dialects only)
+	RenderTreeEmpty    // a @filter-tree with the empty tree (renders TRUE)
 )
 
 // OrderSelection selects the emission of each @order-by block (by
@@ -34,6 +35,14 @@ type OrderSelection [][]uint8
 // renders the empty-list form. Ignored on dollar-style dialects.
 type InSelection []uint8
 
+// TreeSelection selects the emission of each @filter-tree block (by
+// template order): 1 (default when nil or short) renders the maximal
+// conjunction of all predicates, 0 renders the empty tree — the
+// literal TRUE the runtime emits for a nil/Unscoped tree. The two are
+// the tree space's verified representatives; arbitrary trees are sound
+// by the compositional argument (spec, `@filter-tree`).
+type TreeSelection []uint8
+
 // FragRange records where a construct's emission landed in the
 // rendered SQL, including synthesized wrapping.
 type FragRange struct {
@@ -47,6 +56,7 @@ type Rendering struct {
 	CaseIdx   int // selected ordinal: 0..len(Cases)-1, len(Cases)=default
 	OrderIdx  int // which @order-by block (RenderOrderDefault)
 	InIdx     int // which @in construct (RenderInEmpty)
+	TreeIdx   int // which @filter-tree block (RenderTreeEmpty)
 	SQL       string
 	ParamsSeq []string // template param name per placeholder ($1 = [0])
 	Frags     []FragRange
@@ -147,7 +157,7 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 		if o.Default != nil {
 			orders := make(OrderSelection, orderCount)
 			orders[orderIdx] = []uint8{} // empty non-nil = default
-			r, err := renderCore(profile, q, allActive, nil, orders, nil)
+			r, err := renderCore(profile, q, allActive, nil, orders, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -172,7 +182,7 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 				ins[j] = 1
 			}
 			ins[i] = 0
-			r, err := renderCore(profile, q, allActive, nil, nil, ins)
+			r, err := renderCore(profile, q, allActive, nil, nil, ins, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -180,6 +190,30 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 			r.InIdx = i
 			out = append(out, r)
 		}
+	}
+	// The empty form of each @filter-tree is its own verified rendering:
+	// the runtime emits TRUE for a nil/Unscoped tree, so that shape must
+	// be parsed, described, and planned like any other (the maximal
+	// conjunction is in the maximal rendering).
+	treeCount := 0
+	for _, it := range q.Items {
+		if _, ok := it.(*template.FilterTree); ok {
+			treeCount++
+		}
+	}
+	for i := 0; i < treeCount; i++ {
+		trees := make(TreeSelection, treeCount)
+		for j := range trees {
+			trees[j] = 1
+		}
+		trees[i] = 0
+		r, err := renderCore(profile, q, allActive, nil, nil, nil, trees)
+		if err != nil {
+			return nil, err
+		}
+		r.Kind = RenderTreeEmpty
+		r.TreeIdx = i
+		out = append(out, r)
 	}
 	return out, nil
 }
@@ -190,7 +224,7 @@ func allActive(*template.IfPresent) bool { return true }
 // case selection. This is the reference implementation of premise P2's
 // emission algorithm.
 func Render(profile dialect.LexerProfile, q *template.QueryTemplate, sel CaseSelection) (Rendering, error) {
-	return renderCore(profile, q, allActive, sel, nil, nil)
+	return renderCore(profile, q, allActive, sel, nil, nil, nil)
 }
 
 // RenderShape emits the SQL of one concrete shape: an @if-present
@@ -215,18 +249,19 @@ func RenderShape(profile dialect.LexerProfile, q *template.QueryTemplate,
 		}
 		return true
 	}
-	return renderCore(profile, q, active, sel, orders, ins)
+	return renderCore(profile, q, active, sel, orders, ins, nil)
 }
 
 func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
-	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection, ins InSelection) (Rendering, error) {
+	active func(*template.IfPresent) bool, sel CaseSelection, orders OrderSelection,
+	ins InSelection, trees TreeSelection) (Rendering, error) {
 
 	r := &renderer{
 		profile:  profile,
 		paramNum: map[string]int{},
 		question: dialect.StyleOf(profile) == dialect.PlaceholderQuestion,
 	}
-	chooseIdx, orderIdx, inIdx := 0, 0, 0
+	chooseIdx, orderIdx, inIdx, treeIdx := 0, 0, 0, 0
 	for _, it := range q.Items {
 		switch v := it.(type) {
 		case *template.Skeleton:
@@ -327,22 +362,30 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 		case *template.FilterTree:
 			// Inline emission (the construct follows an unconditional
-			// `AND ` in the skeleton). Maximal = all predicates
-			// conjoined, each parenthesized, the whole wrapped — the
-			// runtime tree And(p0..pn) is byte-identical.
+			// `AND ` in the skeleton, enforced at scan time and by the
+			// R1 membership check on the empty rendering). Maximal =
+			// all predicates conjoined, each parenthesized, the whole
+			// wrapped — the runtime tree And(p0..pn) is byte-identical.
+			// The empty selection emits TRUE, byte-identical to the
+			// runtime's nil/Unscoped emission.
 			fragStart := r.len()
-			r.emitSynth("(", v.Span.Start)
-			for i, pr := range v.Predicates {
-				if i > 0 {
-					r.emitSynth(" AND ", v.Span.Start)
-				}
+			if treeIdx < len(trees) && trees[treeIdx] == 0 {
+				r.emitSynth("TRUE", v.Span.Start)
+			} else {
 				r.emitSynth("(", v.Span.Start)
-				if err := r.emitVerbatim(pr.Body, pr.Span.Start); err != nil {
-					return Rendering{}, err
+				for i, pr := range v.Predicates {
+					if i > 0 {
+						r.emitSynth(" AND ", v.Span.Start)
+					}
+					r.emitSynth("(", v.Span.Start)
+					if err := r.emitVerbatim(pr.Body, pr.Span.Start); err != nil {
+						return Rendering{}, err
+					}
+					r.emitSynth(")", v.Span.Start)
 				}
 				r.emitSynth(")", v.Span.Start)
 			}
-			r.emitSynth(")", v.Span.Start)
+			treeIdx++
 			r.frags = append(r.frags, FragRange{Item: v, Start: fragStart, End: r.len()})
 		}
 	}

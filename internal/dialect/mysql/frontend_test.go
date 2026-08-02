@@ -167,6 +167,28 @@ func TestTopConjunctLocs(t *testing.T) {
 	}
 }
 
+func TestHavingConjunctLocs(t *testing.T) {
+	sql := "SELECT t.a FROM t WHERE t.x = ? GROUP BY t.a HAVING TRUE AND (count(*) > ? OR sum(t.b) > ?) AND t.a > ?"
+	tree := parse(t, sql)
+	locs := tree.HavingConjunctLocs()
+	if len(locs) != 3 {
+		t.Fatalf("having conjuncts = %v", locs)
+	}
+	havingStart := strings.Index(sql, "HAVING")
+	for i, loc := range locs {
+		if loc < havingStart {
+			t.Errorf("having conjunct[%d] loc %d before HAVING at %d", i, loc, havingStart)
+		}
+	}
+	// WHERE conjuncts stay separate.
+	if wl := tree.TopConjunctLocs(); len(wl) != 1 || wl[0] >= havingStart {
+		t.Errorf("where conjuncts = %v", wl)
+	}
+	if locs := parse(t, "SELECT 1 FROM t").HavingConjunctLocs(); len(locs) != 0 {
+		t.Errorf("no-HAVING statement: %v", locs)
+	}
+}
+
 func TestOrderByLocs(t *testing.T) {
 	sql := "SELECT 1 FROM t ORDER BY t.a DESC, t.b"
 	locs := parse(t, sql).OrderByLocs()

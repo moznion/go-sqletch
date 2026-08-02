@@ -85,6 +85,9 @@ type Tree interface {
 	// TopConjunctLocs returns the byte locations of the statement's
 	// top-level WHERE conjuncts (AND-flattened).
 	TopConjunctLocs() []int
+	// HavingConjunctLocs is TopConjunctLocs for the statement-level
+	// HAVING clause (empty when the statement has none).
+	HavingConjunctLocs() []int
 	// OrderByLocs returns byte locations of statement-level ORDER BY
 	// item expressions.
 	OrderByLocs() []int

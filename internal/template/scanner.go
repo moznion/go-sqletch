@@ -947,8 +947,9 @@ func (fs *fileScan) parseOrderBy(pos, nameEnd int) int {
 }
 
 // parseFilterTree parses `@filter-tree[!](param) @predicate(name)
-// expr … @end`. v0.3 restriction: at most one block per query, WHERE
-// conjunct position only (written after an unconditional `AND`).
+// expr … @end`. Restrictions: at most one block per query (v0.3), and
+// a WHERE/HAVING conjunct position written directly after an
+// unconditional `AND` (the tail side is checked in finalize).
 func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 	qb := fs.qb
 	required := false
@@ -969,9 +970,17 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
 			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
 	}
-	if qb.ctx != ctxWhere {
+	if qb.ctx != ctxWhere && qb.ctx != ctxHaving {
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, afterArgs),
-			"@filter-tree is only allowed as a WHERE conjunct (write it after `AND`)")
+			"@filter-tree is only allowed as a WHERE or HAVING conjunct (write it after `AND`)")
+	} else if fs.lastSignificantToken(qb.skelStart, pos) != "AND" {
+		// The empty tree renders TRUE, which is only sound when it
+		// substitutes one whole AND-conjunct: under OR or NOT the
+		// filter would silently vanish or change meaning.
+		fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd,
+			fs.span(pos, afterArgs),
+			"@filter-tree must directly follow an unconditional `AND`; its empty tree renders TRUE, which must substitute one whole conjunct").
+			WithHint("anchor the clause and give the construct its own conjunct: `WHERE TRUE` then `AND @filter-tree(...)`"))
 	}
 	for _, it := range qb.q.Items {
 		if _, dup := it.(*FilterTree); dup {
@@ -983,7 +992,10 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 
 	qb.flushSkeleton(fs, pos)
 
-	item := &FilterTree{Param: args[0], Required: required}
+	item := &FilterTree{Param: args[0], Required: required, Slot: SlotWhereConjunct}
+	if qb.ctx == ctxHaving {
+		item.Slot = SlotHavingConjunct
+	}
 	predNames := map[string]bool{}
 	terminators := map[string]bool{"predicate": true, "end": true}
 	p = afterArgs
@@ -1325,9 +1337,94 @@ func (fs *fileScan) finalize(file *QueryFile, upTo int) {
 		return
 	}
 	qb.flushSkeleton(fs, upTo)
+	fs.checkFilterTreeTail(qb.q)
 	fs.assignGuardBits(qb.q)
 	file.Queries = append(file.Queries, qb.q)
 	fs.qb = nil
+}
+
+// lastSignificantToken returns the last non-trivia token of the source
+// range [from, to) — identifiers uppercased, other tokens verbatim —
+// or "" when the range holds none.
+func (fs *fileScan) lastSignificantToken(from, to int) string {
+	if from < 0 || to > len(fs.src) || from >= to {
+		return ""
+	}
+	src := fs.src[from:to]
+	last := ""
+	pos := 0
+	for {
+		tok, err := fs.profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF {
+			return last
+		}
+		switch tok.Kind {
+		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
+		case dialect.KindIdent:
+			last = strings.ToUpper(tok.Text)
+		default:
+			last = tok.Text
+		}
+		pos = tok.End
+	}
+}
+
+// filterTreeTailTokens are the tokens allowed to follow a @filter-tree
+// block: the next conjunct's AND, a clause keyword, or the end of the
+// statement. Anything else would splice the construct into a larger
+// expression, and the empty tree's TRUE rendering would no longer
+// substitute one whole conjunct (R1).
+var filterTreeTailTokens = map[string]bool{
+	"AND": true, "GROUP": true, "HAVING": true, "WINDOW": true,
+	"ORDER": true, "LIMIT": true, "OFFSET": true, "FETCH": true,
+	"FOR": true, "UNION": true, "INTERSECT": true, "EXCEPT": true,
+	"RETURNING": true, ";": true,
+}
+
+// checkFilterTreeTail enforces the closing half of the conjunct-anchor
+// discipline (the opening half — the preceding unconditional `AND` —
+// is checked at parse time in parseFilterTree). A following construct
+// is fine: every construct emits its own complete clause item.
+func (fs *fileScan) checkFilterTreeTail(q *QueryTemplate) {
+	for i, it := range q.Items {
+		ft, ok := it.(*FilterTree)
+		if !ok || i+1 >= len(q.Items) {
+			continue
+		}
+		sk, ok := q.Items[i+1].(*Skeleton)
+		if !ok {
+			continue
+		}
+		first := fs.firstSignificantToken(sk.Text)
+		if first == "" || filterTreeTailTokens[first] {
+			continue
+		}
+		fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, ft.Span,
+			"@filter-tree must end its conjunct but is followed by %q; its empty tree renders TRUE, which must substitute one whole conjunct", first).
+			WithHint("continue with `AND`, a clause keyword, or `;` after @end"))
+	}
+}
+
+// firstSignificantToken returns the first non-trivia token of text
+// (identifiers uppercased), or "" when there is none.
+func (fs *fileScan) firstSignificantToken(text string) string {
+	src := []byte(text)
+	pos := 0
+	for {
+		tok, err := fs.profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF {
+			return ""
+		}
+		switch tok.Kind {
+		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
+			pos = tok.End
+			continue
+		case dialect.KindIdent:
+			return strings.ToUpper(tok.Text)
+		default:
+			return tok.Text
+		}
+	}
 }
 
 func (fs *fileScan) assignGuardBits(q *QueryTemplate) {
