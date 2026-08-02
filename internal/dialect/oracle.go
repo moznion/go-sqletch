@@ -44,6 +44,21 @@ func (e *OracleError) Error() string {
 	return fmt.Sprintf("oracle error (%s) at %d: %s", e.SQLState, e.Pos, e.Msg)
 }
 
+// NativeUnsupportedError is a native-backend refusal: the input is
+// outside the backend's modeled subset (design 15 §2 — refuse, never
+// guess). Distinct from OracleError, which mirrors a rejection the
+// real engine would also make; the CLI maps this to SQLETCH214 and
+// the differential harness treats it as the tolerable direction only.
+type NativeUnsupportedError struct {
+	Pos       int    // byte offset into the described SQL (-1 unknown)
+	Construct string // what was refused, human-readable
+	Hint      string // the compliant rewrite, if one exists
+}
+
+func (e *NativeUnsupportedError) Error() string {
+	return fmt.Sprintf("native oracle: %s is outside the modeled subset", e.Construct)
+}
+
 // GoTypeRef is a Go type for a database type, plus the import it needs
 // ("" for builtins).
 type GoTypeRef struct {

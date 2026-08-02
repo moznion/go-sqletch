@@ -153,7 +153,7 @@ func buildTable(file string, pos int, s *ast.CreateTableStmt) (*cache.Table, err
 		col := cache.Column{
 			Name:     def.Name.Name.O,
 			Att:      int16(i + 1), // information_schema ordinal_position
-			TypeName: def.Tp.InfoSchemaStr(),
+			TypeName: columnTypeStr(def.Tp),
 			NotNull:  pkCols[def.Name.Name.O],
 		}
 		if tr, ok := (TypeMap{}).TypeByName(col.TypeName); ok {
@@ -190,6 +190,19 @@ func buildTable(file string, pos int, s *ast.CreateTableStmt) (*cache.Table, err
 		t.Cols = append(t.Cols, col)
 	}
 	return t, nil
+}
+
+// columnTypeStr renders a parsed column type the way
+// information_schema COLUMN_TYPE spells it. One divergence from the
+// parser's InfoSchemaStr, found by the differential gate: TiDB prints
+// YEAR with a width (`year(-1)`/`year(4)`) where MySQL >= 8.0.19
+// prints bare `year`.
+func columnTypeStr(ft *parsertypes.FieldType) string {
+	s := ft.InfoSchemaStr()
+	if strings.HasPrefix(s, "year") {
+		return "year"
+	}
+	return s
 }
 
 // stmtOffset locates stmt's byte offset by searching for its original

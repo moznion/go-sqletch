@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/shape"
@@ -59,7 +60,13 @@ func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat b
 	fmt.Fprintf(out, "sqletch: %d queries ok (oracle cache: %d hits, %d misses; offline: %s)\n",
 		res.QueryCount, res.OracleHits, res.OracleMiss, offline)
 	if mode == ModeCheckExhaustive {
-		fmt.Fprintf(out, "sqletch: exhaustive: %d shapes prepared and planned\n", res.ShapesTotal)
+		if res.NativePlan {
+			// D2 (design 15): the native backend has no planner, so an
+			// exhaustive run proves less — say so rather than imply it.
+			fmt.Fprintf(out, "sqletch: exhaustive: %d shapes verified by native inference (no EXPLAIN pass; planner coverage needs database.oracle: \"server\")\n", res.ShapesTotal)
+		} else {
+			fmt.Fprintf(out, "sqletch: exhaustive: %d shapes prepared and planned\n", res.ShapesTotal)
+		}
 	}
 	return ExitOK
 }
@@ -216,16 +223,20 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
 		return ExitEnvironment
 	}
-	var schemaSQL []string
+	if cfg.NativeOracle() {
+		fmt.Fprintf(errW, "sqletch: explain --analyze needs a real engine's planner; the native backend has none (switch to database.oracle: \"server\")\n")
+		return ExitEnvironment
+	}
+	var schema []cache.SchemaFile
 	for _, p := range schemaPaths {
 		content, err := os.ReadFile(p)
 		if err != nil {
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
 			return ExitEnvironment
 		}
-		schemaSQL = append(schemaSQL, string(content))
+		schema = append(schema, cache.SchemaFile{Path: p, Content: content})
 	}
-	o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
+	o, cleanup, err := drv.acquire(ctx, cfg, schema)
 	if d, ok := versionPinDiag(cfg, err); ok {
 		// Same user mistake, same code, whichever command hits it.
 		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)

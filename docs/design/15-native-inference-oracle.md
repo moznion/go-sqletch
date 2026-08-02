@@ -424,6 +424,15 @@ written blind". Three harness modes:
    catastrophic direction, §2); engine-accepts/native-refuses must be
    an *intentional* subset exclusion, asserted against an allowlist of
    refusal diagnostics so scope-creep in rejection stays visible.
+
+   *Implemented (phase 3) as `TestNativeDifferential`
+   (`internal/dialect/mysql/native_devdb_test.go`): an adversarial
+   every-type schema, agree/both-reject/subset-refusal statement
+   sets, catalog byte-identity, direction-aware assertions. Two v1
+   subset exclusions were fixed here: ENUM/SET projections are
+   refused (the protocol reports them as CHAR + flag bits, a wire
+   form the catalog cannot reproduce), and `TestMySQLCorpusGroundTruth`
+   keeps the corpus itself truthful.*
 2. **Corpus replay** (offline, plain `go test ./...`): committed
    corpus cases replayed against the native backend — schema in,
    `Describe` out, byte-compare against the stored entry. This is the

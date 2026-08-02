@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/devdb"
 	"github.com/moznion/go-sqletch/internal/dialect"
@@ -35,7 +36,19 @@ type driver struct {
 	// columnHintsRequired: the oracle cannot type expression result
 	// columns (SQLite decltype); they need `-- @column` annotations.
 	columnHintsRequired bool
-	acquire             func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error)
+	// acquire constructs the oracle backend. Schema inputs arrive as
+	// files (path + content): server backends execute the contents,
+	// the native backend parses them and needs the paths for
+	// SQLETCH215 spans.
+	acquire func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile) (dialect.Oracle, func(), error)
+}
+
+func schemaSQLOf(schema []cache.SchemaFile) []string {
+	out := make([]string, 0, len(schema))
+	for _, f := range schema {
+		out = append(out, string(f.Content))
+	}
+	return out
 }
 
 // sqliteDSNPath resolves `database.dsn` for SQLite, where the DSN is a
@@ -71,11 +84,11 @@ func driverFor(cfg config.Config) driver {
 			expandIn:            true,
 			annotationsRequired: true,
 			columnHintsRequired: true,
-			acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
+			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile) (dialect.Oracle, func(), error) {
 				conn, cleanup, err := devdb.AcquireSQLite(ctx, devdb.Config{
 					DSN:           sqliteDSNPath(cfg),
 					ServerVersion: cfg.ServerVersion,
-					SchemaSQL:     schemaSQL,
+					SchemaSQL:     schemaSQLOf(schema),
 				})
 				if err != nil {
 					return nil, cleanup, err
@@ -93,11 +106,15 @@ func driverFor(cfg config.Config) driver {
 			style:               runtime.StyleQuestion,
 			expandIn:            true,
 			annotationsRequired: true,
-			acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
+			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile) (dialect.Oracle, func(), error) {
+				if cfg.NativeOracle() {
+					o, err := mysql.NewNativeOracle(schema, cfg.ServerVersion)
+					return o, func() {}, err
+				}
 				conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
 					DSN:           cfg.Database.DSN,
 					ServerVersion: cfg.ServerVersion,
-					SchemaSQL:     schemaSQL,
+					SchemaSQL:     schemaSQLOf(schema),
 				})
 				if err != nil {
 					return nil, cleanup, err
@@ -113,11 +130,11 @@ func driverFor(cfg config.Config) driver {
 		typeByName:   postgres.TypeMap{}.TypeByName,
 		writableName: postgres.TypeMap{}.WritableName,
 		style:        runtime.StyleDollar,
-		acquire: func(ctx context.Context, cfg config.Config, schemaSQL []string) (dialect.Oracle, func(), error) {
+		acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile) (dialect.Oracle, func(), error) {
 			conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
 				DSN:           cfg.Database.DSN,
 				ServerVersion: cfg.ServerVersion,
-				SchemaSQL:     schemaSQL,
+				SchemaSQL:     schemaSQLOf(schema),
 			})
 			if err != nil {
 				return nil, cleanup, err

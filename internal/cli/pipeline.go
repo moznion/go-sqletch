@@ -20,6 +20,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/devdb"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
 	"github.com/moznion/go-sqletch/internal/nullability"
 	"github.com/moznion/go-sqletch/internal/rules"
 	"github.com/moznion/go-sqletch/internal/shape"
@@ -45,6 +46,10 @@ type Result struct {
 	Offline     bool
 	QueryCount  int
 	ShapesTotal int // exhaustive mode: shapes verified against the DB
+	// NativePlan: exhaustive mode ran on the native backend, whose
+	// Plan is describe-validation only — the printed summary must not
+	// claim EXPLAIN coverage (design 15 D2).
+	NativePlan bool
 }
 
 // versionPinDiag converts a dev-database version-pin mismatch into
@@ -83,8 +88,8 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	var schemaFiles []cache.SchemaFile
-	var schemaSQL []string
+	var schemaFiles []cache.SchemaFile // rel paths: the fingerprint inputs
+	var schemaAcq []cache.SchemaFile   // as-read paths: oracle construction (diag spans)
 	for _, p := range schemaPaths {
 		content, err := os.ReadFile(p)
 		if err != nil {
@@ -92,7 +97,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		}
 		rel, _ := filepath.Rel(cfg.Dir, p)
 		schemaFiles = append(schemaFiles, cache.SchemaFile{Path: rel, Content: content})
-		schemaSQL = append(schemaSQL, string(content))
+		schemaAcq = append(schemaAcq, cache.SchemaFile{Path: p, Content: content})
 	}
 	fp := cache.Fingerprint(cfg.Dialect, cfg.ServerVersion, schemaFiles)
 	store := cache.NewStore(cfg.Abs(cfg.Cache.Path))
@@ -164,7 +169,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if oracle != nil {
 			return oracle, nil
 		}
-		o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
+		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq)
 		if err != nil {
 			return nil, err
 		}
@@ -181,6 +186,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	if !haveCat || len(misses) > 0 {
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -234,8 +243,13 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	// ---- exhaustive: prepare + plan every shape -------------------------
 	if mode == ModeCheckExhaustive {
+		res.NativePlan = cfg.NativeOracle()
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -355,7 +369,37 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	return res, nil
 }
 
+// nativeDDLDiag converts a native catalog-builder refusal into
+// SQLETCH215 with a span into the schema file — a user's schema shape
+// outside the modeled subset, not an environment failure (the same
+// distinction versionPinDiag draws for SQLETCH200).
+func nativeDDLDiag(err error) (diagnostics.Diagnostic, bool) {
+	var ue *mysql.UnsupportedDDLError
+	if !errors.As(err, &ue) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodeNativeDDL,
+		diagnostics.Span{File: ue.File, Start: ue.Pos, End: ue.Pos + 1},
+		"the native oracle cannot model this schema statement: %s", ue.Msg)
+	return d, true
+}
+
 func oracleDiag(q *template.QueryTemplate, r ast.Rendering, err error) diagnostics.Diagnostic {
+	var ne *dialect.NativeUnsupportedError
+	if errors.As(err, &ne) {
+		span := q.HeaderSpan
+		if ne.Pos >= 0 {
+			tOff, _ := r.Map.ToTemplate(ne.Pos)
+			span = diagnostics.Span{File: q.HeaderSpan.File, Start: tOff, End: tOff + 1}
+		}
+		d := diagnostics.Errorf(diagnostics.CodeNativeUnsupported, span,
+			"the native oracle refuses %s: outside its modeled subset, and it never guesses", ne.Construct)
+		hint := ne.Hint
+		if hint == "" {
+			hint = "switch to database.oracle: \"server\""
+		}
+		return d.WithHint("%s", hint)
+	}
 	if oe, ok := err.(*dialect.OracleError); ok {
 		span := q.HeaderSpan
 		if oe.Pos >= 0 {
