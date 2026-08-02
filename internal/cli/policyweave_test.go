@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 const policyProjectYAML = `version: 1
@@ -117,6 +120,50 @@ func TestOffline_BrokenPolicyDegrades(t *testing.T) {
 	}
 	if strings.Contains(r.SQL, "tenant_id") {
 		t.Errorf("query was woven despite a broken policy set:\n%s", r.SQL)
+	}
+}
+
+// Enforcement runs inside resolvedChecks — the single catalog-
+// dependent pass shared by pipeline.Run and the LSP's OfflineChecker —
+// so policy violations appear wherever that pass runs.
+func TestResolvedChecks_PolicyEnforcement(t *testing.T) {
+	drv := driverFor(config.Config{Dialect: "postgres"})
+	pols, polDiags := compilePolicies(drv, config.Config{
+		Path: "sqletch.yaml",
+		Policies: []config.Policy{{
+			Name: "user_scope", Tables: []string{"users"},
+			Predicate: "{}.id = :self_id",
+			Param:     config.PolicyParam{Name: "self_id", Type: "bigint"},
+		}},
+	})
+	if len(polDiags) != 0 {
+		t.Fatalf("policy set must validate: %+v", polDiags)
+	}
+
+	// An UNWOVEN template reaching the pass (the weaver-regression
+	// stand-in) must be caught by SQLETCH124.
+	src := "-- name: Q :many\nSELECT u.id FROM users AS u WHERE u.status = :status;\n"
+	file, diags := template.NewScanner(drv.profile).ScanFile("t.sql", []byte(src))
+	if diagnostics.HasErrors(diags) {
+		t.Fatal(diags)
+	}
+	rs, err := ast.Renderings(drv.profile, file.Queries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	descs := make([]dialect.Desc, len(rs))
+	for i := range rs {
+		descs[i] = dialect.Desc{
+			Params:  []dialect.TypeRef{{OID: 1043, Name: "varchar"}},
+			Columns: []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}, SrcRel: 101, SrcAtt: 1}},
+		}
+	}
+	_, d, err := resolvedChecks(drv, "postgres", pols, file.Queries[0], rs, descs, hintCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := findCode(d, diagnostics.CodePolicyUnscoped); found == nil {
+		t.Errorf("no SQLETCH124 from the shared pass: %+v", d)
 	}
 }
 

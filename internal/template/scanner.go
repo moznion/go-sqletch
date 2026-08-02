@@ -22,6 +22,11 @@ var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one
 var (
 	paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
 	colHintRe   = regexp.MustCompile(`^--\s*@column\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
+	// optOutRe matches any @policy-optout-shaped comment; optOutFormRe
+	// is the valid form — the split lets malformed annotations get a
+	// diagnostic instead of silently staying skeleton text.
+	optOutRe     = regexp.MustCompile(`^--\s*@policy-optout\b`)
+	optOutFormRe = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
 )
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -181,6 +186,18 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 				q.ColumnHints = map[string]TypeHint{}
 			}
 			q.ColumnHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
+			// fall through: the comment remains skeleton text.
+		}
+		if optOutRe.MatchString(tok.Text) && fs.qb != nil {
+			if m := optOutFormRe.FindStringSubmatch(tok.Text); m != nil {
+				q := fs.qb.q
+				q.PolicyOptOuts = append(q.PolicyOptOuts, PolicyOptOut{
+					Policy: m[1], Reason: strings.TrimSpace(m[2]), Span: fs.span(tok.Start, tok.End),
+				})
+			} else {
+				fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
+					"malformed @policy-optout; the reason is mandatory: `-- @policy-optout: policy_name (reason)`")
+			}
 			// fall through: the comment remains skeleton text.
 		}
 	}

@@ -220,7 +220,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	// ---- catalog-dependent checks, types, nullability -------------------
 	for _, cq := range queries {
-		types, d, err := resolvedChecks(drv, cfg.Dialect, cq.q, cq.rs, cq.descs, cat)
+		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat)
 		if err != nil {
 			return nil, err
 		}

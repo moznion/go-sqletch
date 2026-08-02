@@ -245,6 +245,18 @@ type QueryTemplate struct {
 	WhereKwEnd int
 	TailStart  int
 	StmtEnd    int
+	// PolicyOptOuts are the query's `-- @policy-optout: name (reason)`
+	// annotations in declaration order (a slice so diagnostics never
+	// depend on map iteration order).
+	PolicyOptOuts []PolicyOptOut
+}
+
+// PolicyOptOut is one `-- @policy-optout` annotation: a deliberate,
+// reviewable exemption from a policy, with a mandatory reason.
+type PolicyOptOut struct {
+	Policy string
+	Reason string
+	Span   diagnostics.Span
 }
 
 // TypeHint is one `-- @param` / `-- @column` directive.

@@ -20,17 +20,18 @@ var tailKeywords = map[string]bool{
 
 // skeletonConjuncts returns the query's unconditional WHERE conjuncts
 // as normalized token sequences: the depth-0 AND-separated segments of
-// skeleton text between the WHERE keyword and the clause's end.
-// Construct items end the current segment (a conjunct never spans a
-// construct boundary). ok is false when the clause has a depth-0 OR —
-// segment splitting would mis-model precedence, so the caller treats
-// nothing as present.
+// skeleton text between the WHERE keyword and the clause's end. It
+// works on the token stream alone (the first depth-0 WHERE keyword
+// opens the clause), so it treats scanned and woven templates — whose
+// synthesized items carry zero-width spans — identically. Construct
+// items end the current segment (a conjunct never spans a construct
+// boundary). ok is false when the clause has a depth-0 OR — segment
+// splitting would mis-model precedence, so the caller treats nothing
+// as present.
 func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) (segs [][]string, ok bool) {
-	if q.WhereKwEnd < 0 {
-		return nil, true
-	}
 	var cur []string
 	depth := 0
+	inWhere := false
 	flush := func() {
 		if len(cur) > 0 {
 			segs = append(segs, cur)
@@ -40,7 +41,7 @@ func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) 
 	for _, it := range q.Items {
 		s, isSkel := it.(*template.Skeleton)
 		if !isSkel {
-			if it.Raw().Start >= q.WhereKwEnd {
+			if inWhere {
 				flush()
 			}
 			continue
@@ -56,7 +57,6 @@ func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) 
 				break
 			}
 			pos = tok.End
-			abs := s.Span.Start + tok.Start
 			switch tok.Kind {
 			case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 				continue
@@ -67,9 +67,6 @@ func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) 
 					depth--
 				}
 			}
-			if abs < q.WhereKwEnd {
-				continue
-			}
 			if depth == 0 {
 				switch tok.Kind {
 				case dialect.KindSemicolon:
@@ -77,6 +74,12 @@ func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) 
 					return segs, true
 				case dialect.KindIdent:
 					up := strings.ToUpper(tok.Text)
+					if !inWhere {
+						if up == "WHERE" {
+							inWhere = true
+						}
+						continue
+					}
 					if tailKeywords[up] {
 						flush()
 						return segs, true
@@ -90,7 +93,9 @@ func skeletonConjuncts(profile dialect.LexerProfile, q *template.QueryTemplate) 
 					}
 				}
 			}
-			cur = append(cur, normalizeTok(tok))
+			if inWhere {
+				cur = append(cur, normalizeTok(tok))
+			}
 		}
 	}
 	flush()

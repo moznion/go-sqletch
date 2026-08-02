@@ -159,7 +159,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if !hit {
 					continue
 				}
-				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, wq, rs, descs, cat)
+				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, c.pols, wq, rs, descs, cat)
 				if err != nil {
 					continue // internal re-parse failure; the CLI will surface it
 				}
@@ -249,10 +249,12 @@ func loadDescs(store *cache.Store, fp string, rs []ast.Rendering) ([]dialect.Des
 
 // resolvedChecks is the catalog-dependent pass shared by pipeline.Run
 // and the OfflineChecker: R3/R2/planner-sensitivity (CheckResolved),
-// Tier 1 type agreement and parameter resolution, `-- @param` hint
-// validation, and Tier 2 missing-annotation enforcement. Offline once
-// the descs are in hand.
-func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
+// policy enforcement (SQLETCH124/126 — so violations appear live in
+// the editor), Tier 1 type agreement and parameter resolution,
+// `-- @param` hint validation, and Tier 2 missing-annotation
+// enforcement. Offline once the descs are in hand. q must be the
+// WOVEN template.
+func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *template.QueryTemplate, rs []ast.Rendering,
 	descs []dialect.Desc, cat *cache.Catalog) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
 
 	tree, err := drv.frontend.Parse(rs[0].SQL)
@@ -261,6 +263,7 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 	}
 	var diags []diagnostics.Diagnostic
 	diags = append(diags, rules.CheckResolved(q, rs[0], tree, cat)...)
+	diags = append(diags, policy.Enforce(drv.profile, pols, q, tree)...)
 	paramTypes := map[string]dialect.TypeRef{}
 	if !drv.annotationsRequired {
 		// Tier 1: the oracle types parameters; agreement is checked

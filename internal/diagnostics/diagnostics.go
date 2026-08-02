@@ -86,7 +86,9 @@ const (
 	CodePairedGuards     Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
 	CodeOrderByDistinct  Code = "SQLETCH122" // @order-by under DISTINCT ON (prefix-sensitive)
 	CodeOrderByNeedsDflt Code = "SQLETCH123" // WITH TIES requires an @order-by @default
+	CodePolicyUnscoped   Code = "SQLETCH124" // designated table without the scoping conjunct in every shape
 	CodePolicyUnweavable Code = "SQLETCH125" // a policy applies but cannot be woven into this query
+	CodePolicyBadOptOut  Code = "SQLETCH126" // @policy-optout names an unknown or inapplicable policy
 )
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).

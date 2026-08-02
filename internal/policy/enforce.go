@@ -1,0 +1,95 @@
+package policy
+
+import (
+	"strings"
+
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
+)
+
+// Enforce proves the codebase-level invariant on the WOVEN template
+// (spec §"Cross-Query Policies"): for every top-level relation whose
+// table a policy designates (and whose statement kind the policy
+// covers), a conjunct token-identical to the policy's bound predicate
+// is unconditional skeleton text of the WHERE clause — hence present
+// in every reachable shape. It re-derives presence from the template
+// itself, independently of what the weaver decided, so a weaver
+// regression surfaces as SQLETCH124 instead of a silent leak.
+//
+// It also owns SQLETCH126: an opt-out naming an unknown policy, or
+// one that does not apply to the query — renaming a policy must never
+// silently disarm its opt-outs.
+//
+// The tree is the parsed maximal rendering of the woven template
+// (the caller has it in hand; design 14 §6.1: this pass lives in
+// cli.resolvedChecks). Unweavable positions are not re-checked here:
+// they are SQLETCH125 at weave time, which already stops the
+// pipeline before this pass.
+func Enforce(profile dialect.LexerProfile, pols []Policy, q *template.QueryTemplate, tree dialect.Tree) []diagnostics.Diagnostic {
+	var diags []diagnostics.Diagnostic
+
+	kind := tree.Kind()
+	rels := tree.Relations()
+	deep := tree.DeepTables()
+
+	byName := map[string]*Policy{}
+	for i := range pols {
+		byName[pols[i].Name] = &pols[i]
+	}
+
+	// Opt-out sanity first, in declaration order.
+	for _, o := range q.PolicyOptOuts {
+		p, ok := byName[o.Policy]
+		if !ok {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, o.Span,
+				"@policy-optout names unknown policy %q", o.Policy).
+				WithHint("declared policies come from sqletch.yaml `policies:`; remove the opt-out or fix the name"))
+			continue
+		}
+		if !analyzeApplicability(p, kind, rels, deep).active {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, o.Span,
+				"@policy-optout: policy %q does not apply to this query", o.Policy).
+				WithHint("the query touches no table designated by %q (in a kind it covers); remove the opt-out", o.Policy))
+		}
+	}
+
+	segs, segOK := skeletonConjuncts(profile, q)
+	for i := range pols {
+		p := &pols[i]
+		a := analyzeApplicability(p, kind, rels, deep)
+		if !a.active || a.hidden || kind == dialect.StmtInsert {
+			continue
+		}
+		if _, ok := optOutFor(q, p.Name); ok {
+			continue
+		}
+		for _, r := range a.topOcc {
+			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r))
+			if !conjunctPresent(profile, segs, segOK, conjunct) {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+					"query touches policy-designated table %q without policy %q's scoping conjunct in every shape",
+					r.Table, p.Name).
+					WithHint("expected an unconditional WHERE conjunct `%s`; a copy inside @if-present does not count — it vanishes in guard-off shapes", conjunct))
+				break
+			}
+		}
+	}
+	return diags
+}
+
+func conjunctPresent(profile dialect.LexerProfile, segs [][]string, segOK bool, conjunct string) bool {
+	if !segOK {
+		return false
+	}
+	want := normalizedTokens(profile, conjunct)
+	if want == nil {
+		return false
+	}
+	for _, seg := range segs {
+		if tokensEqual(seg, want) {
+			return true
+		}
+	}
+	return false
+}

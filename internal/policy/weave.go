@@ -17,8 +17,13 @@ type WovenPolicy struct {
 	// Conjuncts are the scoping conjunct texts (template-space,
 	// params as `:name`), one per designated top-level occurrence in
 	// document order — whether the weaver inserted them or an
-	// identical hand-written conjunct was already present.
+	// identical hand-written conjunct was already present. Empty when
+	// the query opted out.
 	Conjuncts []string
+	// OptedOut records an honored `-- @policy-optout` (the policy
+	// would have applied); OptOutReason is its mandatory reason.
+	OptedOut     bool
+	OptOutReason string
 }
 
 // Result is the outcome of weaving one query.
@@ -99,51 +104,78 @@ type weaver struct {
 	segmentable bool
 }
 
-// apply runs one policy against the query. It returns the coverage
-// record (nil when the policy does not touch the query), the conjunct
-// texts to insert, and diagnostics.
-func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnostic) {
-	var topOcc []dialect.RelRef
+// applicability is the shared answer to "would this policy bite this
+// query?" — computed identically by the weaver and the enforcement
+// pass so they can never disagree.
+type applicability struct {
+	topOcc []dialect.RelRef // designated top-level occurrences, document order
+	hidden bool             // designated occurrences beyond the top level
+	active bool             // the policy applies to this query at all
+}
+
+func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []dialect.RelRef, deep []dialect.TableRef) applicability {
+	var a applicability
 	topCount := map[string]int{}
-	for _, r := range w.rels {
+	for _, r := range rels {
 		if r.Table != "" && p.designates(r.Table) {
-			topOcc = append(topOcc, r)
+			a.topOcc = append(a.topOcc, r)
 			topCount[strings.ToLower(r.Table)]++
 		}
 	}
-	for _, tr := range w.deep {
+	for _, tr := range deep {
 		if p.designates(tr.Name) {
 			topCount[strings.ToLower(tr.Name)]--
 		}
 	}
-	hidden := false
 	for _, n := range topCount {
 		if n < 0 {
-			hidden = true
+			a.hidden = true
 		}
 	}
+	if kind == dialect.StmtInsert {
+		// The INSERT target is never a weave target (no rows are
+		// filtered); only a read inside an INSERT … SELECT body bites,
+		// and only when the policy covers reads (design 14 §D6).
+		a.active = a.hidden && p.coversSelect()
+	} else {
+		a.active = p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)
+	}
+	return a
+}
 
-	// INSERT: the target relation is never a weave target (no rows are
-	// filtered), but a designated table read by an INSERT … SELECT
-	// body is a position the weaver cannot scope (design 14 §D6) —
-	// checked only when the policy covers reads at all.
-	if w.kind == dialect.StmtInsert {
-		if hidden && p.coversSelect() {
-			return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
-				"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope")}
+// optOutFor returns the query's first opt-out naming the policy.
+func optOutFor(q *template.QueryTemplate, name string) (template.PolicyOptOut, bool) {
+	for _, o := range q.PolicyOptOuts {
+		if o.Policy == name {
+			return o, true
 		}
+	}
+	return template.PolicyOptOut{}, false
+}
+
+// apply runs one policy against the query. It returns the coverage
+// record (nil when the policy does not touch the query), the conjunct
+// texts to insert, and diagnostics.
+func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnostic) {
+	a := analyzeApplicability(p, w.kind, w.rels, w.deep)
+	if !a.active {
 		return nil, nil, nil
 	}
-	if !p.appliesTo(w.kind) {
-		return nil, nil, nil
+	// An honored opt-out suppresses weaving and the unweavable
+	// diagnostics alike; an opt-out on a query the policy does not
+	// touch is SQLETCH126, owned by the enforcement pass.
+	if o, ok := optOutFor(w.q, p.Name); ok {
+		return &WovenPolicy{Policy: p, OptedOut: true, OptOutReason: o.Reason}, nil, nil
 	}
-	if hidden {
+	if w.kind == dialect.StmtInsert {
+		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
+			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope")}
+	}
+	if a.hidden {
 		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
 			"a designated table appears inside a subquery, CTE, or set-operation branch, which sqletch cannot scope")}
 	}
-	if len(topOcc) == 0 {
-		return nil, nil, nil
-	}
+	topOcc := a.topOcc
 
 	// Occurrence checks (design 14 §D1/D2/D5, §11.2, §11.3).
 	for _, r := range topOcc {
