@@ -567,10 +567,15 @@ their code.
    open).
 5. Deferred: further expression-inference widenings (D3b — widening
    #1, COUNT/MIN/MAX, landed with differential evidence; SUM/AVG and
-   operators remain); `oracle_fallback: server` (D1b); LSP live-miss
-   serving. The latter two change decided surface (the frozen config
-   key, the LSP contract) and need their decisions revisited with the
-   user first. Corpus growth is harnessed
-   (`TestCaptureAdversarialCase` materializes the differential
-   suite's schema and agree-set as the committed `adversarial-mysql`
-   case) and continues case by case.
+   operators remain, each needing its own evidence). Corpus growth is
+   harnessed (`TestCaptureAdversarialCase` materializes the
+   differential suite's schema and agree-set as the committed
+   `adversarial-mysql` case) and continues case by case.
+
+   **Declined 2026-08-02 (user decision, revisit only on demand):**
+   `oracle_fallback: server` (D1b) — strict stays; behavior must not
+   depend on whether Docker happens to be present, and the doubled
+   test matrix buys nothing until someone actually asks for the
+   hybrid. LSP live-miss serving — doc 10's "the LSP never constructs
+   an oracle" contract stays intact; if revisited, a doc-10 delta
+   design comes first.
