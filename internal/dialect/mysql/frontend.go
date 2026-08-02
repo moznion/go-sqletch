@@ -559,6 +559,16 @@ func (t *tree) TopConjunctLocs() []int {
 	return locs
 }
 
+func (t *tree) HavingConjunctLocs() []int {
+	sel, ok := t.first().(*ast.SelectStmt)
+	if !ok || sel.Having == nil {
+		return nil
+	}
+	var locs []int
+	flattenConjuncts(sel.Having.Expr, &locs)
+	return locs
+}
+
 // flattenConjuncts mirrors the PostgreSQL facade's semantics: parens
 // are transparent (pg_query drops them from the AST), and nested ANDs
 // flatten.

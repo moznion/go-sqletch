@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "schema_fp": "00bee77d27865758e214d6e882463851e47b530e6dd382de757c8ed01bdc0ccc",
+  "rendered_sql": "\n-- @filter-tree! (v0.3): the caller composes a closed predicate\n-- vocabulary with And/Or; nil is rejected, FilterUsersUnscoped() is\n-- the explicit opt-out. See docs/spec.md Use Case 5.\n-- @param scope_tenant_id: bigint\n-- @param scope_status: varchar(32)\n-- @param scope_prefix: varchar(255)\n-- @param limit: bigint\nSELECT u.id, u.email\nFROM users AS u\nWHERE TRUE\n  AND TRUE\nORDER BY u.id\nLIMIT ?;\n\n",
+  "params": [
+    {
+      "oid": 0,
+      "name": ""
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 1,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 1,
+      "src_att": 2,
+      "nullable": false
+    }
+  ]
+}

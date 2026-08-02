@@ -2,10 +2,40 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/moznion/go-sqletch/internal/dialect"
 )
+
+func TestHavingConjunctLocs(t *testing.T) {
+	fe := Frontend{}
+	sql := "SELECT t.a FROM t WHERE t.x = $1 GROUP BY t.a HAVING TRUE AND (count(*) > $2 OR sum(t.b) > $3) AND t.a > $4"
+	tree, err := fe.Parse(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs := tree.HavingConjunctLocs()
+	if len(locs) != 3 {
+		t.Fatalf("having conjuncts = %v", locs)
+	}
+	havingStart := strings.Index(sql, "HAVING")
+	for i, loc := range locs {
+		if loc < havingStart {
+			t.Errorf("having conjunct[%d] loc %d before HAVING", i, loc)
+		}
+	}
+	if wl := tree.TopConjunctLocs(); len(wl) != 1 || wl[0] >= havingStart {
+		t.Errorf("where conjuncts = %v", wl)
+	}
+	noHaving, err := fe.Parse("SELECT 1 FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locs := noHaving.HavingConjunctLocs(); len(locs) != 0 {
+		t.Errorf("no-HAVING statement: %v", locs)
+	}
+}
 
 func TestFrontend_Parse_Basics(t *testing.T) {
 	fe := Frontend{}

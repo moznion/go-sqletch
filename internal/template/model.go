@@ -174,7 +174,12 @@ type FilterTree struct {
 	Param      string
 	Required   bool // @filter-tree!: nil tree is an error, Unscoped explicit
 	Predicates []Predicate
-	Span       diagnostics.Span
+	// Slot is SlotWhereConjunct or SlotHavingConjunct — the two
+	// positions where the empty tree's TRUE rendering is one whole
+	// conjunct (enforced by the scanner's anchor checks and R1
+	// membership on the empty rendering).
+	Slot Slot
+	Span diagnostics.Span
 }
 
 func (f *FilterTree) Raw() diagnostics.Span { return f.Span }

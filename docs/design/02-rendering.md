@@ -41,6 +41,13 @@ type Rendering struct {
 The set of renderings for v0.1: 1 maximal + (cases−1) per `@choose`
 block (each non-first case substituted into the otherwise-maximal
 query). `@default` is one of the cases (spec: verified like any case).
+Later phases extend the set: one `@order-by` `@default` substitution
+per block, one arity-0 form per `@in` (expanding dialects,
+`RenderInEmpty`), and one empty form per `@filter-tree`
+(`RenderTreeEmpty`: the tree slot emits the literal `TRUE`, exactly
+what the runtime composes for a nil/`Unscoped` tree — verified so the
+fallback is never unchecked, and the R1 conjunct-membership test runs
+on it).
 
 Renderings are deterministic; `Rendering.SQL` for the maximal query is
 also the input to the oracle cache key (04).
@@ -118,6 +125,15 @@ clause context against the parsed maximal tree:
   statement's WHERE (verified via the wrapping parens' location being
   a direct BoolExpr(AND) argument of the WHERE qual — location
   membership on the top-level qual's arg list).
+  `SlotHavingConjunct` runs the same membership over the HAVING
+  clause's conjuncts (`Tree.HavingConjunctLocs`).
+- `@filter-tree`: membership runs on the **empty rendering**
+  (`RenderTreeEmpty`), not the maximal — the maximal conjunction
+  AND-flattens through its parentheses into several top-level
+  conjuncts, but the empty form is the single constant `TRUE`, which
+  must map to exactly one top-level conjunct of its slot's clause
+  (`SQLETCH102`; catches precedence splicing the scanner's lexical
+  anchor checks cannot see).
 - `SlotJoinItem`: the fragment range must coincide with exactly one
   `RelRef` of join type INNER or LEFT (`SQLETCH101` for RIGHT/FULL —
   R2's join-type restriction is enforced here where join type is

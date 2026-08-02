@@ -118,7 +118,7 @@ func checkAnchors(profile dialect.LexerProfile, q *template.QueryTemplate) []dia
 					WithHint("keep at least one unconditional column/value pair")}
 			}
 			lastTok = "@construct"
-		case *template.Choose:
+		case *template.Choose, *template.OrderBy, *template.FilterTree, *template.InExpr:
 			lastTok = "@construct"
 		}
 	}

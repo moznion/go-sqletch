@@ -926,9 +926,15 @@ no-setup version (`go run .`), and `examples/postgres/`,
 
 ### Constraints
 
-- One `@filter-tree` per query, occupying a WHERE-conjunct slot (write
-  it after an unconditional `AND`). Both are implementation
-  restrictions, not model limits.
+- One `@filter-tree` per query (an implementation restriction, not a
+  model limit). It occupies a **WHERE or HAVING conjunct slot** and
+  must be one whole conjunct: written directly after an unconditional
+  `AND`, and after `@end` the statement continues with `AND`, a clause
+  keyword, or the end of the statement (`SQLETCH008` otherwise). The
+  compiler additionally verifies the empty-tree rendering (`TRUE`) is
+  exactly one top-level conjunct (`SQLETCH102`) — under `OR`, `NOT`,
+  or an expression continuation the `TRUE` fallback would silently
+  disarm or change the filter.
 - Predicates have an empty guard set (rule R3).
 - The same predicate may appear several times in one tree with
   independent bindings; placeholders are numbered per occurrence.
@@ -1053,7 +1059,7 @@ can never regroup its meaning (rule R1).
 | Slot | `@if-present` | `@when` | `@choose` | `@order-by` | `@filter-tree` | `@in` |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|
 | `WHERE` conjunct | ✓ | ✓ | — | — | ✓ (one, after `AND`) | ✓ (expression) |
-| `HAVING` conjunct | ✓ | ✓ | — | — | — | ✓ (expression) |
+| `HAVING` conjunct | ✓ | ✓ | — | — | ✓ (one, after `AND`) | ✓ (expression) |
 | `FROM` join item (`INNER`/`LEFT`, filter-only) | ✓ | ✓ | — | — | — | — |
 | `SET` item (`UPDATE`) | ✓ | ✓ | — | — | — | — |
 | `INSERT` column + paired `VALUES` item | ✓ | ✓ | — | — | — | — |
