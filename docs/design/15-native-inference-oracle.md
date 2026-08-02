@@ -579,3 +579,58 @@ their code.
    hybrid. LSP live-miss serving — doc 10's "the LSP never constructs
    an oracle" contract stays intact; if revisited, a doc-10 delta
    design comes first.
+
+## 12. Maturity: BETA — open risks and graduation criteria
+
+**Settled with the user 2026-08-02: the backend ships as beta**, and
+the manual says so. The judgment, recorded so the promotion is a
+decision rather than a drift:
+
+The design and verification discipline are production-grade — the
+surface is settled (D1–D8), and the gates cover the soundness-
+critical directions (byte-identity replay, dual-backend differential
+with direction-aware error checks, generative differential,
+robustness fuzz, the byte-identical-module E2E). The fail-closed rule
+means most unknown failures surface as loud refusals or detectable
+byte diffs, not silent corruption. What beta acknowledges is
+**mileage, not design**:
+
+1. **Zero real-world exposure.** Every adversarial case in the gates
+   was authored by the implementers; the corpus has not yet met a
+   schema it wasn't written for.
+2. **One residual silent-error channel: catalog-builder systematic
+   error.** Describe-side mistakes are caught by the differential and
+   by cache mismatches against server-written entries. But a user who
+   never runs a server can be misled consistently if the TiDB
+   parser's DDL interpretation diverges from real MySQL (charset/
+   collation inheritance, `lower_case_table_names`,
+   `explicit_defaults_for_timestamp` server-config variance): a wrong
+   catalog types the wrong way all the way into generated code, and
+   nothing local objects. The CREATE-only subset (D5) bounds this
+   channel; it does not close it. The differential proves only the
+   DDL it has seen.
+3. **Corpus breadth.** Two cases and a per-run generative set is thin
+   against the precondition the spec set ("a large corpus of oracle
+   results").
+4. **Version-pin granularity.** The pin is coarse (`"8.4"`); the
+   backend has never lived through a MySQL minor bump, so the claim
+   that info_schema spellings and wire flags are stable within the
+   pinned range is so far untested by time.
+
+**Graduation criteria** (all three, then promote by editing this
+section and the manual):
+
+- **G1 — dual-backend mileage**: at least one real project (beyond
+  `examples/`) runs native locally with server-backed differential CI
+  for a sustained period, with zero cache-entry byte mismatches.
+- **G2 — corpus diversification**: committed cases derived from real
+  schemas, aimed at the known weak spots (charset/collation edge
+  cases, migration-derived dumps, multibyte identifiers) — not only
+  implementer-authored adversarial ones.
+- **G3 — one version bump survived**: a MySQL minor upgrade of the
+  devdb image crosses the differential gate green (or its failures
+  are caught and pinned, which equally proves the gate).
+
+Recommended beta operating mode (also in the manual): run native
+locally and keep one server-backed run in CI — the shared cache makes
+every divergence a visible byte diff instead of a latent bug.
