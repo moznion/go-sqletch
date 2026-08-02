@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "rendered_sql": "\n-- @filter-tree! (v0.3): the caller composes a closed predicate\n-- vocabulary with And/Or; nil is rejected, FilterUsersUnscoped() is\n-- the explicit opt-out. See docs/spec.md Use Case 5.\nSELECT u.id, u.email\nFROM users AS u\nWHERE TRUE\n  AND TRUE\nORDER BY u.id\nLIMIT $1;\n\n",
+  "params": [
+    {
+      "oid": 20,
+      "name": "int8"
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16387,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "oid": 25,
+      "type_name": "text",
+      "src_rel": 16387,
+      "src_att": 2,
+      "nullable": false
+    }
+  ]
+}

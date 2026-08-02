@@ -51,6 +51,7 @@ func (q *Queries) FilterUsers(ctx context.Context, arg FilterUsersParams) ([]Fil
 	if arg.Scope == nil {
 		return nil, runtime.ErrFilterRequired
 	}
+	key.Trees = []string{arg.Scope.Encode()}
 	sqlText, binds, err := q.cache.GetTreeStyle(runtime.StyleQuestion, "FilterUsers", filterUsersFrags, key, arg.Scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
 	if err != nil {
 		return nil, err
