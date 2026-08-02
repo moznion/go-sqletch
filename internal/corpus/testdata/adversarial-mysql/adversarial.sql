@@ -1,0 +1,40 @@
+
+CREATE TABLE every_type (
+    id      BIGINT AUTO_INCREMENT PRIMARY KEY,
+    c_int   INT NOT NULL,
+    c_uint  INT UNSIGNED NOT NULL,
+    c_tiny  TINYINT NOT NULL,
+    c_bool  TINYINT(1) NOT NULL,
+    c_small SMALLINT NOT NULL,
+    c_med   MEDIUMINT NOT NULL,
+    c_ubig  BIGINT UNSIGNED NOT NULL,
+    c_vchar VARCHAR(100),
+    c_char  CHAR(8),
+    c_text  TEXT,
+    c_ttext TINYTEXT,
+    c_mtext MEDIUMTEXT,
+    c_ltext LONGTEXT,
+    c_blob  BLOB,
+    c_tblob TINYBLOB,
+    c_mblob MEDIUMBLOB,
+    c_lblob LONGBLOB,
+    c_vbin  VARBINARY(16),
+    c_bin   BINARY(4),
+    c_dec   DECIMAL(10,2) NOT NULL,
+    c_float FLOAT,
+    c_dbl   DOUBLE,
+    c_date  DATE,
+    c_dt    DATETIME(3),
+    c_ts    TIMESTAMP(6) NULL,
+    c_time  TIME,
+    c_year  YEAR,
+    c_json  JSON,
+    c_bit   BIT(5),
+    c_mood  ENUM('a','b') NOT NULL,
+    c_tags  SET('x','y') NOT NULL
+);
+CREATE TABLE second (
+    id    BIGINT PRIMARY KEY,
+    ref   BIGINT NOT NULL,
+    label VARCHAR(32) NOT NULL
+);

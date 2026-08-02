@@ -94,3 +94,66 @@ func updateCase(ctx context.Context, t *testing.T, c *Case, o dialect.Oracle) {
 	}
 	t.Logf("%s: rewrote the catalog and %d entries", c.Name, len(c.Entries))
 }
+
+// TestCaptureAdversarialCase materializes the differential suite's
+// adversarial schema and agree-set as a committed corpus case
+// (testdata/adversarial-mysql), so the whole surface replays offline
+// forever (design 15 §7.2, "corpus growth"). Update-only: it runs
+// under SQLETCH_UPDATE_CORPUS=1 and is otherwise skipped — once the
+// case is committed, the ordinary integrity/replay/ground-truth gates
+// cover it like any other case.
+func TestCaptureAdversarialCase(t *testing.T) {
+	if os.Getenv("SQLETCH_UPDATE_CORPUS") == "" {
+		t.Skip("capture-only; set SQLETCH_UPDATE_CORPUS=1 to (re)write testdata/adversarial-mysql")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	dir := filepath.Join("testdata", "adversarial-mysql")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	schemaBytes := []byte(adversarialDDL)
+	if err := os.WriteFile(filepath.Join(dir, "adversarial.sql"), schemaBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "{\n  \"dialect\": \"mysql\",\n  \"server_version\": \"8.4\",\n  \"schema\": [\n    \"adversarial.sql\"\n  ]\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "corpus.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
+		DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+		ServerVersion: "8.4",
+		SchemaSQL:     []string{adversarialDDL},
+	})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := mysql.NewOracle(conn)
+
+	fp := cache.Fingerprint("mysql", "8.4",
+		[]cache.SchemaFile{{Path: "adversarial.sql", Content: schemaBytes}})
+	store := cache.NewStore(filepath.Join(dir, "cache"))
+	snap, err := server.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.SchemaFP = fp
+	if err := store.SaveCatalog(snap); err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range agreeSQL {
+		desc, err := server.Describe(ctx, sql)
+		if err != nil {
+			t.Fatalf("agree-set statement rejected by the engine: %s: %v", sql, err)
+		}
+		if err := store.SaveOracle(dialect.EntryFromDesc(fp, sql, desc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("adversarial-mysql: wrote the catalog and %d entries", len(agreeSQL))
+}

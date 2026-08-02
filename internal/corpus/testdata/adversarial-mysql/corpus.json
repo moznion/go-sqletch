@@ -1,0 +1,7 @@
+{
+  "dialect": "mysql",
+  "server_version": "8.4",
+  "schema": [
+    "adversarial.sql"
+  ]
+}
