@@ -35,7 +35,10 @@ regression test.
 
 ## Go toolchain policy (v0.5)
 
-- The module requires **go1.27rc2** (bump to 1.27.0 when released).
+- The module requires **go1.27rc2** (bump to 1.27.0 when released;
+  also revert ci.yml's explicit `go-version: 1.27.0-rc.2` pins back to
+  `go-version-file: go.mod` then — setup-go cannot resolve an rc-only
+  `go` directive).
   A `go 1.26` directive + `toolchain go1.27rc2` split (keeping
   consumers on 1.26) was considered and rejected 2026-08: it would
   need a build-tagged v1 fallback for the LSP's json/v2 decode path
