@@ -1,8 +1,9 @@
 # sqletch Design — 14: Cross-query policy weaving and enforcement
 
-**Status: ACCEPTED — decisions D1–D6 settled with the user
-2026-08-02, all per the recommendations recorded below; implementation
-scheduled per §10.** This document expands the two recorded notes
+**Status: IMPLEMENTED (2026-08-02) — decisions D1–D6 settled with the
+user, all per the recommendations recorded below; §10 phases 1–3
+shipped (step 4 remains deferred).** This document expands the two
+recorded notes
 (spec §"Stability and Beyond v1.0"; `08-later-phases.md` §"Beyond
 1.0") into a design. The settled outcomes are reflected in
 `docs/spec.md` §"Cross-Query Policies". §11 records the mechanical
@@ -361,7 +362,11 @@ policy target (see `applies_to`).
 designated table visible only inside a subquery or CTE body is
 `SQLETCH125`. Note the premise correction in §11.1: `Relations()`
 does *not* report subquery/CTE relations, so this detection needs a
-new `Tree` capability.
+new `Tree` capability. That correction also narrows the
+`INSERT … SELECT` claim above: `Relations()` reports only the INSERT
+target, never the select body's tables, so v1 *rejects* (`SQLETCH125`)
+an `INSERT … SELECT` reading a designated table rather than weaving
+its body — the spec states this.
 
 ## 6. Enforcement
 

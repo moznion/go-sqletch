@@ -8,6 +8,8 @@ import (
 
 // Querier lets user code mock the generated queries.
 type Querier interface {
+	AllAuditActions(ctx context.Context, arg AllAuditActionsParams) ([]AllAuditActionsRow, error)
+	CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (CountAuditLogsRow, error)
 	FilterUsers(ctx context.Context, arg FilterUsersParams) ([]FilterUsersRow, error)
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)

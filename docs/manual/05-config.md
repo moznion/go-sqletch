@@ -37,6 +37,15 @@ static_expansion:              # strict static expansion (opt-in per query)
 filter_tree_caps:              # @filter-tree limits, baked into generated code
   max_nodes: 32                # default
   max_depth: 8                 # default
+
+policies:                      # cross-query policies (see the policies chapter)
+  - name: tenant_scope
+    tables: [orders]
+    predicate: "{}.tenant_id = :tenant_id"
+    param:
+      name: tenant_id
+      type: bigint             # required on MySQL/SQLite
+    applies_to: [select, update, delete]   # default: all three
 ```
 
 ## Field notes
@@ -76,3 +85,9 @@ filter_tree_caps:              # @filter-tree limits, baked into generated code
   anywhere; `@in` on MySQL/SQLite) with SQLETCH302.
 - **`filter_tree_caps`** bound caller-built trees; exceeding them
   returns `runtime.ErrTreeTooLarge` before any SQL is composed.
+- **`policies`** declare predicates woven at compile time into every
+  query touching the designated tables, with per-query opt-outs and
+  an enforcement check — the whole story is
+  [Cross-query policies](12-policies.md). Malformed declarations are
+  SQLETCH303. A config using `policies:` is rejected by pre-policy
+  sqletch binaries (strict decoding) — the desired failure direction.

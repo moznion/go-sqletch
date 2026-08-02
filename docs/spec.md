@@ -1082,7 +1082,9 @@ policies:
   expression in the dialect (`SQLETCH303` otherwise).
 - Multiple policies weave in declaration order, each as its own
   conjunct. `INSERT … VALUES` is not a policy target (no rows are
-  filtered); `INSERT … SELECT` is covered through its `SELECT` body.
+  filtered); an `INSERT … SELECT` that reads a designated table is
+  rejected (`SQLETCH125`) — v1 has no modeled insertion point inside
+  an INSERT's select body. Opt out or restructure.
 
 ## Weaving semantics
 

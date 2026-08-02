@@ -13,3 +13,10 @@ output:
   path: gen
 cache:
   path: .sqletch/cache
+policies:
+  - name: tenant_scope
+    tables: [audit_logs]
+    predicate: "{}.tenant_id = :tenant_id"
+    param:
+      name: tenant_id
+      type: bigint

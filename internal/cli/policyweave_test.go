@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -164,6 +165,34 @@ func TestResolvedChecks_PolicyEnforcement(t *testing.T) {
 	}
 	if found := findCode(d, diagnostics.CodePolicyUnscoped); found == nil {
 		t.Errorf("no SQLETCH124 from the shared pass: %+v", d)
+	}
+}
+
+// The explain report carries per-query policy coverage in both forms
+// (§6.3): status and conjuncts for woven, reason for opted out.
+func TestExplain_PolicyCoverage(t *testing.T) {
+	d := explainData{
+		Name:       "Q",
+		ShapeCount: "1",
+		Policies: []policyCoverage{
+			{Name: "tenant_scope", Status: "woven", Conjuncts: []string{"o.tenant_id = :tenant_id"}},
+			{Name: "soft_delete", Status: "opted_out", Reason: "backfill"},
+		},
+	}
+	var b strings.Builder
+	printExplain(&b, d)
+	out := b.String()
+	if !strings.Contains(out, "tenant_scope: woven (o.tenant_id = :tenant_id)") ||
+		!strings.Contains(out, "soft_delete: opted out (backfill)") {
+		t.Errorf("explain text lacks policy coverage:\n%s", out)
+	}
+
+	enc, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(enc), `"policies":[{"name":"tenant_scope","status":"woven"`) {
+		t.Errorf("explain JSON lacks the policies array:\n%s", enc)
 	}
 }
 
