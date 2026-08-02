@@ -66,11 +66,14 @@ The discipline, relative to the server backend:
   and `SET` statements only. `ALTER TABLE`, views, and generated
   columns are refused (`SQLETCH215`) — consolidate migrations into a
   dump, or use the server backend.
-- **Expression result columns** (`count(*)`, arithmetic, `concat`)
+- **Expression result columns** (arithmetic, `concat`, `sum`, …)
   need an `AS` alias *and* a `-- @column alias: type` annotation
-  (`SQLETCH214` otherwise). Direct column references are typed from
-  the catalog with no annotation. `-- @param` stays mandatory exactly
-  as on the server backend.
+  (`SQLETCH214` otherwise) — except the corpus-validated inferred
+  subset: `COUNT(...)` and `MIN`/`MAX` over a direct column
+  reference, which need only the alias (an annotation there is
+  optional, and a wrong one is `SQLETCH216`). Direct column
+  references are typed from the catalog with no annotation.
+  `-- @param` stays mandatory exactly as on the server backend.
 - **Subqueries, derived tables, and `ENUM`/`SET` projections are
   outside the modeled subset** and refused with `SQLETCH214`; the
   diagnostic names the rewrite or the escape hatch. Refusing more

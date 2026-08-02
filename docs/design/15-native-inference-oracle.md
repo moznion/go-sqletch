@@ -311,6 +311,15 @@ engine learns.
 **Settled 2026-08-02: (a)**, with (b) as later corpus-gated
 widenings.
 
+*Widening #1 (same day, differential-evidenced): COUNT (always a
+signed bigint on the wire) and MIN/MAX over one direct column
+reference (the column's own wire type, normalization included) are
+inferred; their `-- @column` hints are now optional-but-asserted
+(SQLETCH216). Evidence: the unhinted half of the generative
+differential plus the re-captured `adversarial-mysql` entries.
+SUM/AVG stay annotation-supplied — their decimal/double promotion
+rules are exactly the swamp §4 refuses to model by analogy.*
+
 ### D4 — Output names of expression columns
 
 MySQL names an unaliased expression column with the original
@@ -556,11 +565,12 @@ their code.
    active backend. **Done 2026-08-02** (the summary line carries
    `oracle: native`; a fuller `explain` coverage section remains
    open).
-5. Deferred: expression-inference widenings (D3b, corpus-gated, one
-   construct class at a time); `oracle_fallback: server` (D1b); LSP
-   live-miss serving. Each changes decided surface (annotation
-   discipline, the frozen config key, the LSP contract) and needs its
-   decision revisited with the user first. Corpus growth is now
-   harnessed (`TestCaptureAdversarialCase` materialized the
-   differential suite's schema and agree-set as the committed
-   `adversarial-mysql` case) and continues case by case.
+5. Deferred: further expression-inference widenings (D3b — widening
+   #1, COUNT/MIN/MAX, landed with differential evidence; SUM/AVG and
+   operators remain); `oracle_fallback: server` (D1b); LSP live-miss
+   serving. The latter two change decided surface (the frozen config
+   key, the LSP contract) and need their decisions revisited with the
+   user first. Corpus growth is harnessed
+   (`TestCaptureAdversarialCase` materializes the differential
+   suite's schema and agree-set as the committed `adversarial-mysql`
+   case) and continues case by case.
