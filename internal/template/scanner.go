@@ -947,8 +947,9 @@ func (fs *fileScan) parseOrderBy(pos, nameEnd int) int {
 }
 
 // parseFilterTree parses `@filter-tree[!](param) @predicate(name)
-// expr … @end`. v0.3 restriction: at most one block per query, WHERE
-// conjunct position only (written after an unconditional `AND`).
+// expr … @end`. Restrictions: at most one block per query (v0.3), and
+// a WHERE/HAVING conjunct position written directly after an
+// unconditional `AND` (the tail side is checked in finalize).
 func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 	qb := fs.qb
 	required := false
@@ -969,9 +970,9 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 		fs.errorf(diagnostics.CodeConstructNested, fs.span(pos, afterArgs),
 			"constructs may not appear inside parentheses, subqueries, or CTEs (R1); they belong at the statement's top level")
 	}
-	if qb.ctx != ctxWhere {
+	if qb.ctx != ctxWhere && qb.ctx != ctxHaving {
 		fs.errorf(diagnostics.CodeConstructBadSlot, fs.span(pos, afterArgs),
-			"@filter-tree is only allowed as a WHERE conjunct (write it after `AND`)")
+			"@filter-tree is only allowed as a WHERE or HAVING conjunct (write it after `AND`)")
 	} else if fs.lastSignificantToken(qb.skelStart, pos) != "AND" {
 		// The empty tree renders TRUE, which is only sound when it
 		// substitutes one whole AND-conjunct: under OR or NOT the
@@ -991,7 +992,10 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 
 	qb.flushSkeleton(fs, pos)
 
-	item := &FilterTree{Param: args[0], Required: required}
+	item := &FilterTree{Param: args[0], Required: required, Slot: SlotWhereConjunct}
+	if qb.ctx == ctxHaving {
+		item.Slot = SlotHavingConjunct
+	}
 	predNames := map[string]bool{}
 	terminators := map[string]bool{"predicate": true, "end": true}
 	p = afterArgs

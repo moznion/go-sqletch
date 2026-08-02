@@ -425,6 +425,16 @@ func (t *tree) TopConjunctLocs() []int {
 	return locs
 }
 
+func (t *tree) HavingConjunctLocs() []int {
+	n := t.stmt()
+	if n == nil || n.GetSelectStmt() == nil {
+		return nil
+	}
+	var locs []int
+	flattenConjuncts(n.GetSelectStmt().HavingClause, &locs)
+	return locs
+}
+
 func flattenConjuncts(node *pgquery.Node, out *[]int) {
 	if node == nil {
 		return

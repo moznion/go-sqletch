@@ -175,6 +175,80 @@ o.c = :c
 	}
 }
 
+const havingFilterTemplate = `-- name: OrgTotals :many
+SELECT o.org_id, sum(o.total) AS total
+FROM orders AS o
+GROUP BY o.org_id
+HAVING TRUE
+  AND @filter-tree(hscope)
+@predicate(min_total)
+sum(o.total) >= :min_total
+@predicate(min_count)
+count(*) >= :min_count
+@end
+ORDER BY o.org_id;
+`
+
+// The HAVING conjunct slot: same rendering, verification, and
+// conformance obligations as the WHERE slot.
+func TestFilterTree_HavingSlot(t *testing.T) {
+	q := scanOne(t, havingFilterTemplate)
+	if diags := CheckLexical(postgres.Profile{}, q); len(diags) != 0 {
+		t.Fatalf("lexical: %+v", diags)
+	}
+	rs, err := ast.Renderings(postgres.Profile{}, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diags := CheckR1(postgres.Profile{}, postgres.Frontend{}, q, rs); len(diags) != 0 {
+		t.Fatalf("R1: %+v", diags)
+	}
+	if !strings.Contains(rs[0].SQL, "AND ((sum(o.total) >= $1) AND (count(*) >= $2))") {
+		t.Fatalf("maximal:\n%s", rs[0].SQL)
+	}
+	var re *ast.Rendering
+	for i := range rs {
+		if rs[i].Kind == ast.RenderTreeEmpty {
+			re = &rs[i]
+		}
+	}
+	if re == nil || !strings.Contains(re.SQL, "HAVING TRUE\n  AND TRUE") {
+		t.Fatalf("empty-tree rendering: %+v", re)
+	}
+
+	frags := codegen.BuildFrags(postgres.Profile{}, q)
+	max := runtime.And(runtime.NewLeaf(0, int64(1)), runtime.NewLeaf(1, int64(2)))
+	sql, _, err := runtime.ComposeTree(frags, runtime.ShapeKey{}, max, runtime.DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sql != rs[0].SQL {
+		t.Fatalf("runtime maximal != renderer:\n%q\n%q", sql, rs[0].SQL)
+	}
+	sql, _, err = runtime.ComposeTree(frags, runtime.ShapeKey{}, nil, runtime.DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sql != re.SQL {
+		t.Fatalf("runtime empty != renderer:\n%q\n%q", sql, re.SQL)
+	}
+
+	// Membership catches HAVING precedence splicing too.
+	precedence := `-- name: Bad :many
+SELECT o.org_id FROM orders AS o
+GROUP BY o.org_id
+HAVING count(*) > 1
+  OR sum(o.total) > 2 AND @filter-tree(hscope)
+@predicate(x)
+sum(o.total) >= :min_total
+@end
+;
+`
+	if diags := checkR1(t, precedence); !hasCode(diags, diagnostics.CodeNodeIncomplete) {
+		t.Fatalf("want SQLETCH102 for HAVING precedence splicing, got %+v", diags)
+	}
+}
+
 func TestFilterTree_RuntimeShapes(t *testing.T) {
 	q := scanOne(t, filterTemplate)
 	frags := codegen.BuildFrags(postgres.Profile{}, q)
