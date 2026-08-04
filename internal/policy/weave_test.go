@@ -208,9 +208,14 @@ func TestWeave_Rejections(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name:    "nullable outer-join side",
-			src:     "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.ok\n",
-			wantMsg: "null-extended side",
+			name:    "USING join on the nullable side",
+			src:     "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders USING (user_id) WHERE u.ok\n",
+			wantMsg: "no ON expression",
+		},
+		{
+			name:    "NATURAL join on the nullable side",
+			src:     "-- name: Q :many\nSELECT u.id FROM users u NATURAL LEFT JOIN orders WHERE u.ok\n",
+			wantMsg: "no ON expression",
 		},
 		{
 			name:    "subquery-only occurrence",

@@ -52,8 +52,8 @@ codes).
 | SQLETCH119 | `INSERT` guarded column/value pairing is broken (rule R7): for each guard set, column items and `VALUES` items must be equinumerous, positionally aligned, and at the tail of their clauses. |
 | SQLETCH122 | `@order-by` under `DISTINCT ON` (PostgreSQL): validity there depends on the sort prefix, which reordering breaks. Use `@choose` with whole verified cases instead. |
 | SQLETCH123 | The skeleton uses `FETCH FIRST … WITH TIES`, so `ORDER BY` may never vanish: the `@order-by` needs a `@default`. |
-| SQLETCH124 | A query touches a policy-designated table without the policy's scoping conjunct present in every reachable shape, and carries no opt-out. A hand-written copy inside `@if-present` does not count — it vanishes in guard-off shapes. |
-| SQLETCH125 | A policy applies to this query but cannot be woven: the designated table sits in a position sqletch cannot scope (inside a subquery/CTE, on the null-extended side of an outer join, introduced by a guarded join), its bound name is not a bare identifier, or the query declares a conflicting type for the policy parameter. Opt out explicitly (`-- @policy-optout`) or restructure. |
+| SQLETCH124 | A query touches a policy-designated table without the policy's scoping conjunct present in every reachable shape (in WHERE, or in the relation's own `ON` clause for a null-extended outer-join occurrence), and carries no opt-out. A hand-written copy inside `@if-present` does not count — it vanishes in guard-off shapes. |
+| SQLETCH125 | A policy applies to this query but cannot be woven: the designated table sits in a position sqletch cannot scope (inside a subquery/CTE, joined with `USING`/`NATURAL` on a null-extended side, introduced by a guarded join), its bound name is not a bare identifier, or the query declares a conflicting type for the policy parameter. Opt out explicitly (`-- @policy-optout`) or restructure. |
 | SQLETCH126 | A `-- @policy-optout` names a policy that does not exist, or one that does not apply to this query. Renaming a policy can never silently disarm its opt-outs. |
 
 ## SQLETCH2xx — type oracle
