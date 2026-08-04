@@ -100,6 +100,9 @@ const (
 	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
 	CodeOptionalInsertNotNull Code = "SQLETCH212" // optional NOT NULL column without default (warning)
 	CodeParamHintConflict     Code = "SQLETCH213" // `-- @param` hint disagrees with the oracle (Tier 1)
+	CodeNativeUnsupported     Code = "SQLETCH214" // native oracle: query construct outside the modeled subset
+	CodeNativeDDL             Code = "SQLETCH215" // native oracle: schema DDL outside the catalog builder's subset
+	CodeColumnHintConflict    Code = "SQLETCH216" // `-- @column` hint disagrees with the oracle's column type
 )
 
 // Codegen/config codes.

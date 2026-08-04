@@ -287,6 +287,34 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   config ⇒ degraded server (showMessage once), never a crash loop.
   internal/lsp stays stdlib-only; positions are UTF-16 code units.
 
+## Known v0.5 decisions and limits (native MySQL oracle, doc 15)
+
+- `database.oracle: native` (MySQL only, strict, no fallback, no DSN):
+  Describe = name resolution over a DDL-built catalog + Tier 2
+  annotations. Fail-closed: SQLETCH214 (query construct) / 215 (DDL)
+  refusals, never guesses. Expression result columns need `AS` +
+  `-- @column`; subqueries (except the arity-0 @in emission), derived
+  tables, and ENUM/SET projections are refused; Plan is
+  describe-validation only and `check --exhaustive` says so.
+- **Byte-identity across oracle backends is a hard invariant**:
+  catalog, oracle entries, and the generated module must be
+  byte-identical to the server backend's (the corpus gates pin all
+  three; the backend never enters the cache fingerprint). Wire quirks
+  pinned by the differential: TEXT/BLOB flavors collapse to the BLOB
+  wire code, YEAR/BIT carry UNSIGNED, the catalog spells bare `year`.
+- `internal/corpus` is the oracle ground-truth harness: a case =
+  `corpus.json` (fingerprint inputs) + schema + a verbatim
+  committed-cache tree under `internal/corpus/testdata/<case>/`.
+  Offline replay gates run in plain `go test`; devdb
+  `TestMySQLCorpusGroundTruth` re-derives cases against real MySQL
+  (`SQLETCH_UPDATE_CORPUS=1` rewrites) — corpus authority is
+  re-derivation, never entry provenance. Grow it: any live
+  disagreement gets its triple committed as a case.
+- `-- @column` hints ASSERT against any oracle-typed column
+  (SQLETCH216, oracle wins) — the SQLETCH213 rule applied to columns.
+- The native catalog builder models MySQL >= 8.0.19 COLUMN_TYPE
+  rendering (TiDB `InfoSchemaStr` + `TiDBStrictIntegerDisplayWidth`).
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

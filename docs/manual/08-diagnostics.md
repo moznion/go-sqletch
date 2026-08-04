@@ -67,6 +67,9 @@ codes).
 | SQLETCH211 | Renderings disagree on one parameter's type (the same `:param` used in incompatible positions). |
 | SQLETCH212 | *(warning)* An optional `INSERT` column is `NOT NULL` without a default: omitting it fails at runtime. |
 | SQLETCH213 | A `-- @param` annotation disagrees with the type the oracle inferred (Tier 1). The oracle types the rendering, so a wrong annotation would otherwise be invisible until execution; the message spells the inferred type's writable name. |
+| SQLETCH214 | The native-inference oracle (`database.oracle: native`) refuses a query construct outside its modeled subset — a subquery, an expression column without an `AS` alias and `-- @column` annotation, or a column type whose wire form it cannot reproduce. The native backend never guesses: bring the construct into the subset as the hint shows, or switch to `database.oracle: server`. |
+| SQLETCH215 | The native catalog builder refuses a schema DDL statement outside its subset (anything but `CREATE TABLE`, `DROP TABLE`, and no-op statements — e.g. `ALTER TABLE`, `CREATE VIEW`, generated columns). Consolidate the schema into plain `CREATE TABLE` files, or switch to `database.oracle: server`. |
+| SQLETCH216 | A `-- @column` annotation disagrees with the type the oracle reported for that column. The oracle wins, never the annotation — under the native backend annotations *supply* expression-column types, so whenever an oracle answer is available to check them against, a wrong one must be loud (the SQLETCH213 rule applied to columns). |
 
 ## SQLETCH3xx — configuration and code generation
 

@@ -20,6 +20,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/devdb"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
 	"github.com/moznion/go-sqletch/internal/nullability"
 	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/shape"
@@ -45,6 +46,10 @@ type Result struct {
 	Offline     bool
 	QueryCount  int
 	ShapesTotal int // exhaustive mode: shapes verified against the DB
+	// NativePlan: exhaustive mode ran on the native backend, whose
+	// Plan is describe-validation only — the printed summary must not
+	// claim EXPLAIN coverage (design 15 D2).
+	NativePlan bool
 }
 
 // versionPinDiag converts a dev-database version-pin mismatch into
@@ -84,8 +89,8 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	var schemaFiles []cache.SchemaFile
-	var schemaSQL []string
+	var schemaFiles []cache.SchemaFile // rel paths: the fingerprint inputs
+	var schemaAcq []cache.SchemaFile   // as-read paths: oracle construction (diag spans)
 	for _, p := range schemaPaths {
 		content, err := os.ReadFile(p)
 		if err != nil {
@@ -93,7 +98,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		}
 		rel, _ := filepath.Rel(cfg.Dir, p)
 		schemaFiles = append(schemaFiles, cache.SchemaFile{Path: rel, Content: content})
-		schemaSQL = append(schemaSQL, string(content))
+		schemaAcq = append(schemaAcq, cache.SchemaFile{Path: p, Content: content})
 	}
 	fp := cache.Fingerprint(cfg.Dialect, cfg.ServerVersion, schemaFiles)
 	store := cache.NewStore(cfg.Abs(cfg.Cache.Path))
@@ -152,7 +157,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		cq.descs = make([]dialect.Desc, len(cq.rs))
 		for i, r := range cq.rs {
 			if e, ok := store.LoadOracle(fp, r.SQL); ok {
-				cq.descs[i] = entryToDesc(e)
+				cq.descs[i] = dialect.DescFromEntry(e)
 				res.OracleHits++
 			} else {
 				misses = append(misses, miss{cq, i})
@@ -168,7 +173,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if oracle != nil {
 			return oracle, nil
 		}
-		o, cleanup, err := drv.acquire(ctx, cfg, schemaSQL)
+		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq)
 		if err != nil {
 			return nil, err
 		}
@@ -185,6 +190,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	if !haveCat || len(misses) > 0 {
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -209,7 +218,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 				continue
 			}
 			m.cq.descs[m.ri] = desc
-			if err := store.SaveOracle(descToEntry(fp, r.SQL, desc)); err != nil {
+			if err := store.SaveOracle(dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 				return nil, err
 			}
 		}
@@ -238,8 +247,13 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	// ---- exhaustive: prepare + plan every shape -------------------------
 	if mode == ModeCheckExhaustive {
+		res.NativePlan = cfg.NativeOracle()
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -359,7 +373,37 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 	return res, nil
 }
 
+// nativeDDLDiag converts a native catalog-builder refusal into
+// SQLETCH215 with a span into the schema file — a user's schema shape
+// outside the modeled subset, not an environment failure (the same
+// distinction versionPinDiag draws for SQLETCH200).
+func nativeDDLDiag(err error) (diagnostics.Diagnostic, bool) {
+	var ue *mysql.UnsupportedDDLError
+	if !errors.As(err, &ue) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodeNativeDDL,
+		diagnostics.Span{File: ue.File, Start: ue.Pos, End: ue.Pos + 1},
+		"the native oracle cannot model this schema statement: %s", ue.Msg)
+	return d, true
+}
+
 func oracleDiag(q *template.QueryTemplate, r ast.Rendering, err error) diagnostics.Diagnostic {
+	var ne *dialect.NativeUnsupportedError
+	if errors.As(err, &ne) {
+		span := q.HeaderSpan
+		if ne.Pos >= 0 {
+			tOff, _ := r.Map.ToTemplate(ne.Pos)
+			span = diagnostics.Span{File: q.HeaderSpan.File, Start: tOff, End: tOff + 1}
+		}
+		d := diagnostics.Errorf(diagnostics.CodeNativeUnsupported, span,
+			"the native oracle refuses %s: outside its modeled subset, and it never guesses", ne.Construct)
+		hint := ne.Hint
+		if hint == "" {
+			hint = "switch to database.oracle: \"server\""
+		}
+		return d.WithHint("%s", hint)
+	}
 	if oe, ok := err.(*dialect.OracleError); ok {
 		span := q.HeaderSpan
 		if oe.Pos >= 0 {
@@ -375,34 +419,6 @@ func oracleDiag(q *template.QueryTemplate, r ast.Rendering, err error) diagnosti
 		return d
 	}
 	return diagnostics.Errorf(diagnostics.CodeOracleFailure, q.HeaderSpan, "oracle failure: %v", err)
-}
-
-func entryToDesc(e *cache.OracleEntry) dialect.Desc {
-	var d dialect.Desc
-	for _, p := range e.Params {
-		d.Params = append(d.Params, dialect.TypeRef{OID: p.OID, Name: p.Name})
-	}
-	for _, c := range e.Columns {
-		d.Columns = append(d.Columns, dialect.ColumnDesc{
-			Name: c.Name, Type: dialect.TypeRef{OID: c.OID, Name: c.TypeName},
-			SrcRel: c.SrcRel, SrcAtt: c.SrcAtt,
-		})
-	}
-	return d
-}
-
-func descToEntry(fp, sql string, d dialect.Desc) *cache.OracleEntry {
-	e := &cache.OracleEntry{SchemaFP: fp, RenderedSQL: sql}
-	for _, p := range d.Params {
-		e.Params = append(e.Params, cache.EntryType{OID: p.OID, Name: p.Name})
-	}
-	for _, c := range d.Columns {
-		e.Columns = append(e.Columns, cache.EntryColumn{
-			Name: c.Name, OID: c.Type.OID, TypeName: c.Type.Name,
-			SrcRel: c.SrcRel, SrcAtt: c.SrcAtt,
-		})
-	}
-	return e
 }
 
 // expandShapes precomposes every reachable shape via the SAME runtime

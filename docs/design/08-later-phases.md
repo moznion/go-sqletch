@@ -178,6 +178,10 @@ Mechanical extensions of existing paths (conjunct machinery; the
   cache entry and conformance run produces — the corpus format (04 §3)
   is already exactly the required test-case triple; nothing extra to
   collect. First candidate: MySQL (no embeddable real engine).
+  Expanded into a design draft: doc 15
+  (`15-native-inference-oracle.md`) — fail-closed inference subset,
+  the differential gate, and the open decisions that need spec
+  answers before implementation.
 - Policy weaving/enforcement (tenant scoping): config-declared
   predicate expanded into matching queries **after P1 scan, before
   rendering** (pure pre-verification expansion — every downstream

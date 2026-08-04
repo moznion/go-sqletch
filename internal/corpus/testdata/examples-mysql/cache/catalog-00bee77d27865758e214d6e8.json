@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "schema_fp": "00bee77d27865758e214d6e882463851e47b530e6dd382de757c8ed01bdc0ccc",
+  "tables": [
+    {
+      "schema": "sqletch",
+      "name": "users",
+      "oid": 1,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "email",
+          "att": 2,
+          "type_oid": 253,
+          "type_name": "varchar(255)",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "status",
+          "att": 3,
+          "type_oid": 253,
+          "type_name": "varchar(32)",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "tenant_id",
+          "att": 4,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "nickname",
+          "att": 5,
+          "type_oid": 253,
+          "type_name": "varchar(64)",
+          "not_null": false,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "att": 6,
+          "type_oid": 7,
+          "type_name": "timestamp(6)",
+          "not_null": true,
+          "has_default": true
+        }
+      ]
+    }
+  ]
+}

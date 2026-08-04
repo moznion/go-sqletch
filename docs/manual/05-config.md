@@ -62,6 +62,12 @@ policies:                      # cross-query policies (see the policies chapter)
   Whatever it points at is treated as **disposable** — sqletch resets
   it (drops the public schema / all tables) before applying
   `schema.files`. Never point it at data you care about.
+- **`database.oracle`** selects the type-oracle backend: `server`
+  (default) or `native` — sqletch's own corpus-validated inference,
+  MySQL only, no server anywhere (setting a `dsn` alongside it is a
+  config error). See [Dialects](04-dialects.md#the-native-oracle-backend-databaseoracle-native)
+  for the discipline it demands and what `check --exhaustive` proves
+  under it.
 - **`schema.files`** are plain SQL, applied in glob order. The
   concatenation (plus dialect and server_version) fingerprints the
   cache: any change re-verifies affected queries.

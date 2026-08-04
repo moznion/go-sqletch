@@ -80,8 +80,19 @@ func queryHash(fp, renderedSQL string) string {
 	return hex.EncodeToString(h.Sum(nil))[:24]
 }
 
+// CatalogFileName and OracleFileName expose the store's
+// dir-relative file naming, so harnesses (the oracle corpus, entry
+// pruning) can address files without duplicating the hashing scheme.
+func CatalogFileName(fp string) string {
+	return "catalog-" + fp[:min(24, len(fp))] + ".json"
+}
+
+func OracleFileName(fp, renderedSQL string) string {
+	return filepath.Join("oracle", queryHash(fp, renderedSQL)+".json")
+}
+
 func (s *Store) catalogPath(fp string) string {
-	return filepath.Join(s.dir, "catalog-"+fp[:min(24, len(fp))]+".json")
+	return filepath.Join(s.dir, CatalogFileName(fp))
 }
 
 func (s *Store) oraclePath(qh string) string {
@@ -103,11 +114,11 @@ func (s *Store) LoadCatalog(fp string) (*Catalog, bool) {
 }
 
 func (s *Store) SaveCatalog(cat *Catalog) error {
-	if cat.SchemaFP == "" {
-		return fmt.Errorf("catalog snapshot has no schema fingerprint")
+	data, err := EncodeCatalog(cat)
+	if err != nil {
+		return err
 	}
-	cat.Format = FormatVersion
-	return s.writeJSON(s.catalogPath(cat.SchemaFP), cat)
+	return s.writeFile(s.catalogPath(cat.SchemaFP), data)
 }
 
 // LoadOracle returns the cached Describe result for (fp, renderedSQL),
@@ -128,20 +139,47 @@ func (s *Store) LoadOracle(fp, renderedSQL string) (*OracleEntry, bool) {
 }
 
 func (s *Store) SaveOracle(e *OracleEntry) error {
-	e.Format = FormatVersion
-	return s.writeJSON(s.oraclePath(queryHash(e.SchemaFP, e.RenderedSQL)), e)
-}
-
-// writeJSON writes canonical, diff-friendly JSON atomically.
-func (s *Store) writeJSON(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := EncodeOracle(e)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
+	return s.writeFile(s.oraclePath(queryHash(e.SchemaFP, e.RenderedSQL)), data)
+}
+
+// EncodeCatalog returns the exact canonical bytes SaveCatalog writes.
+// It stamps FormatVersion. Anything that compares against a committed
+// catalog file byte-wise (the oracle corpus harness) must serialize
+// through here, never through its own marshaling.
+func EncodeCatalog(cat *Catalog) ([]byte, error) {
+	if cat.SchemaFP == "" {
+		return nil, fmt.Errorf("catalog snapshot has no schema fingerprint")
+	}
+	cat.Format = FormatVersion
+	return marshalCanonical(cat)
+}
+
+// EncodeOracle returns the exact canonical bytes SaveOracle writes,
+// stamping FormatVersion — the byte form the corpus harness compares.
+func EncodeOracle(e *OracleEntry) ([]byte, error) {
+	e.Format = FormatVersion
+	return marshalCanonical(e)
+}
+
+// marshalCanonical is the store's single serializer: indented JSON,
+// LF, trailing newline (v1 API — this output is byte-pinned).
+func marshalCanonical(v any) ([]byte, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+// writeFile writes atomically, creating parent directories.
+func (s *Store) writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
