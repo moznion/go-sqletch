@@ -311,6 +311,15 @@ engine learns.
 **Settled 2026-08-02: (a)**, with (b) as later corpus-gated
 widenings.
 
+*Widening #1 (same day, differential-evidenced): COUNT (always a
+signed bigint on the wire) and MIN/MAX over one direct column
+reference (the column's own wire type, normalization included) are
+inferred; their `-- @column` hints are now optional-but-asserted
+(SQLETCH216). Evidence: the unhinted half of the generative
+differential plus the re-captured `adversarial-mysql` entries.
+SUM/AVG stay annotation-supplied — their decimal/double promotion
+rules are exactly the swamp §4 refuses to model by analogy.*
+
 ### D4 — Output names of expression columns
 
 MySQL names an unaliased expression column with the original
@@ -556,11 +565,72 @@ their code.
    active backend. **Done 2026-08-02** (the summary line carries
    `oracle: native`; a fuller `explain` coverage section remains
    open).
-5. Deferred: expression-inference widenings (D3b, corpus-gated, one
-   construct class at a time); `oracle_fallback: server` (D1b); LSP
-   live-miss serving. Each changes decided surface (annotation
-   discipline, the frozen config key, the LSP contract) and needs its
-   decision revisited with the user first. Corpus growth is now
-   harnessed (`TestCaptureAdversarialCase` materialized the
+5. Deferred: further expression-inference widenings (D3b — widening
+   #1, COUNT/MIN/MAX, landed with differential evidence; SUM/AVG and
+   operators remain, each needing its own evidence). Corpus growth is
+   harnessed (`TestCaptureAdversarialCase` materializes the
    differential suite's schema and agree-set as the committed
    `adversarial-mysql` case) and continues case by case.
+
+   **Declined 2026-08-02 (user decision, revisit only on demand):**
+   `oracle_fallback: server` (D1b) — strict stays; behavior must not
+   depend on whether Docker happens to be present, and the doubled
+   test matrix buys nothing until someone actually asks for the
+   hybrid. LSP live-miss serving — doc 10's "the LSP never constructs
+   an oracle" contract stays intact; if revisited, a doc-10 delta
+   design comes first.
+
+## 12. Maturity: BETA — open risks and graduation criteria
+
+**Settled with the user 2026-08-02: the backend ships as beta**, and
+the manual says so. The judgment, recorded so the promotion is a
+decision rather than a drift:
+
+The design and verification discipline are production-grade — the
+surface is settled (D1–D8), and the gates cover the soundness-
+critical directions (byte-identity replay, dual-backend differential
+with direction-aware error checks, generative differential,
+robustness fuzz, the byte-identical-module E2E). The fail-closed rule
+means most unknown failures surface as loud refusals or detectable
+byte diffs, not silent corruption. What beta acknowledges is
+**mileage, not design**:
+
+1. **Zero real-world exposure.** Every adversarial case in the gates
+   was authored by the implementers; the corpus has not yet met a
+   schema it wasn't written for.
+2. **One residual silent-error channel: catalog-builder systematic
+   error.** Describe-side mistakes are caught by the differential and
+   by cache mismatches against server-written entries. But a user who
+   never runs a server can be misled consistently if the TiDB
+   parser's DDL interpretation diverges from real MySQL (charset/
+   collation inheritance, `lower_case_table_names`,
+   `explicit_defaults_for_timestamp` server-config variance): a wrong
+   catalog types the wrong way all the way into generated code, and
+   nothing local objects. The CREATE-only subset (D5) bounds this
+   channel; it does not close it. The differential proves only the
+   DDL it has seen.
+3. **Corpus breadth.** Two cases and a per-run generative set is thin
+   against the precondition the spec set ("a large corpus of oracle
+   results").
+4. **Version-pin granularity.** The pin is coarse (`"8.4"`); the
+   backend has never lived through a MySQL minor bump, so the claim
+   that info_schema spellings and wire flags are stable within the
+   pinned range is so far untested by time.
+
+**Graduation criteria** (all three, then promote by editing this
+section and the manual):
+
+- **G1 — dual-backend mileage**: at least one real project (beyond
+  `examples/`) runs native locally with server-backed differential CI
+  for a sustained period, with zero cache-entry byte mismatches.
+- **G2 — corpus diversification**: committed cases derived from real
+  schemas, aimed at the known weak spots (charset/collation edge
+  cases, migration-derived dumps, multibyte identifiers) — not only
+  implementer-authored adversarial ones.
+- **G3 — one version bump survived**: a MySQL minor upgrade of the
+  devdb image crosses the differential gate green (or its failures
+  are caught and pinned, which equally proves the gate).
+
+Recommended beta operating mode (also in the manual): run native
+locally and keep one server-backed run in CI — the shared cache makes
+every divergence a visible byte diff instead of a latent bug.

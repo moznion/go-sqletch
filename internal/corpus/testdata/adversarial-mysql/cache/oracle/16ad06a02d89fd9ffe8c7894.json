@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT max(t.c_ttext) AS tt, min(t.c_year) AS yr FROM every_type AS t",
+  "params": null,
+  "columns": [
+    {
+      "name": "tt",
+      "oid": 252,
+      "type_name": "text",
+      "nullable": false
+    },
+    {
+      "name": "yr",
+      "oid": 269,
+      "type_name": "year unsigned",
+      "nullable": false
+    }
+  ]
+}

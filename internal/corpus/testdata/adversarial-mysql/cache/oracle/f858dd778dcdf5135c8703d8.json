@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT max(id) AS mx, min(label) AS mn FROM second",
+  "params": null,
+  "columns": [
+    {
+      "name": "mx",
+      "oid": 8,
+      "type_name": "bigint",
+      "nullable": false
+    },
+    {
+      "name": "mn",
+      "oid": 253,
+      "type_name": "varchar",
+      "nullable": false
+    }
+  ]
+}

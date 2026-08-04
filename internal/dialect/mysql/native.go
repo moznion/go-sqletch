@@ -25,7 +25,8 @@ import (
 // v1 subset: single top-level SELECT/INSERT/UPDATE/DELETE statements
 // over catalog tables. No derived tables and no subqueries (except
 // the dialect's own arity-0 @in emission); expression result columns
-// need an AS alias and a `-- @column` annotation (D3/D4); ENUM/SET
+// need an AS alias, and a `-- @column` annotation unless inferred
+// (D3/D4; COUNT and MIN/MAX of a direct column are inferred); ENUM/SET
 // result columns are refused (their wire form differs from their
 // catalog form).
 type NativeOracle struct {
@@ -367,8 +368,9 @@ func (d *describer) describeField(f *ast.SelectField) (dialect.ColumnDesc, error
 		}, nil
 	}
 
-	// Expression column: alias and annotation required (D3/D4), and
-	// every column reference inside it must still resolve.
+	// Expression column: alias required (D4), every column reference
+	// inside it must still resolve, and the type comes from the
+	// inferred subset (D3b widenings) or the mandatory annotation.
 	if err := d.resolveExpr(f.Expr, false); err != nil {
 		return dialect.ColumnDesc{}, err
 	}
@@ -377,6 +379,14 @@ func (d *describer) describeField(f *ast.SelectField) (dialect.ColumnDesc, error
 			Construct: "an expression column without an AS alias",
 			Hint:      "name it: `expr AS alias` plus `-- @column alias: type`"}
 	}
+	if tr, ok, err := d.inferExpr(f.Expr); err != nil {
+		return dialect.ColumnDesc{}, err
+	} else if ok {
+		// An inferred construct: a `-- @column` hint is optional here,
+		// and a disagreeing one is caught downstream (SQLETCH216) —
+		// the inference, like any oracle answer, wins.
+		return dialect.ColumnDesc{Name: f.AsName.O, Type: tr}, nil
+	}
 	tr, ok := d.hints[f.AsName.O]
 	if !ok {
 		return dialect.ColumnDesc{}, &dialect.NativeUnsupportedError{Pos: f.Offset,
@@ -384,6 +394,40 @@ func (d *describer) describeField(f *ast.SelectField) (dialect.ColumnDesc, error
 			Hint:      fmt.Sprintf("add `-- @column %s: <sql type>` (the server backend would infer it; the native backend never guesses)", f.AsName.O)}
 	}
 	return dialect.ColumnDesc{Name: f.AsName.O, Type: tr}, nil
+}
+
+// inferExpr types the corpus-validated expression subset (design 15
+// D3b, widening #1): COUNT is always a signed bigint, and MIN/MAX
+// over one direct column reference report the column's own wire
+// type. Everything else stays annotation-supplied — each widening
+// lands only with differential evidence, never by analogy.
+func (d *describer) inferExpr(expr ast.ExprNode) (dialect.TypeRef, bool, error) {
+	agg, ok := expr.(*ast.AggregateFuncExpr)
+	if !ok {
+		return dialect.TypeRef{}, false, nil
+	}
+	switch strings.ToLower(agg.F) {
+	case "count":
+		return dialect.TypeRef{OID: typeLonglong, Name: typeCodeName(typeLonglong)}, true, nil
+	case "min", "max":
+		if len(agg.Args) != 1 {
+			return dialect.TypeRef{}, false, nil
+		}
+		ref, ok := agg.Args[0].(*ast.ColumnNameExpr)
+		if !ok || ref.Name.Schema.O != "" {
+			return dialect.TypeRef{}, false, nil
+		}
+		_, col, err := d.resolve(ref.Name.Table.O, ref.Name.Name.O, ref.OriginTextPosition())
+		if err != nil {
+			return dialect.TypeRef{}, false, err
+		}
+		tr, err := typeRefForColumn(col, ref.OriginTextPosition())
+		if err != nil {
+			return dialect.TypeRef{}, false, err
+		}
+		return tr, true, nil
+	}
+	return dialect.TypeRef{}, false, nil
 }
 
 // ---- DML -------------------------------------------------------------------

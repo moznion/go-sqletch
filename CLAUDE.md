@@ -255,6 +255,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 ## Known v0.5 decisions and limits (native MySQL oracle, doc 15)
 
+- **Status: BETA** (doc 15 §12 — settled 2026-08-02). Graduation
+  needs G1 dual-backend mileage, G2 corpus diversification, G3 one
+  survived MySQL minor bump. Known residual silent-error channel:
+  catalog-builder systematic error (TiDB DDL interpretation vs real
+  MySQL) for users who never run a server; bounded by CREATE-only D5,
+  mitigated by the recommended native-local + server-CI setup.
+
 - `database.oracle: native` (MySQL only, strict, no fallback, no DSN):
   Describe = name resolution over a DDL-built catalog + Tier 2
   annotations. Fail-closed: SQLETCH214 (query construct) / 215 (DDL)

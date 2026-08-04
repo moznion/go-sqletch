@@ -126,6 +126,42 @@ func TestNativeDescribeExpressionColumns(t *testing.T) {
 	}
 }
 
+// TestNativeDescribeInferredAggregates pins D3b widening #1: COUNT
+// and MIN/MAX over a direct column need no annotation; the inferred
+// type matches what the wire would report, and SrcRel/SrcAtt stay
+// zero (a computed field, like the server says).
+func TestNativeDescribeInferredAggregates(t *testing.T) {
+	sql := "SELECT count(*) AS n, count(DISTINCT u.email) AS d, max(u.id) AS mx, min(u.email) AS mn FROM users AS u"
+	desc, err := describe(t, sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []dialect.ColumnDesc{
+		{Name: "n", Type: dialect.TypeRef{OID: typeLonglong, Name: "bigint"}},
+		{Name: "d", Type: dialect.TypeRef{OID: typeLonglong, Name: "bigint"}},
+		{Name: "mx", Type: dialect.TypeRef{OID: typeLonglong, Name: "bigint"}},
+		{Name: "mn", Type: dialect.TypeRef{OID: typeVarString, Name: "varchar"}},
+	}
+	for i, w := range want {
+		if desc.Columns[i] != w {
+			t.Errorf("column %d: got %+v, want %+v", i, desc.Columns[i], w)
+		}
+	}
+	// The aggregate's argument must still resolve.
+	if _, err := describe(t, "SELECT max(u.ghost) AS g FROM users AS u"); err == nil {
+		t.Fatal("aggregate over an unknown column must be rejected")
+	}
+	// A wire-normalized argument type flows through the inference.
+	desc, err = describe(t, "SELECT max(w.tt) AS t1, min(w.y) AS y1 FROM wirey AS w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc.Columns[0].Type != (dialect.TypeRef{OID: typeBlob, Name: "text"}) ||
+		desc.Columns[1].Type != (dialect.TypeRef{OID: typeYear | FlagUnsigned, Name: "year unsigned"}) {
+		t.Fatalf("wire normalization must flow through aggregates: %+v", desc.Columns)
+	}
+}
+
 func TestNativeDescribeDML(t *testing.T) {
 	for _, sql := range []string{
 		"INSERT INTO users (email, org_id) VALUES (?, ?)",
@@ -183,7 +219,8 @@ func TestNativeDescribeSubsetRefusals(t *testing.T) {
 		{"exists subquery", "SELECT u.id FROM users AS u WHERE EXISTS (SELECT 1 FROM orgs)", "EXISTS"},
 		{"in subquery", "SELECT u.id FROM users AS u WHERE u.org_id IN (SELECT id FROM orgs)", "subquery"},
 		{"unaliased expression", "SELECT count(*) FROM users", "AS alias"},
-		{"unhinted expression", "SELECT count(*) AS total FROM users", "@column"},
+		{"unhinted uninferred expression", "SELECT sum(id) AS s FROM users", "@column"},
+		{"min over enum", "SELECT min(mood) AS m FROM users", "ENUM/SET"},
 		{"enum projection", "SELECT mood FROM users", "ENUM/SET"},
 		{"enum via star", "SELECT * FROM users", "ENUM/SET"},
 		{"other statement", "SHOW TABLES", "SELECT/INSERT/UPDATE/DELETE"},

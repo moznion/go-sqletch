@@ -43,7 +43,7 @@ compiler for free, and the generated driver flavor.
   (`go-sql-driver/mysql` is the tested one; add `parseTime=true` for
   `time.Time` scans).
 
-### The native oracle backend (`database.oracle: native`)
+### The native oracle backend (`database.oracle: native`) — beta
 
 MySQL is the one dialect with no embeddable real engine, so it is the
 one dialect sqletch offers a **native-inference** oracle for: type
@@ -52,6 +52,19 @@ from your schema DDL, and a cold `generate`/`check` needs **no Docker
 and no DSN at all**. Every answer it gives is continuously proven
 byte-identical to a real MySQL server's over a committed corpus — and
 anything it cannot prove, it refuses:
+
+> **Beta.** The verification gates are strict, but the backend is
+> young and has little real-world mileage; the graduation criteria
+> and the open risks are recorded in
+> `design/15-native-inference-oracle.md` §12. Its fail-closed design
+> means surprises should surface as refusals or as visible cache
+> diffs, not as silent wrong types — with one caveat worth knowing:
+> if you *never* run a server, a schema whose DDL sqletch's parser
+> interprets differently than real MySQL would be mistyped without a
+> local objection. **Recommended beta setup: run `native` locally and
+> keep one server-backed run in CI.** The cache is shared between
+> backends, so any divergence shows up as a byte diff in
+> `.sqletch/cache/` instead of a latent bug.
 
 ```yaml
 dialect: mysql
@@ -66,11 +79,14 @@ The discipline, relative to the server backend:
   and `SET` statements only. `ALTER TABLE`, views, and generated
   columns are refused (`SQLETCH215`) — consolidate migrations into a
   dump, or use the server backend.
-- **Expression result columns** (`count(*)`, arithmetic, `concat`)
+- **Expression result columns** (arithmetic, `concat`, `sum`, …)
   need an `AS` alias *and* a `-- @column alias: type` annotation
-  (`SQLETCH214` otherwise). Direct column references are typed from
-  the catalog with no annotation. `-- @param` stays mandatory exactly
-  as on the server backend.
+  (`SQLETCH214` otherwise) — except the corpus-validated inferred
+  subset: `COUNT(...)` and `MIN`/`MAX` over a direct column
+  reference, which need only the alias (an annotation there is
+  optional, and a wrong one is `SQLETCH216`). Direct column
+  references are typed from the catalog with no annotation.
+  `-- @param` stays mandatory exactly as on the server backend.
 - **Subqueries, derived tables, and `ENUM`/`SET` projections are
   outside the modeled subset** and refused with `SQLETCH214`; the
   diagnostic names the rewrite or the escape hatch. Refusing more

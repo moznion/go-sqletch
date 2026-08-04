@@ -79,6 +79,9 @@ var agreeSQL = []string{
 	"SELECT s.id FROM second AS s WHERE s.label IN (SELECT NULL FROM DUAL WHERE FALSE)",
 	"-- @column total: bigint\nSELECT count(*) AS total FROM second",
 	"-- @column mx: varchar(32)\nSELECT max(label) AS mx FROM second GROUP BY ref HAVING mx > ? ORDER BY mx",
+	"SELECT count(*) AS n, count(DISTINCT label) AS d FROM second",
+	"SELECT max(id) AS mx, min(label) AS mn FROM second",
+	"SELECT max(t.c_ttext) AS tt, min(t.c_year) AS yr FROM every_type AS t",
 	"INSERT INTO second (id, ref, label) VALUES (?, ?, ?)",
 	"INSERT INTO second (id, ref, label) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE label = ?",
 	"UPDATE second AS s SET s.label = ? WHERE s.id = ?",
@@ -320,24 +323,38 @@ func (g *sqlGen) plainSelect() string {
 
 // aggregateSelect emits aggregate-only projections so
 // ONLY_FULL_GROUP_BY (on by default) accepts every generated shape.
+// Hints are emitted for only half the items: COUNT/MIN/MAX are in
+// the inferred subset (D3b widening #1), so the unhinted half proves
+// the inference against the server and the hinted half proves hints
+// stay byte-neutral.
 func (g *sqlGen) aggregateSelect() string {
 	var hints, items []string
 	n := 1 + g.r.IntN(2)
 	for i := range n {
 		alias := fmt.Sprintf("agg_%d", i)
+		hinted := g.r.IntN(2) == 0
 		switch g.r.IntN(3) {
 		case 0:
-			hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			if hinted {
+				hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			}
 			items = append(items, "count(*) AS "+alias)
 		case 1:
-			hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			if hinted {
+				hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			}
 			items = append(items, "max(s.id) AS "+alias)
 		default:
-			hints = append(hints, fmt.Sprintf("-- @column %s: varchar(32)", alias))
+			if hinted {
+				hints = append(hints, fmt.Sprintf("-- @column %s: varchar(32)", alias))
+			}
 			items = append(items, "min(s.label) AS "+alias)
 		}
 	}
-	sql := strings.Join(hints, "\n") + "\nSELECT " + strings.Join(items, ", ") + " FROM second AS s"
+	sql := "SELECT " + strings.Join(items, ", ") + " FROM second AS s"
+	if len(hints) > 0 {
+		sql = strings.Join(hints, "\n") + "\n" + sql
+	}
 	grouped := g.r.IntN(2) == 0
 	if grouped {
 		sql += " GROUP BY s.ref"
