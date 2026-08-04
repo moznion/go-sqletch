@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "UPDATE second AS s SET s.label = ? WHERE s.id = ?",
+  "params": [
+    {
+      "oid": 0,
+      "name": ""
+    },
+    {
+      "oid": 0,
+      "name": ""
+    }
+  ],
+  "columns": null
+}

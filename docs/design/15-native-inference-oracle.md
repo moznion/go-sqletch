@@ -464,6 +464,16 @@ written blind". Three harness modes:
    blind spots (identifier case-insensitivity, alias shadowing, `*`
    column-order edge cases).
 
+   *Implemented in two halves (a mechanical adaptation of the note —
+   per-exec server round trips make a live go-fuzz target
+   impractical): a **seeded generative differential** inside
+   `TestNativeDifferential` (a deterministic generator over the v1
+   subset grammar, every statement byte-compared across backends),
+   and the offline **`FuzzNativeDescribe`** robustness target (never
+   panic, only typed errors, deterministic answers; runs in the CI
+   fuzz job like FuzzScan/FuzzCompose, crashers committed to
+   `testdata/fuzz/`).*
+
 Ship gate for v1: modes 1–2 green over the full existing MySQL
 conformance corpus, plus the E2E proof that matters most — a cold
 `generate` under the native backend produces a module byte-identical
@@ -537,16 +547,20 @@ their code.
    differential-snapshot tests. **Done 2026-08-02.**
 3. Describe engine (§5.2) in the v1 subset + `SQLETCH214`/`215` +
    corpus replay green; dual-backend and fuzz modes wired into the
-   devdb CI job. **Done 2026-08-02** except the differential fuzz
-   mode (§7.3), which remains open.
+   devdb CI job. **Done 2026-08-02**, including the §7.3 fuzz modes
+   (seeded generative differential + `FuzzNativeDescribe`; see the
+   §7.3 note).
 4. D7 assert (`SQLETCH216`), E2E cold-run/byte-identical-module gate,
    manual chapter (backend selection, what `--exhaustive` proves,
    the annotation discipline delta), the check summary reporting the
    active backend. **Done 2026-08-02** (the summary line carries
    `oracle: native`; a fuller `explain` coverage section remains
    open).
-5. Deferred: differential fuzz (§7.3); expression-inference widenings
-   (D3b, corpus-gated, one construct class at a time);
-   `oracle_fallback: server` (D1b); LSP live-miss serving; corpus
-   growth beyond the seed case (capture more adversarial cases via
-   `SQLETCH_UPDATE_CORPUS`).
+5. Deferred: expression-inference widenings (D3b, corpus-gated, one
+   construct class at a time); `oracle_fallback: server` (D1b); LSP
+   live-miss serving. Each changes decided surface (annotation
+   discipline, the frozen config key, the LSP contract) and needs its
+   decision revisited with the user first. Corpus growth is now
+   harnessed (`TestCaptureAdversarialCase` materialized the
+   differential suite's schema and agree-set as the committed
+   `adversarial-mysql` case) and continues case by case.

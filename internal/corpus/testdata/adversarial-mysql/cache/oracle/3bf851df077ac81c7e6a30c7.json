@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT t.c_vchar, t.c_char, t.c_text, t.c_ttext, t.c_mtext, t.c_ltext FROM every_type AS t",
+  "params": null,
+  "columns": [
+    {
+      "name": "c_vchar",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 1,
+      "src_att": 9,
+      "nullable": false
+    },
+    {
+      "name": "c_char",
+      "oid": 254,
+      "type_name": "char",
+      "src_rel": 1,
+      "src_att": 10,
+      "nullable": false
+    },
+    {
+      "name": "c_text",
+      "oid": 252,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 11,
+      "nullable": false
+    },
+    {
+      "name": "c_ttext",
+      "oid": 252,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 12,
+      "nullable": false
+    },
+    {
+      "name": "c_mtext",
+      "oid": 252,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 13,
+      "nullable": false
+    },
+    {
+      "name": "c_ltext",
+      "oid": 252,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 14,
+      "nullable": false
+    }
+  ]
+}
