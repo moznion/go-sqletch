@@ -113,3 +113,5 @@ read, and safe to delete at any time.
 - Dialect specifics: [dialects](04-dialects.md)
 - Editor setup (LSP + highlighting): [editors](09-editors.md)
 - Coming from sqlc: [migration guide](10-sqlc-migration.md)
+- Multi-tenant? Compiler-enforced tenant scoping:
+  [cross-query policies](12-policies.md)

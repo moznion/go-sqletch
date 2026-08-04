@@ -89,10 +89,61 @@ present in the query's WHERE clause **in every reachable shape**
 (`SQLETCH124` otherwise). It runs in the same pass the LSP uses, so a
 violation appears live in your editor.
 
-`sqletch explain` reports per-query coverage — which policies apply,
-whether each is woven or opted out (with the reason) — and carries the
-same data as a `policies` array under `--format json`, so CI can
-assert on the opt-out set.
+## Auditing coverage
+
+"Which queries are unscoped, and why" is a command's output, not a
+code-reading exercise:
+
+```console
+$ sqletch explain ListOrders AllAuditActions
+ListOrders
+  ...
+  policies:
+    tenant_scope: woven (o.tenant_id = :tenant_id)
+
+AllAuditActions
+  ...
+  policies:
+    tenant_scope: opted out (ops dashboard; aggregates across tenants)
+```
+
+The same data is a `policies` array in each query's JSON summary
+(`.sqletch/explain/<Query>.json`, rewritten by every `generate`), so
+CI can watch the opt-out *set* — the thing that should only ever grow
+deliberately:
+
+```console
+$ jq -r '.name as $q | (.policies // [])[]
+         | select(.status == "opted_out") | "\($q): \(.name) (\(.reason))"' \
+    .sqletch/explain/*.json
+AllAuditActions: tenant_scope (ops dashboard; aggregates across tenants)
+```
+
+Diff that output against a committed allowlist and a new opt-out
+becomes a reviewable CI failure instead of a silent exemption. The
+opt-out rate is also the feature's health metric: if it climbs, the
+policy's table set or your query patterns need a conversation, not
+more exemptions.
+
+## Compared to the alternatives
+
+- **ORM default scopes** (a base query that appends the filter) are
+  runtime behavior: they cover the code paths that use them, can be
+  bypassed, and nothing *proves* coverage. A policy is compile-time
+  and quantified — the enforcement pass checks every reachable shape
+  of every query, and the exceptions are enumerable.
+- **Row-level security** is the database-side answer and a good one —
+  where it exists (PostgreSQL; MySQL and SQLite have none), it also
+  covers non-sqletch clients. Its cost is a per-connection
+  session-variable discipline whose failure mode (a missed `SET`) is
+  discovered at runtime. Policies move the check to compile time and
+  work identically on all three dialects; they are defense at a
+  *different layer*, so use RLS as well where you can.
+- **`@filter-tree!`** is the per-query tool for filters the *caller*
+  chooses; a policy is for invariants the caller may not choose. Its
+  required mode protects the queries that declare it — a policy
+  protects the query nobody remembered to protect. A query may have
+  both.
 
 ## The parameter
 

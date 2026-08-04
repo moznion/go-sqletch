@@ -112,6 +112,72 @@ The dev database is needed only on cache misses: oracle results and a
 catalog snapshot are committed to your repository, so CI and warm
 builds run **fully offline**.
 
+## Tenant isolation you can prove (cross-query policies)
+
+The most expensive bug in a multi-tenant codebase is the query someone
+writes next month with no tenant filter. Per-query discipline —
+reviews, base repositories, `@filter-tree!` — protects the queries
+that opt in; nothing protects the one that forgot. A **policy**
+inverts that default:
+
+```yaml
+# sqletch.yaml
+policies:
+  - name: tenant_scope
+    tables: [orders, order_items, invoices]
+    predicate: "{}.tenant_id = :tenant_id"
+    param:
+      name: tenant_id
+      type: bigint
+```
+
+Now every query touching those tables is scoped the moment it
+compiles. This template never mentions tenants:
+
+```sql
+-- name: ListOrders :many
+SELECT o.id, o.total FROM orders AS o ORDER BY o.id;
+```
+
+but it compiles as if it ended with `WHERE o.tenant_id = :tenant_id`,
+and `tenant_id` shows up in `ListOrdersParams` like any other
+parameter — forgetting the *value* is now a Go compile error, not a
+data leak. `UPDATE` and `DELETE` are covered by the same declaration
+(exactly the statements where a filter is easiest to forget), and a
+designated table on the null-extended side of a `LEFT JOIN` is scoped
+in the join's `ON` clause, so the outer join keeps its row set.
+
+Three properties make this more than a macro:
+
+- **The invariant is proved, not hoped.** A separate enforcement pass
+  re-derives, from the compiled result itself, that *no reachable
+  shape of any query touches a designated table unscoped*
+  (`SQLETCH124`). That quantifier — "every shape" — is checkable
+  because sqletch already enumerates every shape; a scoping conjunct
+  hidden inside `@if-present` fails the check, because it vanishes in
+  guard-off shapes.
+- **Verification sees the real SQL.** Weaving happens before
+  rendering, so the SQL that is prepared, `EXPLAIN`ed, typed, and
+  cached *is the scoped SQL*. There is no runtime rewriting layer and
+  no window where verified and executed statements differ.
+- **Opting out is a visible event.** `-- @policy-optout: tenant_scope
+  (backfill; runs across tenants)` — the reason is mandatory, the
+  annotation is greppable, and `sqletch explain` reports per-query
+  coverage (woven / opted out, with reasons) machine-readably, so CI
+  can fail when the opt-out set grows.
+
+And the boundary, stated as plainly as the pitch: policies constrain
+**only sqletch-generated queries** — hand-written SQL in the same
+process is untouched; they guarantee the predicate is *present*, not
+that its runtime argument is *correct*; they express conjunctive row
+filters, not column masking or per-role rules; and a position sqletch
+cannot scope (a designated table inside a subquery or CTE, a
+`USING`/`NATURAL` join, a guarded join) is a **loud compile error**
+(`SQLETCH125`) requiring an explicit opt-out — never a silent skip.
+Where row-level security exists, use it *as well*: RLS is runtime
+defense in depth that also covers non-sqletch clients. The full story
+is [the policies chapter](docs/manual/12-policies.md).
+
 ## Compared to the alternatives
 
 |                              | SQL-first | dynamic queries | statically verified |
@@ -147,6 +213,13 @@ design buys you:
 - **Builder-grade composition stays typed.** `@filter-tree` accepts
   filters composed across layer boundaries, and `@order-by`
   multi-key sorts, from a closed vocabulary fixed at compile time.
+- **Codebase-level invariants are checkable.** Because every reachable
+  shape is enumerated, a policy can state — and the compiler can
+  prove — that no shape anywhere touches a designated table unscoped
+  ([cross-query policies](docs/manual/12-policies.md)). ORM default
+  scopes are runtime and opt-out-able; RLS is per-connection
+  discipline and absent on MySQL; neither can make this claim at
+  compile time.
 - **The editor sees the same compiler.** `sqletch lsp` reports the
   same `SQLETCHnnn` diagnostics as `check` while you type, without
   ever opening a database.
@@ -256,6 +329,10 @@ per-dialect guides, and the
   `@order-by` multi-key sorting, `@filter-tree` typed filters
   composable across layer boundaries (with a required mode for
   multi-tenant safety), and `@in` variable-arity membership.
+- **Policies**: config-declared predicates woven at compile time into
+  every query touching designated tables, enforced across every
+  reachable shape, with auditable per-query opt-outs
+  ([manual](docs/manual/12-policies.md)).
 - **Dialects**: PostgreSQL (types inferred by the server),
   MySQL and SQLite (types from `-- @param` / `-- @column`
   annotations). SQLite needs no Docker and no server at all — its
@@ -280,10 +357,6 @@ Recorded, unscheduled, and none of it changes the verification model:
 - **Native inference backend**, differential-tested against the
   `(schema, query, types)` corpus every cache entry already
   produces — for MySQL first, which has no embeddable real engine.
-- **Cross-query policy weaving** — a config-declared predicate (tenant
-  scoping, say) expanded into every query touching designated tables
-  at compile time, with a lint proving no reachable shape crosses the
-  boundary unscoped.
 
 ## Development
 
