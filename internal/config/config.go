@@ -29,6 +29,7 @@ type Config struct {
 	Overrides     []Override `yaml:"overrides"`
 	Expansion     Expansion  `yaml:"static_expansion"`
 	TreeCaps      TreeCaps   `yaml:"filter_tree_caps"`
+	Policies      []Policy   `yaml:"policies"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.
@@ -74,6 +75,31 @@ type Expansion struct {
 type TreeCaps struct {
 	MaxNodes int `yaml:"max_nodes"`
 	MaxDepth int `yaml:"max_depth"`
+}
+
+// Policy declares one cross-query policy (spec §"Cross-Query
+// Policies"): a predicate woven at compile time into every query that
+// touches a designated table, plus the enforcement that no reachable
+// shape goes unscoped. Shape checks that need the dialect (predicate
+// probing, identifier rules) live in policy.Validate; Load checks only
+// the config-level vocabulary.
+type Policy struct {
+	Name      string      `yaml:"name"`
+	Tables    []string    `yaml:"tables"`
+	Predicate string      `yaml:"predicate"`
+	Param     PolicyParam `yaml:"param"`
+	// AppliesTo restricts the statement kinds the policy covers;
+	// empty means select, update, and delete. INSERT … VALUES is
+	// never a policy target (no rows are filtered).
+	AppliesTo []string `yaml:"applies_to"`
+}
+
+// PolicyParam declares the policy predicate's parameter. Type is
+// required on Tier 2 dialects (their oracles cannot type parameter
+// slots) and asserted like a `-- @param` hint on Tier 1.
+type PolicyParam struct {
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
 }
 
 func (c Config) Expanded(query string) bool {
@@ -148,6 +174,27 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	for i, o := range cfg.Overrides {
 		if o.Query == "" || o.Column == "" || o.Nullable == nil {
 			invalid("overrides[%d] needs query, column, and nullable", i)
+		}
+	}
+	badPolicy := func(format string, args ...any) {
+		diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyInvalid, span, format, args...))
+	}
+	for i, p := range cfg.Policies {
+		id := p.Name
+		if id == "" {
+			id = fmt.Sprintf("policies[%d]", i)
+		}
+		for _, k := range p.AppliesTo {
+			switch k {
+			case "select", "update", "delete":
+			case "insert":
+				badPolicy("%s: applies_to cannot include %q — INSERT filters no rows; an INSERT … SELECT reading a designated table is rejected separately", id, k)
+			default:
+				badPolicy("%s: applies_to values must be select, update, or delete (got %q)", id, k)
+			}
+		}
+		if p.Param.Type != "" && p.Param.Name == "" {
+			badPolicy("%s: param.type without param.name", id)
 		}
 	}
 	return cfg, diags

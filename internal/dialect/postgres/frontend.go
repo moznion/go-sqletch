@@ -324,6 +324,38 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, o
 	}
 }
 
+// DeepTables walks the whole statement (protobuf reflection) and
+// collects every RangeVar name — subqueries and CTE bodies included,
+// and CTE-name references with them (conservative, design 14 §11.1).
+func (t *tree) DeepTables() []dialect.TableRef {
+	n := t.stmt()
+	if n == nil {
+		return nil
+	}
+	var out []dialect.TableRef
+	collectRangeVars(n.ProtoReflect(), &out)
+	return out
+}
+
+func collectRangeVars(m protoreflect.Message, out *[]dialect.TableRef) {
+	if rv, ok := m.Interface().(*pgquery.RangeVar); ok {
+		*out = append(*out, dialect.TableRef{Name: rv.Relname, Loc: int(rv.Location)})
+		return
+	}
+	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+		switch {
+		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+			l := val.List()
+			for i := 0; i < l.Len(); i++ {
+				collectRangeVars(l.Get(i).Message(), out)
+			}
+		case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
+			collectRangeVars(val.Message(), out)
+		}
+		return true
+	})
+}
+
 // ColumnRefs walks the whole statement (protobuf reflection) and
 // collects every ColumnRef, marking those inside subquery scopes
 // (SubLink, derived tables, CTEs) — the resolver treats those

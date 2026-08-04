@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "rendered_sql": "\nSELECT a.id, a.actor_id, a.action, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = $1\n\n\nAND (a.id \u003c $2)\n\nORDER BY a.id DESC\nLIMIT $3;\n\n",
+  "params": [
+    {
+      "oid": 20,
+      "name": "int8"
+    },
+    {
+      "oid": 20,
+      "name": "int8"
+    },
+    {
+      "oid": 20,
+      "name": "int8"
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16403,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "actor_id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16403,
+      "src_att": 3,
+      "nullable": false
+    },
+    {
+      "name": "action",
+      "oid": 25,
+      "type_name": "text",
+      "src_rel": 16403,
+      "src_att": 4,
+      "nullable": false
+    },
+    {
+      "name": "created_at",
+      "oid": 1184,
+      "type_name": "timestamptz",
+      "src_rel": 16403,
+      "src_att": 5,
+      "nullable": false
+    }
+  ]
+}

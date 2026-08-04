@@ -43,7 +43,7 @@ func runResolvedChecks(t *testing.T, dialectName, src string, params []dialect.T
 			Columns: []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}, SrcRel: 101, SrcAtt: 1}},
 		}
 	}
-	types, d, err := resolvedChecks(drv, dialectName, file.Queries[0], rs, descs, hintCatalog())
+	types, d, err := resolvedChecks(drv, dialectName, nil, file.Queries[0], rs, descs, hintCatalog())
 	if err != nil {
 		t.Fatal(err)
 	}

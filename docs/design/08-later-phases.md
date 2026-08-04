@@ -185,7 +185,7 @@ Mechanical extensions of existing paths (conjunct machinery; the
   `CheckResolved` pass proving a scoping conjunct exists in every
   shape touching designated tables, with per-query opt-out
   annotations. `explain` reports per-query policy coverage.
-  Expanded into a design draft: doc 14
-  (`14-policy-weaving.md`) — benefit case, weaving algorithm, and the
-  open decisions that need spec answers before implementation.
-  **Still unscheduled and unimplemented.**
+  Expanded into a design: doc 14 (`14-policy-weaving.md`) — benefit
+  case, weaving algorithm, and the open decisions. **Decisions D1–D6
+  settled 2026-08-02; specified in spec §"Cross-Query Policies";
+  implementation phased per doc 14 §10.**

@@ -238,6 +238,30 @@ type QueryTemplate struct {
 	// columns (SQLite decltype is NULL for any expression). Keyed by
 	// the result column's output name.
 	ColumnHints map[string]TypeHint
+	// WhereKwEnd, TailStart, and StmtEnd are template-source offsets
+	// recorded for the policy weaver (design 14 §4.2): WhereKwEnd is
+	// the offset just past the statement's top-level WHERE keyword (-1
+	// when absent); TailStart is where a synthesized WHERE clause would
+	// go when the statement has none — the start of the first
+	// GROUP BY/HAVING/ORDER BY/tail/RETURNING clause (or `@order-by`
+	// construct), -1 when the statement has no such clause; StmtEnd is
+	// the end of the last statement token (excluding any terminating
+	// semicolon), the fallback insertion point.
+	WhereKwEnd int
+	TailStart  int
+	StmtEnd    int
+	// PolicyOptOuts are the query's `-- @policy-optout: name (reason)`
+	// annotations in declaration order (a slice so diagnostics never
+	// depend on map iteration order).
+	PolicyOptOuts []PolicyOptOut
+}
+
+// PolicyOptOut is one `-- @policy-optout` annotation: a deliberate,
+// reviewable exemption from a policy, with a mandatory reason.
+type PolicyOptOut struct {
+	Policy string
+	Reason string
+	Span   diagnostics.Span
 }
 
 // TypeHint is one `-- @param` / `-- @column` directive.

@@ -25,7 +25,7 @@ type ListAuditLogsRow struct {
 var listAuditLogsFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: "\nSELECT a.id, a.actor_id, a.action, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = :tenant_id\n\n", ParamSpans: []runtime.Span{{Start: 90, End: 100}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Guarded, GuardMask: 0x1, Sep: runtime.SepAnd, Text: "a.id < :after_id", ParamSpans: []runtime.Span{{Start: 7, End: 16}}, ParamIdx: []int16{1}},
-	{Kind: runtime.Skel, Text: "\n\nORDER BY a.id DESC\nLIMIT :limit;\n", ParamSpans: []runtime.Span{{Start: 27, End: 33}}, ParamIdx: []int16{2}},
+	{Kind: runtime.Skel, Text: "\n\nORDER BY a.id DESC\nLIMIT :limit;\n\n", ParamSpans: []runtime.Span{{Start: 27, End: 33}}, ParamIdx: []int16{2}},
 }
 
 func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {

@@ -43,3 +43,17 @@ annotation naming the result column; direct table columns never need
 one (their declared type flows through the affinity rules). Missing or
 unknown annotations are diagnostics naming the exact column
 (SQLETCH311).
+
+## `-- @policy-optout: name (reason)`
+
+```sql
+-- name: ListAllOrdersForBackfill :many
+-- @policy-optout: tenant_scope (batch job; runs outside any tenant)
+SELECT ...
+```
+
+Exempts one query from one [cross-query policy](12-policies.md). The
+parenthesized reason is mandatory (SQLETCH001 without it); naming a
+policy that does not exist or does not apply to the query is
+SQLETCH126. Like every annotation it must follow the `-- name:` header
+and stays in the skeleton verbatim.

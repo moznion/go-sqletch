@@ -107,6 +107,12 @@ internal/rules      P2/3/4  CheckR1 (probe-based node completeness),
                         CheckLexical (R6, R9), CheckResolved (R3
                         resolution-based, R2 star, planner table),
                         CheckTypeAgreement/ResolveParamTypes (P1 types)
+internal/policy     —   cross-query policy weaving (doc 14, spec
+                        §Cross-Query Policies): Weave runs between
+                        CheckLexical (unwoven) and Renderings (woven)
+                        via cli.scanChecks — the single shared scan
+                        sequence for pipeline.Run AND the LSP; Enforce
+                        (SQLETCH124/126) runs inside cli.resolvedChecks
 internal/dialect    —   driver interfaces; postgres/ = pg_query
                         frontend + pgx Describe oracle + TypeMap
 internal/cache      P4  committed fingerprint-keyed store (offline)
@@ -167,6 +173,35 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   full permutation space is enumerated for exhaustive/property checks.
 - `EXPLAIN (GENERIC_PLAN)` output must go through pgconn's raw simple
   query (pgx's Query/Exec layers reject bare $n placeholders).
+
+## Known v1.1 decisions and limits (policy weaving, doc 14)
+
+- Policies weave AFTER the P1 scan, BEFORE rendering; everything
+  downstream sees ordinary items. D1–D6 settled 2026-08-02 (doc 14
+  §5): per-occurrence weaving at top level; nullable-outer-join sides,
+  subquery/CTE/set-op positions, guarded joins rejected (SQLETCH125);
+  ordinary-parameter binding (D3a); empty guard set; hybrid span
+  attribution (303 → config path, 124/125 → query).
+- `Tree.DeepTables()` exists because `Relations()` never descends into
+  subqueries; the weaver compares the two by per-name counts. CTE
+  names shadowing designated tables are conservatively "touching".
+- Idempotence matching is token-sequence equality over depth-0
+  AND-split skeleton WHERE segments (stream-based from the first
+  depth-0 WHERE keyword — woven items have zero-width spans, so
+  NEVER key that walk on file offsets); a depth-0 OR poisons matching
+  and the weaver weaves anyway (doubling is harmless, skipping leaks).
+- R6 anchors check the UNWOVEN template (template validity must not
+  depend on config); a broken policy set (any SQLETCH303) disables ALL
+  policies for the run — never half-woven output.
+- `{}` binds to alias-else-table and must be a bare identifier; no
+  dialect quoting facility exists (deliberate, doc 14 §11.3).
+- Enforcement (SQLETCH124) re-derives conjunct presence from the woven
+  template inside cli.resolvedChecks — do not "optimize" it into
+  trusting the weaver's own record; catching weaver regressions is its
+  purpose. The must-stay test: a hand-written conjunct inside
+  @if-present fails (guard-off shapes lose it).
+- Policy edits re-key only affected oracle entries (rendered SQL
+  changes); the policy config must NEVER enter the cache fingerprint.
 
 ## Known v0.4 decisions and limits
 

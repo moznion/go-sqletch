@@ -12,6 +12,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/rules"
 	"github.com/moznion/go-sqletch/internal/template"
 )
@@ -26,6 +27,13 @@ type OfflineChecker struct {
 	cfg  config.Config
 	drv  driver
 	memo map[string]*fileMemo
+	// pols are the compiled policies (empty when the config declares
+	// none or the set failed validation); polDiags carry the one-time
+	// SQLETCH303s, surfaced against the config path on every Check.
+	// Weaving is offline by construction (§4.1: render + parse, no
+	// catalog), so the LSP runs it too.
+	pols     []policy.Policy
+	polDiags []diagnostics.Diagnostic
 }
 
 type fileMemo struct {
@@ -34,7 +42,11 @@ type fileMemo struct {
 	diags []diagnostics.Diagnostic
 	// rends holds per-query renderings for the cache lookup of the
 	// catalog-dependent pass; nil when the file has scan errors.
+	// Renderings are of the WOVEN templates in wovenq.
 	rends map[string][]ast.Rendering
+	// wovenq maps query name -> woven template; the catalog-dependent
+	// pass must consume it, never the scanned original.
+	wovenq map[string]*template.QueryTemplate
 }
 
 // WorkspaceCheck is one consistent snapshot of the workspace's
@@ -46,7 +58,9 @@ type WorkspaceCheck struct {
 }
 
 func NewOfflineChecker(cfg config.Config) *OfflineChecker {
-	return &OfflineChecker{cfg: cfg, drv: driverFor(cfg), memo: map[string]*fileMemo{}}
+	c := &OfflineChecker{cfg: cfg, drv: driverFor(cfg), memo: map[string]*fileMemo{}}
+	c.pols, c.polDiags = compilePolicies(c.drv, cfg)
+	return c
 }
 
 // Check analyzes the workspace with overlay contents (open editor
@@ -95,6 +109,12 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 		res.Diags[p] = append([]diagnostics.Diagnostic(nil), m.diags...)
 	}
 
+	// Broken policies degrade to unwoven checking (never a crash),
+	// with the SQLETCH303s pinned to the config file on every snapshot.
+	if len(c.polDiags) > 0 {
+		res.Diags[c.cfg.Path] = append(res.Diags[c.cfg.Path], c.polDiags...)
+	}
+
 	// Workspace phase: duplicate query names, first definition in
 	// sorted-path order wins — the same collation the pipeline gets
 	// from ExpandGlobs, so CLI and LSP flag the same file.
@@ -131,11 +151,15 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if rs == nil {
 					continue
 				}
+				wq := m.wovenq[q.Name]
+				if wq == nil {
+					wq = q
+				}
 				descs, hit := loadDescs(store, fp, rs)
 				if !hit {
 					continue
 				}
-				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, q, rs, descs, cat)
+				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, c.pols, wq, rs, descs, cat)
 				if err != nil {
 					continue // internal re-parse failure; the CLI will surface it
 				}
@@ -166,16 +190,17 @@ func (c *OfflineChecker) analyzeFile(path string, src []byte) *fileMemo {
 	// are the actionable ones.
 	if !diagnostics.HasErrors(diags) {
 		m.rends = map[string][]ast.Rendering{}
+		m.wovenq = map[string]*template.QueryTemplate{}
 		for _, q := range file.Queries {
-			m.diags = append(m.diags, rules.CheckLexical(c.drv.profile, q)...)
-			rs, err := ast.Renderings(c.drv.profile, q)
+			wres, rs, d, err := scanChecks(c.drv, c.pols, q)
+			m.diags = append(m.diags, d...)
 			if err != nil {
 				m.diags = append(m.diags, diagnostics.Errorf(diagnostics.CodeRenderingParse,
 					q.HeaderSpan, "internal: rendering failed: %v", err))
 				continue
 			}
 			m.rends[q.Name] = rs
-			m.diags = append(m.diags, rules.CheckR1(c.drv.profile, c.drv.frontend, q, rs)...)
+			m.wovenq[q.Name] = wres.Query
 		}
 	}
 	c.memo[path] = m
@@ -224,10 +249,12 @@ func loadDescs(store *cache.Store, fp string, rs []ast.Rendering) ([]dialect.Des
 
 // resolvedChecks is the catalog-dependent pass shared by pipeline.Run
 // and the OfflineChecker: R3/R2/planner-sensitivity (CheckResolved),
-// Tier 1 type agreement and parameter resolution, `-- @param` hint
-// validation, and Tier 2 missing-annotation enforcement. Offline once
-// the descs are in hand.
-func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
+// policy enforcement (SQLETCH124/126 — so violations appear live in
+// the editor), Tier 1 type agreement and parameter resolution,
+// `-- @param` hint validation, and Tier 2 missing-annotation
+// enforcement. Offline once the descs are in hand. q must be the
+// WOVEN template.
+func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *template.QueryTemplate, rs []ast.Rendering,
 	descs []dialect.Desc, cat *cache.Catalog) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
 
 	tree, err := drv.frontend.Parse(rs[0].SQL)
@@ -236,6 +263,7 @@ func resolvedChecks(drv driver, dialectName string, q *template.QueryTemplate, r
 	}
 	var diags []diagnostics.Diagnostic
 	diags = append(diags, rules.CheckResolved(q, rs[0], tree, cat)...)
+	diags = append(diags, policy.Enforce(drv.profile, pols, q, tree)...)
 	paramTypes := map[string]dialect.TypeRef{}
 	if !drv.annotationsRequired {
 		// Tier 1: the oracle types parameters; agreement is checked

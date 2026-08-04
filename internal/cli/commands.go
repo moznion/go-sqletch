@@ -143,6 +143,17 @@ func printExplain(w io.Writer, d explainData) {
 			fmt.Fprintf(w, "    %s\n", c)
 		}
 	}
+	if len(d.Policies) > 0 {
+		fmt.Fprintln(w, "  policies:")
+		for _, pc := range d.Policies {
+			switch pc.Status {
+			case "opted_out":
+				fmt.Fprintf(w, "    %s: opted out (%s)\n", pc.Name, pc.Reason)
+			default:
+				fmt.Fprintf(w, "    %s: woven (%s)\n", pc.Name, strings.Join(pc.Conjuncts, " AND "))
+			}
+		}
+	}
 	fmt.Fprintln(w)
 }
 

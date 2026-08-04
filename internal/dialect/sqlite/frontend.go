@@ -286,6 +286,157 @@ func collectSource(src rsql.Source, join dialect.JoinType, nullable bool, out *[
 	}
 }
 
+// ---- deep table refs -------------------------------------------------------
+
+// tableWalker hand-walks the same positions refWalker does, collecting
+// every base-table name — subqueries and CTE bodies included, and
+// CTE-name references with them (conservative, design 14 §11.1).
+type tableWalker struct {
+	out []dialect.TableRef
+}
+
+func (t *tree) DeepTables() []dialect.TableRef {
+	w := &tableWalker{}
+	switch s := t.first().(type) {
+	case *rsql.SelectStatement:
+		w.walkSelect(s)
+	case *rsql.UpdateStatement:
+		if s.Table != nil {
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Loc: s.Table.Name.NamePos.Offset})
+		}
+		for _, a := range s.Assignments {
+			w.walkExpr(a.Expr)
+		}
+		w.walkExpr(s.WhereExpr)
+		w.walkReturning(s.ReturningClause)
+	case *rsql.DeleteStatement:
+		if s.Table != nil {
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Loc: s.Table.Name.NamePos.Offset})
+		}
+		w.walkExpr(s.WhereExpr)
+	case *rsql.InsertStatement:
+		if s.Table != nil {
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name, Loc: s.Table.NamePos.Offset})
+		}
+		for _, vl := range s.ValueLists {
+			for _, e := range vl.Exprs {
+				w.walkExpr(e)
+			}
+		}
+		w.walkSelect(s.Select)
+		w.walkReturning(s.ReturningClause)
+	}
+	return w.out
+}
+
+func (w *tableWalker) walkReturning(rc *rsql.ReturningClause) {
+	if rc == nil {
+		return
+	}
+	for _, c := range rc.Columns {
+		if c != nil {
+			w.walkExpr(c.Expr)
+		}
+	}
+}
+
+func (w *tableWalker) walkSelect(s *rsql.SelectStatement) {
+	if s == nil {
+		return
+	}
+	if s.WithClause != nil {
+		for _, cte := range s.WithClause.CTEs {
+			w.walkSelect(cte.Select)
+		}
+	}
+	for _, rc := range s.Columns {
+		if rc != nil {
+			w.walkExpr(rc.Expr)
+		}
+	}
+	w.walkSource(s.Source)
+	w.walkExpr(s.WhereExpr)
+	for _, e := range s.GroupByExprs {
+		w.walkExpr(e)
+	}
+	w.walkExpr(s.HavingExpr)
+	for _, ot := range s.OrderingTerms {
+		w.walkExpr(ot.X)
+	}
+	w.walkExpr(s.LimitExpr)
+	w.walkExpr(s.OffsetExpr)
+	if s.Compound != nil {
+		w.walkSelect(s.Compound)
+	}
+}
+
+func (w *tableWalker) walkSource(src rsql.Source) {
+	switch v := src.(type) {
+	case nil:
+	case *rsql.JoinClause:
+		w.walkSource(v.X)
+		w.walkSource(v.Y)
+		if on, ok := v.Constraint.(*rsql.OnConstraint); ok {
+			w.walkExpr(on.X)
+		}
+	case *rsql.QualifiedTableName:
+		w.out = append(w.out, dialect.TableRef{Name: v.Name.Name, Loc: v.Name.NamePos.Offset})
+	case *rsql.ParenSource:
+		if sub, ok := v.X.(*rsql.SelectStatement); ok {
+			w.walkSelect(sub)
+			return
+		}
+		w.walkSource(v.X)
+	case *rsql.SelectStatement:
+		w.walkSelect(v)
+	}
+}
+
+func (w *tableWalker) walkExpr(e rsql.Expr) {
+	switch v := e.(type) {
+	case nil:
+	case *rsql.BinaryExpr:
+		w.walkExpr(v.X)
+		w.walkExpr(v.Y)
+	case *rsql.UnaryExpr:
+		w.walkExpr(v.X)
+	case *rsql.ParenExpr:
+		w.walkExpr(v.X)
+	case *rsql.ExprList:
+		for _, x := range v.Exprs {
+			w.walkExpr(x)
+		}
+	case *rsql.Call:
+		for _, a := range v.Args {
+			w.walkExpr(a)
+		}
+		if v.Filter != nil {
+			w.walkExpr(v.Filter.X)
+		}
+	case *rsql.CaseExpr:
+		w.walkExpr(v.Operand)
+		for _, b := range v.Blocks {
+			w.walkExpr(b.Condition)
+			w.walkExpr(b.Body)
+		}
+		w.walkExpr(v.ElseExpr)
+	case *rsql.CastExpr:
+		w.walkExpr(v.X)
+	case *rsql.CollateExpr:
+		w.walkExpr(v.X)
+	case *rsql.Null:
+		w.walkExpr(v.X)
+	case *rsql.Range:
+		w.walkExpr(v.X)
+		w.walkExpr(v.Y)
+	case *rsql.Exists:
+		w.walkSelect(v.Select)
+	case rsql.SelectExpr:
+		w.walkSelect(v.SelectStatement)
+	}
+	// Idents, BindExpr, literals, Raise: no table references.
+}
+
 // ---- column refs -----------------------------------------------------------
 
 // refWalker hand-walks expression positions only, so identifiers in

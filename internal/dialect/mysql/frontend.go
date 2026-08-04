@@ -494,6 +494,33 @@ func (v *colRefVisitor) Leave(n ast.Node) (ast.Node, bool) {
 	return n, true
 }
 
+// DeepTables walks the whole statement and collects every TableName —
+// subqueries and CTE bodies included, and CTE-name references with
+// them (conservative, design 14 §11.1). TiDB relation nodes carry no
+// byte offsets, so Loc is -1 throughout.
+func (t *tree) DeepTables() []dialect.TableRef {
+	n := t.first()
+	if n == nil {
+		return nil
+	}
+	v := &tableNameVisitor{}
+	n.Accept(v)
+	return v.out
+}
+
+type tableNameVisitor struct {
+	out []dialect.TableRef
+}
+
+func (v *tableNameVisitor) Enter(n ast.Node) (ast.Node, bool) {
+	if tn, ok := n.(*ast.TableName); ok {
+		v.out = append(v.out, dialect.TableRef{Name: tn.Name.O, Loc: -1})
+	}
+	return n, false
+}
+
+func (v *tableNameVisitor) Leave(n ast.Node) (ast.Node, bool) { return n, true }
+
 func (t *tree) TargetItems() []dialect.TargetItem {
 	sel := t.sel()
 	if sel == nil || sel.Fields == nil {

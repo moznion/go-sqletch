@@ -46,6 +46,18 @@ type RelRef struct {
 	NullableSide bool
 }
 
+// TableRef is one base-table name referenced anywhere in the
+// statement, including subquery and CTE bodies — the policy weaver's
+// visibility input (design 14 §11.1). References to CTE *names* are
+// deliberately included: a CTE shadowing a policy-designated table is
+// conservatively treated as touching it (a false positive is a loud
+// diagnostic with an opt-out, never a silent leak). Loc is -1 where
+// the parser exposes no offset.
+type TableRef struct {
+	Name string
+	Loc  int
+}
+
 // StmtKind is the statement class sqletch supports.
 type StmtKind int
 
@@ -80,6 +92,12 @@ type Tree interface {
 	StmtCount() int
 	Kind() StmtKind
 	Relations() []RelRef
+	// DeepTables reports every base-table name referenced anywhere in
+	// the statement — subqueries and CTE bodies included, unlike
+	// Relations, which stops at the statement's own FROM/target
+	// clauses. The policy weaver compares the two to reject designated
+	// tables in positions it cannot scope (design 14 §D6).
+	DeepTables() []TableRef
 	ColumnRefs() []ColRef
 	TargetItems() []TargetItem
 	// TopConjunctLocs returns the byte locations of the statement's

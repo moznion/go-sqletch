@@ -21,7 +21,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/nullability"
-	"github.com/moznion/go-sqletch/internal/rules"
+	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 	"github.com/moznion/go-sqletch/runtime"
@@ -63,7 +63,8 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 }
 
 type compiledQuery struct {
-	q          *template.QueryTemplate
+	q          *template.QueryTemplate // woven: every phase past scanChecks reads this
+	woven      []policy.WovenPolicy    // policy coverage (enforcement, explain)
 	rs         []ast.Rendering
 	descs      []dialect.Desc
 	paramTypes map[string]dialect.TypeRef
@@ -124,14 +125,17 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		}
 	}
 	res.QueryCount = len(queries)
+	pols, polDiags := compilePolicies(drv, cfg)
+	res.Diags = append(res.Diags, polDiags...)
 	for _, cq := range queries {
-		res.Diags = append(res.Diags, rules.CheckLexical(profile, cq.q)...)
-		rs, err := ast.Renderings(profile, cq.q)
+		wres, rs, d, err := scanChecks(drv, pols, cq.q)
 		if err != nil {
 			return nil, err
 		}
+		res.Diags = append(res.Diags, d...)
+		cq.q = wres.Query
+		cq.woven = wres.Woven
 		cq.rs = rs
-		res.Diags = append(res.Diags, rules.CheckR1(profile, frontend, cq.q, rs)...)
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
@@ -216,7 +220,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 
 	// ---- catalog-dependent checks, types, nullability -------------------
 	for _, cq := range queries {
-		types, d, err := resolvedChecks(drv, cfg.Dialect, cq.q, cq.rs, cq.descs, cat)
+		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat)
 		if err != nil {
 			return nil, err
 		}
@@ -465,13 +469,40 @@ func shapeFileName(key string) string {
 
 // explainData is the per-query summary consumed by `sqletch explain`.
 type explainData struct {
-	Name       string   `json:"name"`
-	Guards     []string `json:"guards"`
-	Chooses    []string `json:"chooses,omitempty"`
-	ShapeCount string   `json:"shape_count"`
-	Params     []string `json:"params"`
-	Columns    []string `json:"columns"`
-	MaximalSQL string   `json:"maximal_sql"`
+	Name       string           `json:"name"`
+	Guards     []string         `json:"guards"`
+	Chooses    []string         `json:"chooses,omitempty"`
+	ShapeCount string           `json:"shape_count"`
+	Params     []string         `json:"params"`
+	Columns    []string         `json:"columns"`
+	Policies   []policyCoverage `json:"policies,omitempty"`
+	MaximalSQL string           `json:"maximal_sql"`
+}
+
+// policyCoverage is one applied policy in the explain report (§6.3):
+// per query, which policies bite and whether each is woven or opted
+// out — "which queries are unscoped, and why" as a command's output.
+type policyCoverage struct {
+	Name      string   `json:"name"`
+	Status    string   `json:"status"` // "woven" | "opted_out"
+	Reason    string   `json:"reason,omitempty"`
+	Conjuncts []string `json:"conjuncts,omitempty"`
+}
+
+func policyCoverageOf(cq *compiledQuery) []policyCoverage {
+	var out []policyCoverage
+	for _, wp := range cq.woven {
+		pc := policyCoverage{Name: wp.Policy.Name}
+		if wp.OptedOut {
+			pc.Status = "opted_out"
+			pc.Reason = wp.OptOutReason
+		} else {
+			pc.Status = "woven"
+			pc.Conjuncts = wp.Conjuncts
+		}
+		out = append(out, pc)
+	}
+	return out
 }
 
 func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
@@ -481,7 +512,8 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 	}
 	drv := driverFor(cfg)
 	for _, cq := range queries {
-		d := explainData{Name: cq.q.Name, ShapeCount: shape.CountExpand(cq.q, drv.expandIn).String(), MaximalSQL: cq.rs[0].SQL}
+		d := explainData{Name: cq.q.Name, ShapeCount: shape.CountExpand(cq.q, drv.expandIn).String(),
+			Policies: policyCoverageOf(cq), MaximalSQL: cq.rs[0].SQL}
 		for i, g := range cq.q.GuardAtoms {
 			d.Guards = append(d.Guards, fmt.Sprintf("bit %d: %s", i, g.Param))
 		}
