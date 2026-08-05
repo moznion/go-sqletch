@@ -331,8 +331,24 @@ nobody notices either.
 The same reasoning applies to `@filter-tree!`, whose `Scope` field had
 the identical hazard — omitted from a keyed literal it was nil, and
 only `ErrFilterRequired` at runtime stood between that and an unscoped
-read. It is now an argument too; the nil check remains for an explicit
-`nil`.
+read. It is now an argument too.
+
+For the tree the guarantee goes one step further than it can for a
+policy parameter. `Tree` became a value type, so `nil` is not a Tree:
+
+    q.FilterUsers(ctx, nil, gen.FilterUsersParams{Limit: 20})
+    → cannot use nil as runtime.Tree value in argument to q.FilterUsers
+
+Both shapes a forgotten scope takes — omitting the argument and passing
+`nil` — are now compile errors. The one zero left is `runtime.Tree{}`,
+written out in full, which is not something a caller produces by
+accident; `ErrFilterRequired` refuses it, and `Tree.IsZero` keeps it
+distinct from `Unscoped()` so that "did not decide" and "decided not to
+scope" cannot collapse into each other.
+
+A policy parameter cannot be hardened this way: it is an ordinary
+`int64` or `string`, and Go has no type whose zero is unrepresentable.
+"Cannot omit" is the whole of what is achievable there.
 
 ### D4 — Diagnostic span attribution
 

@@ -471,10 +471,10 @@ t.tenant_id = :scope_tenant_id
 
 		src := string(files["pick.sql.gen.go"])
 		if !regexp.MustCompile(
-			`func \(q \*Queries\) Pick\(ctx context\.Context, scope \*runtime\.Tree, arg PickParams\)`).MatchString(src) {
+			`func \(q \*Queries\) Pick\(ctx context\.Context, scope runtime\.Tree, arg PickParams\)`).MatchString(src) {
 			t.Errorf("required tree is not an argument\n----\n%s", src)
 		}
-		if regexp.MustCompile(`Scope\s+\*runtime\.Tree`).MatchString(src) {
+		if regexp.MustCompile(`Scope\s+runtime\.Tree`).MatchString(src) {
 			t.Errorf("required tree stayed a params field\n----\n%s", src)
 		}
 		// The nil check stays: an argument can still be given an
@@ -506,7 +506,7 @@ t.tenant_id = :scope_tenant_id
 			t.Fatalf("generate: %+v", diags)
 		}
 		src := string(files["loose.sql.gen.go"])
-		if !regexp.MustCompile(`Scope\s+\*runtime\.Tree`).MatchString(src) {
+		if !regexp.MustCompile(`Scope\s+runtime\.Tree`).MatchString(src) {
 			t.Errorf("optional tree should stay a params field\n----\n%s", src)
 		}
 		if !regexp.MustCompile(

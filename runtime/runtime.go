@@ -218,7 +218,7 @@ func Compose(frags []Frag, key ShapeKey) (string, []int16) {
 
 // ComposeStyle is Compose with an explicit placeholder style.
 func ComposeStyle(style Style, frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := ComposeTreeStyle(style, frags, key, nil, DefaultTreeCaps)
+	sql, binds, err := ComposeTreeStyle(style, frags, key, Tree{}, DefaultTreeCaps)
 	if err != nil {
 		// Without a tree the composer has no failure modes; a non-nil
 		// error here is a generated-code bug.
@@ -238,14 +238,14 @@ type bindKey struct {
 }
 
 // ComposeTree composes a shape that may include one @filter-tree
-// block. tree may be nil (renders TRUE); a nil tree with a required
-// block is rejected by the generated code before reaching here.
-func ComposeTree(frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+// block. The zero Tree renders TRUE; a zero tree for a required block
+// is rejected by the generated code before reaching here.
+func ComposeTree(frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
 	return ComposeTreeStyle(StyleDollar, frags, key, tree, caps)
 }
 
 // ComposeTreeStyle is ComposeTree with an explicit placeholder style.
-func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
 	var b strings.Builder
 	assigned := map[bindKey]int{}
 	var binds []Bind
@@ -282,8 +282,8 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 	// the flattened TreeArgs space (repeated predicates bind
 	// independently).
 	treeArgBase := int16(0)
-	var emitTree func(n *Tree, preds []Case)
-	emitTree = func(n *Tree, preds []Case) {
+	var emitTree func(n *node, preds []Case)
+	emitTree = func(n *node, preds []Case) {
 		switch {
 		case n == nil || n.op == opTrue:
 			b.WriteString("TRUE")
@@ -405,14 +405,14 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree *Tree, caps 
 			}
 			b.WriteByte(')')
 		case FilterTree:
-			if tree == nil {
+			if tree.IsZero() {
 				b.WriteString("TRUE")
 				continue
 			}
 			if err := tree.validate(len(f.Cases), caps); err != nil {
 				return "", nil, err
 			}
-			emitTree(tree, f.Cases)
+			emitTree(tree.n, f.Cases)
 		}
 	}
 	return b.String(), binds, nil
@@ -529,7 +529,7 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 
 // GetStyle is Get with an explicit placeholder style.
 func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := c.get(style, queryName, frags, key, nil, DefaultTreeCaps)
+	sql, binds, err := c.get(style, queryName, frags, key, Tree{}, DefaultTreeCaps)
 	if err != nil {
 		panic(err) // no failure modes without a tree
 	}
@@ -543,22 +543,22 @@ func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, ke
 // GetBindsStyle is GetStyle returning the full bind plan — needed
 // when binds select slice elements (@in arity expansion).
 func (c *ComposedCache) GetBindsStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []Bind, error) {
-	return c.get(style, queryName, frags, key, nil, DefaultTreeCaps)
+	return c.get(style, queryName, frags, key, Tree{}, DefaultTreeCaps)
 }
 
 // GetTree is the @filter-tree variant: the tree's structural encoding
 // becomes part of the cache key (values never do).
-func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
 	return c.GetTreeStyle(StyleDollar, queryName, frags, key, tree, caps)
 }
 
 // GetTreeStyle is GetTree with an explicit placeholder style.
-func (c *ComposedCache) GetTreeStyle(style Style, queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+func (c *ComposedCache) GetTreeStyle(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
 	key.Trees = []string{tree.Encode()}
 	return c.get(style, queryName, frags, key, tree, caps)
 }
 
-func (c *ComposedCache) get(style Style, queryName string, frags []Frag, key ShapeKey, tree *Tree, caps TreeCaps) (string, []Bind, error) {
+func (c *ComposedCache) get(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
 	mapKey := queryName + "|" + key.String()
 	c.mu.Lock()
 	if el, ok := c.m[mapKey]; ok {

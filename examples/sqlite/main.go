@@ -101,7 +101,10 @@ func main() {
 	// The `!` makes the filter required: a forgotten scope fails before
 	// any SQL is sent, and unfiltered access is one greppable call.
 	fmt.Println("filter tree (required mode):")
-	_, err = q.FilterUsers(ctx, nil, gen.FilterUsersParams{Limit: 10})
+	// Omitting the scope does not compile, and neither does passing nil
+	// (the argument is a value type). The zero Tree is the only way left
+	// to arrive here without a decision, and it is refused.
+	_, err = q.FilterUsers(ctx, runtime.Tree{}, gen.FilterUsersParams{Limit: 10})
 	if !errors.Is(err, runtime.ErrFilterRequired) {
 		log.Fatalf("expected ErrFilterRequired, got %v", err)
 	}

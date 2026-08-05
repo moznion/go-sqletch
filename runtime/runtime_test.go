@@ -106,7 +106,7 @@ func TestComposeStyle_InList(t *testing.T) {
 		{Kind: Skel, Text: "\nLIMIT :limit", ParamSpans: []Span{{7, 13}}, ParamIdx: []int16{1}},
 	}
 
-	sql, binds, err := ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{3}}, nil, DefaultTreeCaps)
+	sql, binds, err := ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{3}}, Tree{}, DefaultTreeCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestComposeStyle_InList(t *testing.T) {
 	}
 
 	// Arity 0: the empty list matches nothing, binds nothing.
-	sql, binds, err = ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{0}}, nil, DefaultTreeCaps)
+	sql, binds, err = ComposeTreeStyle(StyleQuestion, frags, ShapeKey{Arities: []int32{0}}, Tree{}, DefaultTreeCaps)
 	if err != nil {
 		t.Fatal(err)
 	}

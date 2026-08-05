@@ -28,27 +28,27 @@ var filterUsersFrags = []runtime.Frag{
 }
 
 // FilterUsersTenant builds the "tenant" predicate of @filter-tree(scope).
-func FilterUsersTenant(scopeTenantID int64) *runtime.Tree {
+func FilterUsersTenant(scopeTenantID int64) runtime.Tree {
 	return runtime.NewLeaf(0, scopeTenantID)
 }
 
 // FilterUsersStatusEq builds the "status_eq" predicate of @filter-tree(scope).
-func FilterUsersStatusEq(scopeStatus string) *runtime.Tree {
+func FilterUsersStatusEq(scopeStatus string) runtime.Tree {
 	return runtime.NewLeaf(1, scopeStatus)
 }
 
 // FilterUsersEmailPrefix builds the "email_prefix" predicate of @filter-tree(scope).
-func FilterUsersEmailPrefix(scopePrefix string) *runtime.Tree {
+func FilterUsersEmailPrefix(scopePrefix string) runtime.Tree {
 	return runtime.NewLeaf(2, scopePrefix)
 }
 
 // FilterUsersUnscoped is the explicit, greppable opt-out: it renders TRUE.
-func FilterUsersUnscoped() *runtime.Tree { return runtime.Unscoped() }
+func FilterUsersUnscoped() runtime.Tree { return runtime.Unscoped() }
 
 // scope is required (@filter-tree!; FilterUsersUnscoped() opts out).
-func (q *Queries) FilterUsers(ctx context.Context, scope *runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error) {
+func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error) {
 	var key runtime.ShapeKey
-	if scope == nil {
+	if scope.IsZero() {
 		return nil, runtime.ErrFilterRequired
 	}
 	key.Trees = []string{scope.Encode()}
