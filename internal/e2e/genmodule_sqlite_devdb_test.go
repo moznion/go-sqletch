@@ -61,14 +61,14 @@ cache:
 	if !strings.Contains(out.String(), "offline: no") {
 		t.Errorf("cold generate must not be offline: %s", out.String())
 	}
-	inGen := readFile(t, dir, "gen/users_in_statuses.sql.go")
+	inGen := readFile(t, dir, "gen/users_in_statuses.sql.gen.go")
 	for _, want := range []string{`Statuses\s+\[\]string`, `runtime\.InList`, `IN \(SELECT NULL WHERE 0\)`, `QueryContext`} {
 		if !regexp.MustCompile(want).MatchString(inGen) {
 			t.Errorf("generated @in query missing %q:\n%s", want, inGen)
 		}
 	}
 	// The @column annotation types the aggregate.
-	if actGen := readFile(t, dir, "gen/tenant_activity.sql.go"); !regexp.MustCompile(`Actions\s+int64`).MatchString(actGen) {
+	if actGen := readFile(t, dir, "gen/tenant_activity.sql.gen.go"); !regexp.MustCompile(`Actions\s+int64`).MatchString(actGen) {
 		t.Errorf("@column-typed aggregate missing:\n%s", actGen)
 	}
 

@@ -244,12 +244,19 @@ func generateUC1(t *testing.T) map[string][]byte {
 
 func TestGenerate_UseCase1(t *testing.T) {
 	files := generateUC1(t)
-	for _, name := range []string{"db.go", "querier.go", "search_users.sql.go"} {
+	for _, name := range []string{"db.gen.go", "querier.gen.go", "search_users.sql.gen.go"} {
 		if files[name] == nil {
 			t.Fatalf("missing file %s (have %v)", name, keysOf(files))
 		}
 	}
-	src := string(files["search_users.sql.go"])
+	// Generated files must be recognizable by name, not only by the
+	// "Code generated" header: nothing may be emitted without .gen.go.
+	for _, name := range keysOf(files) {
+		if !strings.HasSuffix(name, ".gen.go") {
+			t.Errorf("emitted file %q does not carry the .gen.go suffix", name)
+		}
+	}
+	src := string(files["search_users.sql.gen.go"])
 	// gofmt column-aligns struct fields, so field assertions use \s+.
 	for _, want := range []string{
 		`type SearchUsersSort int`,
@@ -271,7 +278,7 @@ func TestGenerate_UseCase1(t *testing.T) {
 			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
 		}
 	}
-	if !strings.Contains(string(files["querier.go"]), "SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)") {
+	if !strings.Contains(string(files["querier.gen.go"]), "SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)") {
 		t.Error("querier.go missing the method signature")
 	}
 
@@ -318,7 +325,7 @@ func TestGenerate_FileStemCollision(t *testing.T) {
 	if !hasCode(diags, diagnostics.CodeNameCollision) {
 		t.Errorf("want SQLETCH310, got %+v", diags)
 	}
-	if _, ok := files["user_i_d.sql.go"]; ok {
+	if _, ok := files["user_i_d.sql.gen.go"]; ok {
 		t.Error("capital runs must not split into per-letter words")
 	}
 }

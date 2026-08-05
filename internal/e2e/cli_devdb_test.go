@@ -78,16 +78,16 @@ static_expansion:
 	if !strings.Contains(out, "offline: no") {
 		t.Errorf("cold generate must not be offline: %s", out)
 	}
-	for _, f := range []string{"gen/db.go", "gen/querier.go", "gen/search_users.sql.go"} {
+	for _, f := range []string{"gen/db.gen.go", "gen/querier.gen.go", "gen/search_users.sql.gen.go"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Fatalf("missing generated %s: %v", f, err)
 		}
 	}
-	genBefore := readFile(t, dir, "gen/search_users.sql.go")
+	genBefore := readFile(t, dir, "gen/search_users.sql.gen.go")
 
 	// The @param hint fed the pipeline: the @in parameter is a plain
 	// slice in the generated params struct.
-	if inGen := readFile(t, dir, "gen/users_in_statuses.sql.go"); !strings.Contains(inGen, "Statuses []string") {
+	if inGen := readFile(t, dir, "gen/users_in_statuses.sql.gen.go"); !strings.Contains(inGen, "Statuses []string") {
 		t.Errorf("@in param must generate a slice field:\n%s", inGen)
 	}
 
@@ -118,7 +118,7 @@ static_expansion:
 	if code != cli.ExitOK {
 		t.Fatalf("warm generate: exit %d\n%s", code, errOut)
 	}
-	if got := readFile(t, dir, "gen/search_users.sql.go"); got != genBefore {
+	if got := readFile(t, dir, "gen/search_users.sql.gen.go"); got != genBefore {
 		t.Error("warm regenerate changed the output (determinism violated)")
 	}
 

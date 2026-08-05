@@ -177,7 +177,7 @@ func TestGenerate_QuestionStyle(t *testing.T) {
 	if len(ds) != 0 {
 		t.Fatalf("generate: %+v", ds)
 	}
-	src := string(files["users_in_statuses.sql.go"])
+	src := string(files["users_in_statuses.sql.gen.go"])
 	for _, want := range []string{
 		`Statuses\s+\[\]string`,
 		`MinID\s+\*int64`,
@@ -191,7 +191,7 @@ func TestGenerate_QuestionStyle(t *testing.T) {
 			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
 		}
 	}
-	db := string(files["db.go"])
+	db := string(files["db.gen.go"])
 	if !strings.Contains(db, `"database/sql"`) || strings.Contains(db, "pgx") {
 		t.Errorf("db.go must be the database/sql flavor:\n%s", db)
 	}

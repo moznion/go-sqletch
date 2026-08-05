@@ -41,9 +41,12 @@ type Options struct {
 	Style runtime.Style
 }
 
-// Generate emits the full package: db.go, querier.go, and one file per
-// query. Returns file contents keyed by base name; any diagnostics
-// mean the emission is incomplete and must not be written.
+// Generate emits the full package: db.gen.go, querier.gen.go, and one
+// <query>.sql.gen.go per query — every emitted name ends in ".gen.go"
+// so generated files are recognizable by name, not only by the
+// "Code generated" header. Returns file contents keyed by base name;
+// any diagnostics mean the emission is incomplete and must not be
+// written.
 func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[string][]byte, []diagnostics.Diagnostic) {
 	files := map[string][]byte{}
 	var diags []diagnostics.Diagnostic
@@ -76,22 +79,22 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		stem := pascalToSnake(in.Q.Name)
 		if prev, ok := fileStems[stem]; ok {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision, in.Q.HeaderSpan,
-				"query %q and %q both generate %s.sql.go; rename one so the file names differ",
+				"query %q and %q both generate %s.sql.gen.go; rename one so the file names differ",
 				prev, in.Q.Name, stem))
 			continue
 		}
 		fileStems[stem] = in.Q.Name
-		files[stem+".sql.go"] = src
+		files[stem+".sql.gen.go"] = src
 		querier = append(querier, sig)
 	}
 
 	if !diagnostics.HasErrors(diags) {
 		if opts.Style == runtime.StyleQuestion {
-			files["db.go"] = []byte(dbFileQuestion(opts.Package))
+			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package))
 		} else {
-			files["db.go"] = []byte(dbFile(opts.Package))
+			files["db.gen.go"] = []byte(dbFile(opts.Package))
 		}
-		files["querier.go"] = []byte(querierFile(opts.Package, querier))
+		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier))
 	}
 
 	for name, src := range files {

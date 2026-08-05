@@ -72,13 +72,13 @@ cache:
 	if !strings.Contains(out.String(), "offline: no") {
 		t.Errorf("cold generate must not be offline: %s", out.String())
 	}
-	inGen := readFile(t, dir, "gen/users_in_statuses.sql.go")
+	inGen := readFile(t, dir, "gen/users_in_statuses.sql.gen.go")
 	for _, want := range []string{`Statuses\s+\[\]string`, `runtime\.InList`, `QueryContext`} {
 		if !regexp.MustCompile(want).MatchString(inGen) {
 			t.Errorf("generated @in query missing %q:\n%s", want, inGen)
 		}
 	}
-	if db := readFile(t, dir, "gen/db.go"); !strings.Contains(db, `"database/sql"`) {
+	if db := readFile(t, dir, "gen/db.gen.go"); !strings.Contains(db, `"database/sql"`) {
 		t.Errorf("db.go must be the database/sql flavor:\n%s", db)
 	}
 
