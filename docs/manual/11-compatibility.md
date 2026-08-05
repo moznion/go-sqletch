@@ -126,6 +126,22 @@ index, never an identity.
 If step 2 or 3 surfaces a new diagnostic on an unchanged template, that
 is a bug in the release — the promises above say it should not happen.
 
+### One-time step: the `.gen.go` rename
+
+Generated files used to be `<query>.sql.go`, `db.go`, `querier.go`;
+they are now `<query>.sql.gen.go`, `db.gen.go`, `querier.gen.go`.
+`generate` writes the new files but never deletes files it did not
+write, so the first regeneration after upgrading leaves the old ones in
+place and the package fails to compile with duplicate declarations.
+Delete them once:
+
+```console
+rm gen/*.sql.go gen/db.go gen/querier.go   # only if they predate the rename
+```
+
+The API is unchanged — same package, same types, same methods — so no
+call site moves.
+
 ---
 
 The engineering record behind these promises — which surfaces were

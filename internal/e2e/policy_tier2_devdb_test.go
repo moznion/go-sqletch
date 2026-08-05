@@ -61,14 +61,14 @@ policies:
 // while the opt-out's does not.
 func assertWovenGen(t *testing.T, dir string) {
 	t.Helper()
-	woven, err := os.ReadFile(filepath.Join(dir, "gen", "all_audit.sql.go"))
+	woven, err := os.ReadFile(filepath.Join(dir, "gen", "all_audit.sql.gen.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(woven), "WHERE a.tenant_id = :tenant_id") {
 		t.Errorf("generated fragments lack the woven conjunct:\n%s", woven)
 	}
-	backfill, err := os.ReadFile(filepath.Join(dir, "gen", "all_audit_backfill.sql.go"))
+	backfill, err := os.ReadFile(filepath.Join(dir, "gen", "all_audit_backfill.sql.gen.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
