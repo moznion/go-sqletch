@@ -302,6 +302,27 @@ SELECT t.a AS user_id, t.b AS user__id FROM t;
 	}
 }
 
+func TestGenerate_FileStemCollision(t *testing.T) {
+	mk := func(name string) QueryInput {
+		q := scanOne(t, "-- name: "+name+" :many\nSELECT t.a FROM t;\n")
+		return QueryInput{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "a", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{},
+		}
+	}
+	// UserID and UserId are distinct Go names but one file stem.
+	files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{},
+		[]QueryInput{mk("UserID"), mk("UserId")})
+	if !hasCode(diags, diagnostics.CodeNameCollision) {
+		t.Errorf("want SQLETCH310, got %+v", diags)
+	}
+	if _, ok := files["user_i_d.sql.go"]; ok {
+		t.Error("capital runs must not split into per-letter words")
+	}
+}
+
 func TestGenerate_UnsupportedType(t *testing.T) {
 	q := scanOne(t, `-- name: U :many
 SELECT t.a FROM t WHERE t.x = :x;
@@ -338,8 +359,25 @@ func TestGoName(t *testing.T) {
 	if got := lowerCamel("IDList"); got != "idList" {
 		t.Errorf("lowerCamel(IDList) = %q", got)
 	}
-	if got := pascalToSnake("SearchUsers"); got != "search_users" {
-		t.Errorf("pascalToSnake = %q", got)
+	snakes := map[string]string{
+		"SearchUsers":      "search_users",
+		"FindUserByUserID": "find_user_by_user_id",
+		"UserID":           "user_id",
+		"ID":               "id",
+		"IDList":           "id_list",
+		"ParseHTTPRequest": "parse_http_request",
+		"HTTPServer":       "http_server",
+		"ServeHTTP":        "serve_http",
+		"Find_UserID":      "find_user_id",
+		"find_user":        "find_user",
+		"GetV2User":        "get_v2_user",
+		"HTTP2Server":      "http2_server",
+		"A":                "a",
+	}
+	for in, want := range snakes {
+		if got := pascalToSnake(in); got != want {
+			t.Errorf("pascalToSnake(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

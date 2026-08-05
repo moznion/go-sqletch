@@ -5,6 +5,7 @@ import (
 	"go/format"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
@@ -59,6 +60,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	}
 
 	typeNames := map[string]string{} // generated type name -> query
+	fileStems := map[string]string{} // generated file stem -> query
 	var querier []string
 
 	for _, in := range sorted {
@@ -68,7 +70,18 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		if len(ds) > 0 {
 			continue
 		}
-		files[pascalToSnake(in.Q.Name)+".sql.go"] = src
+		// Distinct query names can share a file stem (UserID / UserId);
+		// without this the later query would silently overwrite the
+		// earlier one's file.
+		stem := pascalToSnake(in.Q.Name)
+		if prev, ok := fileStems[stem]; ok {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision, in.Q.HeaderSpan,
+				"query %q and %q both generate %s.sql.go; rename one so the file names differ",
+				prev, in.Q.Name, stem))
+			continue
+		}
+		fileStems[stem] = in.Q.Name
+		files[stem+".sql.go"] = src
 		querier = append(querier, sig)
 	}
 
@@ -874,13 +887,25 @@ func paramSpanOf(q *template.QueryTemplate, name string) diagnostics.Span {
 	return q.HeaderSpan
 }
 
+// pascalToSnake maps a query name to its generated file stem. A run of
+// capitals is ONE word — FindUserByUserID -> find_user_by_user_id,
+// ParseHTTPRequest -> parse_http_request — so the initialisms GoName
+// produces (doc: naming.go) survive the round trip; an underscore
+// already present in the name is never doubled.
 func pascalToSnake(name string) string {
+	rs := []rune(name)
 	var b strings.Builder
-	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
+	for i, r := range rs {
+		if i > 0 && unicode.IsUpper(r) && rs[i-1] != '_' {
+			// A word starts here when the previous rune is not itself a
+			// capital (userID -> user_id), or when this capital is the
+			// last of a run and a lowercase follows (HTTPRequest ->
+			// http_request).
+			if !unicode.IsUpper(rs[i-1]) || (i+1 < len(rs) && unicode.IsLower(rs[i+1])) {
+				b.WriteRune('_')
+			}
 		}
-		b.WriteRune(r)
+		b.WriteRune(unicode.ToLower(r))
 	}
-	return strings.ToLower(b.String())
+	return b.String()
 }
