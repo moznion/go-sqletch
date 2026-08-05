@@ -404,3 +404,114 @@ func keysOf(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// Values the caller must not omit leave the params struct and become
+// arguments of the generated method. Go cannot make a struct field
+// mandatory — a keyed composite literal that leaves one out compiles
+// and yields the zero value — so a scoping value kept as a field turns
+// a forgotten scope into a silently unscoped read instead of an error.
+// As an argument, forgetting it does not compile.
+func TestGenerate_RequiredValuesAreArguments(t *testing.T) {
+	t.Run("policy-woven parameter", func(t *testing.T) {
+		q := scanOne(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id;
+`)
+		// Stand in for the weaver: the parameter carries the name of the
+		// policy that injected it.
+		q.Params["tenant_id"].Policy = "tenant_scope"
+
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+
+		src := string(files["count_logs.sql.gen.go"])
+		for _, want := range []string{
+			`func \(q \*Queries\) CountLogs\(ctx context\.Context, tenantID int64, arg CountLogsParams\)`,
+			`type CountLogsParams struct \{\n\}`,
+		} {
+			if !regexp.MustCompile(want).MatchString(src) {
+				t.Errorf("missing pattern %q\n----\n%s", want, src)
+			}
+		}
+		if regexp.MustCompile(`TenantID\s+int64`).MatchString(src) {
+			t.Errorf("policy parameter stayed a params field; omitting it would compile\n----\n%s", src)
+		}
+		// querier.go repeats the signature, so it must import what the
+		// signature names.
+		if !strings.Contains(string(files["querier.gen.go"]),
+			"CountLogs(ctx context.Context, tenantID int64, arg CountLogsParams)") {
+			t.Errorf("querier.go missing the argument\n----\n%s", files["querier.gen.go"])
+		}
+	})
+
+	t.Run("required filter-tree", func(t *testing.T) {
+		q := scanOne(t, `-- name: Pick :many
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree!(scope)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`)
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"scope_tenant_id": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+
+		src := string(files["pick.sql.gen.go"])
+		if !regexp.MustCompile(
+			`func \(q \*Queries\) Pick\(ctx context\.Context, scope \*runtime\.Tree, arg PickParams\)`).MatchString(src) {
+			t.Errorf("required tree is not an argument\n----\n%s", src)
+		}
+		if regexp.MustCompile(`Scope\s+\*runtime\.Tree`).MatchString(src) {
+			t.Errorf("required tree stayed a params field\n----\n%s", src)
+		}
+		// The nil check stays: an argument can still be given an
+		// explicit nil, which is a deliberate act rather than an
+		// oversight, and Unscoped() is the intended way to say it.
+		if !strings.Contains(src, "runtime.ErrFilterRequired") {
+			t.Errorf("lost the explicit-nil guard\n----\n%s", src)
+		}
+	})
+
+	// An optional tree is genuinely omittable (nil renders TRUE), so it
+	// stays a field: requiring it as an argument would be noise.
+	t.Run("optional filter-tree stays a field", func(t *testing.T) {
+		q := scanOne(t, `-- name: Loose :many
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree(scope)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`)
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"scope_tenant_id": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+		src := string(files["loose.sql.gen.go"])
+		if !regexp.MustCompile(`Scope\s+\*runtime\.Tree`).MatchString(src) {
+			t.Errorf("optional tree should stay a params field\n----\n%s", src)
+		}
+		if !regexp.MustCompile(
+			`func \(q \*Queries\) Loose\(ctx context\.Context, arg LooseParams\)`).MatchString(src) {
+			t.Errorf("optional tree should not become an argument\n----\n%s", src)
+		}
+	})
+}

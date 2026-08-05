@@ -209,6 +209,12 @@ type Param struct {
 	// true iff every bind appearance lies in fragments guarded by this
 	// parameter — a pointer field in the generated params struct.
 	Optional bool
+	// Policy names the policy that wove this parameter in; empty for a
+	// parameter the query author wrote. Codegen uses it to tell a value
+	// the caller asked for from one the tool injected on their behalf.
+	// The latter is a required argument of the generated method rather
+	// than a params-struct field, so omitting it cannot compile.
+	Policy string
 }
 
 type QueryTemplate struct {

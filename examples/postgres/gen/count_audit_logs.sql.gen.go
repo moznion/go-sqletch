@@ -9,7 +9,6 @@ import (
 )
 
 type CountAuditLogsParams struct {
-	TenantID int64
 }
 
 type CountAuditLogsRow struct {
@@ -22,11 +21,12 @@ var countAuditLogsFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: ";\n\n"},
 }
 
-func (q *Queries) CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (CountAuditLogsRow, error) {
+// tenantID is required (policy tenant_scope).
+func (q *Queries) CountAuditLogs(ctx context.Context, tenantID int64, arg CountAuditLogsParams) (CountAuditLogsRow, error) {
 	var zero CountAuditLogsRow
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("CountAuditLogs", countAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.TenantID})
+	args := runtime.BuildArgs(argIdx, []any{tenantID})
 	q.hook(key.String(), sqlText)
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i CountAuditLogsRow

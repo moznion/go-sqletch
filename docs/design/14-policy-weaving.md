@@ -299,6 +299,41 @@ parameter in the affected queries' `Params` structs, typed by the
 oracle (Tier 1) or the policy's `param.type` (Tier 2). (b) remains a
 possible later layer (§10 step 4), never a replacement.
 
+**Amended: (a) as an argument, not a params field.** (a) was chosen
+partly on the premise, recorded above, that "every call site changes".
+It does not. Go has no mandatory struct field: a keyed composite
+literal that omits the woven parameter compiles and yields the zero
+value, so existing call sites keep building after a policy is added
+and send `tenant_id = 0` / `''`. The woven predicate then matches
+nothing. The query does not fail — it returns an empty result, which
+at a call site like "look the user up by id" is indistinguishable from
+"no such row".
+
+Observed by adopting a `users` policy in a downstream service: `go
+build ./...` succeeded, every call site compiled unchanged, and
+authentication began failing for every user with a 401 that reads
+exactly like a wrong password. Only tests running against a real
+database caught it.
+
+So the enforcement this document builds — SQLETCH124 proving the
+conjunct is present in every reachable shape — was being handed to a
+Go boundary that dropped it. The fix keeps (a)'s substance (an
+ordinary, oracle-typed value; no ambient state, no context extraction)
+and changes only where it sits: the parameter is an argument of the
+generated method. Omitting it is then a compile error, which is what
+`12-policies.md` already claimed it was.
+
+The cost is that adding a policy breaks every call site of every query
+it touches. That is the intended shape of the change: a security
+control adoptable without revisiting callers is one whose absence
+nobody notices either.
+
+The same reasoning applies to `@filter-tree!`, whose `Scope` field had
+the identical hazard — omitted from a keyed literal it was nil, and
+only `ErrFilterRequired` at runtime stood between that and an unscoped
+read. It is now an argument too; the nil check remains for an explicit
+`nil`.
+
 ### D4 — Diagnostic span attribution
 
 A woven fragment can fail R1 (not a complete node), fail to type, or

@@ -222,7 +222,14 @@ func registerParams(woven *template.QueryTemplate, wps []WovenPolicy) {
 			continue
 		}
 		if _, ok := woven.Params[p.ParamName]; !ok {
-			woven.Params[p.ParamName] = &template.Param{Name: p.ParamName, GuardBit: -1}
+			// Policy records who injected this parameter. The query
+			// author never wrote it, so codegen makes it a required
+			// argument instead of a params-struct field: a caller that
+			// omits it fails to compile rather than sending the zero
+			// value and silently reading an unscoped row set.
+			woven.Params[p.ParamName] = &template.Param{
+				Name: p.ParamName, GuardBit: -1, Policy: p.Name,
+			}
 			woven.ParamOrder = append(woven.ParamOrder, p.ParamName)
 		}
 		if p.ParamType != "" {

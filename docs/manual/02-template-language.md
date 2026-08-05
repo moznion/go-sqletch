@@ -859,15 +859,20 @@ func ListOrdersStatusEq(status string) *runtime.Tree
 func ListOrdersCreatedIn(from, to time.Time) *runtime.Tree
 func ListOrdersUnscoped() *runtime.Tree   // renders TRUE — the explicit opt-out
 
-type ListOrdersParams struct {
-    Scope *runtime.Tree // required: nil is an error, use ListOrdersUnscoped() to opt out
-}
+// The tree is an argument, not a params field: Go has no mandatory
+// struct field, so a field could be omitted from a keyed literal and
+// arrive as nil. Omitting an argument does not compile.
+func (q *Queries) ListOrders(
+    ctx context.Context,
+    scope *runtime.Tree,          // @filter-tree!; ListOrdersUnscoped() opts out
+    arg ListOrdersParams,
+) ([]ListOrdersRow, error)
 ```
 
 ```go
 // A repository that does not hard-code its filtering:
 func (r *OrderRepo) List(ctx context.Context, scope *runtime.Tree) ([]gen.ListOrdersRow, error) {
-    return r.q.ListOrders(ctx, gen.ListOrdersParams{Scope: scope})
+    return r.q.ListOrders(ctx, scope, gen.ListOrdersParams{})
 }
 
 // Callers decide applicability and combination:

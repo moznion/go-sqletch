@@ -81,8 +81,7 @@ func main() {
 	// @filter-tree!: the filter crosses the call boundary as a typed
 	// value over the query's closed predicate vocabulary, never as SQL.
 	fmt.Println("filter tree (tenant AND active):")
-	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+	scoped, err := q.FilterUsers(ctx, gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")), gen.FilterUsersParams{
 		Limit: 10,
 	})
 	must(err)
@@ -91,8 +90,7 @@ func main() {
 	}
 
 	fmt.Println("filter tree (banned OR alice*):")
-	either, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+	either, err := q.FilterUsers(ctx, gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")), gen.FilterUsersParams{
 		Limit: 10,
 	})
 	must(err)
@@ -103,14 +101,13 @@ func main() {
 	// The `!` makes the filter required: a forgotten scope fails before
 	// any SQL is sent, and unfiltered access is one greppable call.
 	fmt.Println("filter tree (required mode):")
-	_, err = q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 10})
+	_, err = q.FilterUsers(ctx, nil, gen.FilterUsersParams{Limit: 10})
 	if !errors.Is(err, runtime.ErrFilterRequired) {
 		log.Fatalf("expected ErrFilterRequired, got %v", err)
 	}
 	fmt.Printf("  nil scope: %v\n", err)
-	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.FilterUsersUnscoped(), // the explicit opt-out — renders TRUE
-		Limit: 10,
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersUnscoped(), gen.FilterUsersParams{
+		Limit: 10, // the explicit opt-out — renders TRUE
 	})
 	must(err)
 	fmt.Printf("  Unscoped(): %d users\n", len(unscoped))

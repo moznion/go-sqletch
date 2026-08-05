@@ -65,10 +65,15 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	typeNames := map[string]string{} // generated type name -> query
 	fileStems := map[string]string{} // generated file stem -> query
 	var querier []string
+	sigImports := map[string]bool{}
 
 	for _, in := range sorted {
-		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style}
+		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
+			sigImports: map[string]bool{}}
 		src, sig, ds := g.emit(typeNames)
+		for imp := range g.sigImports {
+			sigImports[imp] = true
+		}
 		diags = append(diags, ds...)
 		if len(ds) > 0 {
 			continue
@@ -94,7 +99,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		} else {
 			files["db.gen.go"] = []byte(dbFile(opts.Package))
 		}
-		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier))
+		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier, sigImports))
 	}
 
 	for name, src := range files {
@@ -110,13 +115,17 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 }
 
 type queryGen struct {
-	in      QueryInput
-	tm      dialect.TypeMap
-	pkg     string
-	caps    runtime.TreeCaps
-	style   runtime.Style
-	imports map[string]bool
-	b       strings.Builder
+	// sigImports are the imports the query's *signature* needs, as
+	// opposed to its body: required arguments put types into the
+	// signature, and querier.go repeats those signatures.
+	sigImports map[string]bool
+	in         QueryInput
+	tm         dialect.TypeMap
+	pkg        string
+	caps       runtime.TreeCaps
+	style      runtime.Style
+	imports    map[string]bool
+	b          strings.Builder
 }
 
 type chooseMeta struct {
@@ -181,6 +190,9 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 	paramsName := q.Name + "Params"
 	claimType(paramsName)
 	var paramFields []field
+	// Values the caller must not be able to omit. They leave the params
+	// struct and become arguments; see requiredArg.
+	var requiredArgs []requiredArg
 	fieldNames := map[string]string{}
 	claimField := func(goName, src string) bool {
 		if prev, ok := fieldNames[goName]; ok {
@@ -199,7 +211,7 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		if filterOnlyParam(p) {
 			continue // predicate constructor argument, not a field
 		}
-		var typ, comment string
+		var typ, comment, typImport string
 		tr, ok := g.in.ParamTypes[name]
 		switch {
 		case ok:
@@ -210,6 +222,7 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 				continue
 			}
 			g.addImport(goType.Import)
+			typImport = goType.Import
 			typ = goType.Name
 			if g.style == runtime.StyleQuestion && inParams[name] {
 				// The annotation gives the ELEMENT type on expanding
@@ -232,6 +245,25 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			}
 			typ = litType
 			comment = " // @when control parameter"
+		}
+		if p.Policy != "" {
+			// A policy wove this parameter in; the query author never
+			// wrote it. Making it a required argument is what keeps the
+			// scoping guarantee from evaporating at the Go boundary: a
+			// params-struct field omitted from a keyed literal compiles
+			// and sends the zero value, so the woven predicate silently
+			// matches nothing instead of scoping the read.
+			if typImport != "" {
+				g.sigImports[typImport] = true
+			}
+			requiredArgs = append(requiredArgs, requiredArg{
+				name:  argIdent(name),
+				typ:   typ,
+				expr:  argIdent(name),
+				doc:   fmt.Sprintf("policy %s", p.Policy),
+				param: name,
+			})
+			continue
 		}
 		goName := GoName(name)
 		if claimField(goName, name) {
@@ -259,13 +291,23 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 		}
 	}
 	if filter != nil {
-		goName := GoName(filter.Param)
-		if claimField(goName, "@filter-tree("+filter.Param+")") {
-			comment := " // nil renders TRUE"
-			if filter.Required {
-				comment = " // required: nil is an error, use " + q.Name + "Unscoped() to opt out"
+		if filter.Required {
+			// `!` says the caller must decide: a scope or an explicit
+			// Unscoped(). As an argument, "decide" is not something the
+			// compiler lets them skip.
+			g.sigImports[runtimeImport] = true
+			requiredArgs = append(requiredArgs, requiredArg{
+				name:  argIdent(filter.Param),
+				typ:   "*runtime.Tree",
+				expr:  argIdent(filter.Param),
+				doc:   "@filter-tree!; " + q.Name + "Unscoped() opts out",
+				param: filter.Param,
+			})
+		} else {
+			goName := GoName(filter.Param)
+			if claimField(goName, "@filter-tree("+filter.Param+")") {
+				paramFields = append(paramFields, field{goName, "*runtime.Tree", " // nil renders TRUE"})
 			}
-			paramFields = append(paramFields, field{goName, "*runtime.Tree", comment})
 		}
 	}
 
@@ -361,9 +403,41 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			return nil, "", diags
 		}
 	}
-	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, ins, rowFields)
+	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, ins, rowFields, requiredArgs)
 
 	return []byte(g.b.String()), sig, diags
+}
+
+// requiredArg is a value the caller cannot be allowed to omit: a
+// policy-woven parameter or the tree of a `@filter-tree!`. Both become
+// arguments of the generated method rather than params-struct fields,
+// because Go has no way to make a struct field mandatory — a keyed
+// composite literal that leaves one out compiles and yields the zero
+// value. For a scoping value that is the difference between "the query
+// refused to run" and "the query ran unscoped", so the omission has to
+// be a compile error instead.
+//
+// Note the residual: an argument can still be given an explicit zero
+// (`nil`, `""`). Passing one is a deliberate act rather than an
+// oversight, and the tree keeps its ErrFilterRequired check for it.
+type requiredArg struct {
+	name  string // Go identifier in the signature
+	typ   string // Go type
+	expr  string // how the body refers to it
+	doc   string // why it is required, for the signature comment
+	param string // template parameter name
+}
+
+// argIdent names a required argument. Reserved identifiers get a
+// suffix so a parameter called `ctx` or `arg` cannot shadow the
+// generated locals.
+func argIdent(param string) string {
+	name := lowerCamel(GoName(param))
+	switch name {
+	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds", "sqlText", "argIdx", "items", "rows", "i":
+		return name + "Arg"
+	}
+	return name
 }
 
 // filterOnlyParam reports a parameter bound exclusively inside
@@ -561,7 +635,7 @@ func spanLits(spans []runtime.Span, idx []int16) string {
 
 func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	chooses []chooseMeta, orders []orderMeta, filter *template.FilterTree,
-	ins []*template.InExpr, rowFields []field) string {
+	ins []*template.InExpr, rowFields []field, requiredArgs []requiredArg) string {
 
 	q := g.in.Q
 	fragsVar := lowerCamel(q.Name) + "Frags"
@@ -577,7 +651,19 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	default:
 		ret, zero = "error", ""
 	}
-	sig := fmt.Sprintf("%s(ctx context.Context, arg %s) %s", q.Name, paramsName, ret)
+	// Required values come before the params struct, in template order
+	// with the tree last, so the signature reads "what you must decide,
+	// then what you may vary".
+	var params []string
+	params = append(params, "ctx context.Context")
+	for _, ra := range requiredArgs {
+		params = append(params, fmt.Sprintf("%s %s", ra.name, ra.typ))
+	}
+	params = append(params, "arg "+paramsName)
+	sig := fmt.Sprintf("%s(%s) %s", q.Name, strings.Join(params, ", "), ret)
+	for _, ra := range requiredArgs {
+		fmt.Fprintf(w, "// %s is required (%s).\n", ra.name, ra.doc)
+	}
 	fmt.Fprintf(w, "func (q *Queries) %s {\n", sig)
 	if q.Annotation == template.AnnotationOne {
 		fmt.Fprintf(w, "\tvar zero %s\n", rowName)
@@ -637,6 +723,12 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tkey.Arities = []int32{%s}\n", strings.Join(arities, ", "))
 	}
 
+	// A required value is an argument, not a field, so the body must
+	// name it directly.
+	argExpr := map[string]string{}
+	for _, ra := range requiredArgs {
+		argExpr[ra.param] = ra.expr
+	}
 	var vals []string
 	for _, name := range q.ParamOrder {
 		switch {
@@ -644,6 +736,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			vals = append(vals, "nil /* tree control */")
 		case filterOnlyParam(q.Params[name]):
 			vals = append(vals, "nil /* predicate arg */")
+		case argExpr[name] != "":
+			vals = append(vals, argExpr[name])
 		default:
 			vals = append(vals, "arg."+GoName(name))
 		}
@@ -655,6 +749,9 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	switch {
 	case filter != nil:
 		treeField := "arg." + GoName(filter.Param)
+		if e := argExpr[filter.Param]; e != "" {
+			treeField = e
+		}
 		if filter.Required {
 			fmt.Fprintf(w, "\tif %s == nil {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
 		}
@@ -845,9 +942,20 @@ var (
 `, pkg)
 }
 
-func querierFile(pkg string, sigs []string) string {
+func querierFile(pkg string, sigs []string, extraImports map[string]bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "// Code generated by sqletch. DO NOT EDIT.\n\npackage %s\n\nimport (\n\t\"context\"\n)\n\n", pkg)
+	imports := []string{"context"}
+	for imp := range extraImports {
+		if imp != "" && imp != "context" {
+			imports = append(imports, imp)
+		}
+	}
+	sort.Strings(imports)
+	fmt.Fprintf(&b, "// Code generated by sqletch. DO NOT EDIT.\n\npackage %s\n\nimport (\n", pkg)
+	for _, imp := range imports {
+		fmt.Fprintf(&b, "\t%q\n", imp)
+	}
+	fmt.Fprint(&b, ")\n\n")
 	fmt.Fprint(&b, "// Querier lets user code mock the generated queries.\ntype Querier interface {\n")
 	for _, s := range sigs {
 		fmt.Fprintf(&b, "\t%s\n", s)

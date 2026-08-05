@@ -1050,7 +1050,7 @@ ORDER BY o.id DESC;
 ``` go
 // repository: receives the filter, knows nothing about its content
 func (r *OrderRepo) List(ctx context.Context, scope gen.ListOrdersScope) ([]Order, error) {
-    return r.q.ListOrders(ctx, gen.ListOrdersParams{Scope: scope})
+    return r.q.ListOrders(ctx, scope, gen.ListOrdersParams{})
 }
 
 // use cases decide applicability and combination:
