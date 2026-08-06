@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -214,6 +215,106 @@ func TestComposedCache_HitAndEvict(t *testing.T) {
 	s1c, _ := c.Get("Q", frags, k1) // recomputed after eviction
 	if s1c != s1 {
 		t.Fatal("recomputed SQL must equal the original")
+	}
+}
+
+// TestComposedCache_BoundedUnderChurn pins the capacity bound that
+// survives the move from exact LRU to second-chance eviction: recency
+// is approximate, the bound is not.
+func TestComposedCache_BoundedUnderChurn(t *testing.T) {
+	frags := testFrags()
+	const capacity = 4
+	c := NewComposedCache(capacity)
+
+	for g := uint64(0); g < 64; g++ {
+		key := ShapeKey{Guards: g, Choices: []uint8{0}}
+		got, _ := c.Get("Q", frags, key)
+		want, _ := Compose(frags, key)
+		if got != want {
+			t.Fatalf("guards=%d: cached SQL diverged from a fresh composition:\ngot  %q\nwant %q", g, got, want)
+		}
+		c.mu.Lock()
+		n, listLen := len(c.m), c.order.Len()
+		c.mu.Unlock()
+		if n > capacity {
+			t.Fatalf("guards=%d: cache holds %d entries, capacity %d", g, n, capacity)
+		}
+		if n != listLen {
+			t.Fatalf("guards=%d: map has %d entries but recency list has %d", g, n, listLen)
+		}
+	}
+}
+
+// TestComposedCache_Concurrent exercises the lock-free read path: hits
+// are served from an atomically published snapshot while other
+// goroutines insert and evict. Run under -race, this is what guards the
+// unsynchronized reads.
+func TestComposedCache_Concurrent(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+
+	// Precompute expectations serially so the goroutines compare against
+	// a fixed reference rather than against each other.
+	const shapes = 32
+	want := make([]string, shapes)
+	for g := range shapes {
+		want[g], _ = Compose(frags, ShapeKey{Guards: uint64(g), Choices: []uint8{0}})
+	}
+
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 500 {
+				// Workers walk the shape space out of phase, so hits,
+				// misses and evictions interleave.
+				g := (i + w*7) % shapes
+				sql, argIdx := c.Get("Q", frags, ShapeKey{Guards: uint64(g), Choices: []uint8{0}})
+				if sql != want[g] {
+					t.Errorf("guards=%d: got %q, want %q", g, sql, want[g])
+					return
+				}
+				if argIdx == nil {
+					t.Errorf("guards=%d: nil argIdx", g)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	c.mu.Lock()
+	n := len(c.m)
+	c.mu.Unlock()
+	if n > 8 {
+		t.Fatalf("cache holds %d entries after concurrent churn, capacity 8", n)
+	}
+}
+
+// TestComposedCache_FullKeyOnHit pins that entries are matched on the
+// full key, never on its string encoding alone (the encoding is an
+// index). A forged entry under a colliding map key must be rejected and
+// recomputed rather than served.
+func TestComposedCache_FullKeyOnHit(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+
+	key := ShapeKey{Guards: 1, Choices: []uint8{0}}
+	want, _ := Compose(frags, key)
+
+	// Publish an entry whose stored key disagrees with the one callers
+	// will ask for, under the map key the caller's request derives.
+	mapKey := "Q|" + key.String()
+	bogus := newCacheEntry(mapKey, ShapeKey{Guards: 999, Choices: []uint8{0}}, "SELECT 'wrong'", nil)
+	c.mu.Lock()
+	bogus.el = c.order.PushFront(bogus)
+	c.m[mapKey] = bogus
+	c.publish()
+	c.mu.Unlock()
+
+	if got, _ := c.Get("Q", frags, key); got != want {
+		t.Fatalf("full-key mismatch served from cache: got %q, want %q", got, want)
 	}
 }
 

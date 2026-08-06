@@ -899,7 +899,10 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
 		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
 	}
-	fmt.Fprint(w, "\tq.hook(key.String(), sqlText)\n")
+	// The key is passed unencoded: hook only spells it out when a hook
+	// is actually installed, so the common no-observability case does
+	// not pay for the canonical encoding on every call.
+	fmt.Fprint(w, "\tq.hook(key, sqlText)\n")
 
 	scanList := func() string {
 		var refs []string
@@ -987,9 +990,9 @@ func (q *Queries) WithTx(tx pgx.Tx) *Queries {
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
-func (q *Queries) hook(shapeKey, sql string) {
+func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
-		q.onQuery(shapeKey, sql)
+		q.onQuery(key.String(), sql)
 	}
 }
 
@@ -1043,9 +1046,9 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
-func (q *Queries) hook(shapeKey, sql string) {
+func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
-		q.onQuery(shapeKey, sql)
+		q.onQuery(key.String(), sql)
 	}
 }
 

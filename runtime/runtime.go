@@ -36,8 +36,9 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type Kind uint8
@@ -102,65 +103,78 @@ type ShapeKey struct {
 	Arities []int32
 }
 
+// keyBufSize is the stack scratch a canonical key encoding is built in
+// before it is copied into a string. Keys longer than this simply spill
+// to the heap; the constant only decides where the common case builds.
+const keyBufSize = 96
+
 // String is the canonical encoding (byte-identical to the compiler's
 // shape.Key encoding).
 func (k ShapeKey) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "g=%x", k.Guards)
+	var buf [keyBufSize]byte
+	return string(k.appendTo(buf[:0]))
+}
+
+// appendTo writes the canonical encoding to dst. It is the allocation-
+// free core of String: the composed cache builds its map key straight
+// into a stack buffer with it, so a cache hit never allocates a key.
+func (k ShapeKey) appendTo(dst []byte) []byte {
+	dst = append(dst, 'g', '=')
+	dst = strconv.AppendUint(dst, k.Guards, 16)
 	if len(k.Choices) > 0 {
-		b.WriteString(";c=")
+		dst = append(dst, ';', 'c', '=')
 		for i, c := range k.Choices {
 			if i > 0 {
-				b.WriteByte(',')
+				dst = append(dst, ',')
 			}
-			b.WriteString(strconv.Itoa(int(c)))
+			dst = strconv.AppendUint(dst, uint64(c), 10)
 		}
 	}
 	if len(k.Orders) > 0 {
-		b.WriteString(";o=")
+		dst = append(dst, ';', 'o', '=')
 		for i, seq := range k.Orders {
 			if i > 0 {
-				b.WriteByte('|')
+				dst = append(dst, '|')
 			}
 			switch {
 			case seq == nil:
-				b.WriteByte('*')
+				dst = append(dst, '*')
 			case len(seq) == 0:
-				b.WriteByte('-')
+				dst = append(dst, '-')
 			default:
 				for j, e := range seq {
 					if j > 0 {
-						b.WriteByte(',')
+						dst = append(dst, ',')
 					}
-					b.WriteString(strconv.Itoa(int(e >> 1)))
+					dst = strconv.AppendUint(dst, uint64(e>>1), 10)
 					if e&1 == 1 {
-						b.WriteByte('d')
+						dst = append(dst, 'd')
 					} else {
-						b.WriteByte('a')
+						dst = append(dst, 'a')
 					}
 				}
 			}
 		}
 	}
 	if len(k.Trees) > 0 {
-		b.WriteString(";t=")
+		dst = append(dst, ';', 't', '=')
 		for i, enc := range k.Trees {
 			if i > 0 {
-				b.WriteByte('|')
+				dst = append(dst, '|')
 			}
-			b.WriteString(enc)
+			dst = append(dst, enc...)
 		}
 	}
 	if len(k.Arities) > 0 {
-		b.WriteString(";n=")
+		dst = append(dst, ';', 'n', '=')
 		for i, n := range k.Arities {
 			if i > 0 {
-				b.WriteByte(',')
+				dst = append(dst, ',')
 			}
-			b.WriteString(strconv.Itoa(int(n)))
+			dst = strconv.AppendInt(dst, int64(n), 10)
 		}
 	}
-	return b.String()
+	return dst
 }
 
 // Style is the dialect placeholder emission mode of a generated query,
@@ -200,11 +214,43 @@ func ResolveArgs(binds []Bind, vals, treeArgs []any) []any {
 		}
 		v := src[b.Idx]
 		if b.Elem > 0 {
-			v = reflect.ValueOf(v).Index(int(b.Elem) - 1).Interface()
+			v = sliceElem(v, int(b.Elem)-1)
 		}
 		out[i] = v
 	}
 	return out
+}
+
+// sliceElem selects element i of a slice held in an interface. The
+// type switch covers the element types @in parameters actually take, so
+// the reflect path — which costs far more than the indexing it performs
+// — is reached only by exotic slices.
+func sliceElem(v any, i int) any {
+	switch s := v.(type) {
+	case []string:
+		return s[i]
+	case []int64:
+		return s[i]
+	case []int32:
+		return s[i]
+	case []int16:
+		return s[i]
+	case []int:
+		return s[i]
+	case []uint64:
+		return s[i]
+	case []float64:
+		return s[i]
+	case []float32:
+		return s[i]
+	case []bool:
+		return s[i]
+	case []time.Time:
+		return s[i]
+	case []any:
+		return s[i]
+	}
+	return reflect.ValueOf(v).Index(i).Interface()
 }
 
 // Compose walks the fragment table in source order and emits the SQL
@@ -231,10 +277,88 @@ func ComposeStyle(style Style, frags []Frag, key ShapeKey) (string, []int16) {
 	return sql, argIdx
 }
 
-type bindKey struct {
-	fromTree bool
-	idx      int16
-	elem     int16
+// composer holds the emission state of one composition. It replaces a
+// nest of closures over local variables: the closures forced every
+// composition to heap-allocate their captured state, while a struct
+// with methods keeps it in one frame.
+type composer struct {
+	style Style
+	b     []byte
+	binds []Bind
+	// treeArgBase advances per leaf: each leaf instance owns its own
+	// slice of the flattened TreeArgs space (repeated predicates bind
+	// independently).
+	treeArgBase int16
+}
+
+// place emits one placeholder for a bind source. Under StyleDollar a
+// source reused across fragments must reuse its number, which is a
+// lookup over the binds already placed — a linear scan rather than a
+// map, because bind counts are bounded by the template's parameter
+// count and stay small enough that the map's hashing costs more than
+// the scan (and the map itself allocated on every composition).
+func (co *composer) place(bd Bind) {
+	if co.style == StyleQuestion {
+		// One '?' per occurrence: repeated references repeat the bind,
+		// so there is nothing to look up.
+		co.binds = append(co.binds, bd)
+		co.b = append(co.b, '?')
+		return
+	}
+	n := 0
+	for i := range co.binds {
+		if co.binds[i] == bd {
+			n = i + 1
+			break
+		}
+	}
+	if n == 0 {
+		co.binds = append(co.binds, bd)
+		n = len(co.binds)
+	}
+	co.b = append(co.b, '$')
+	co.b = strconv.AppendInt(co.b, int64(n), 10)
+}
+
+func (co *composer) emitFrom(text string, spans []Span, idx []int16, fromTree bool, base int16) {
+	last := int32(0)
+	for i, sp := range spans {
+		co.b = append(co.b, text[last:sp.Start]...)
+		co.place(Bind{FromTree: fromTree, Idx: base + idx[i]})
+		last = sp.End
+	}
+	co.b = append(co.b, text[last:]...)
+}
+
+func (co *composer) emit(text string, spans []Span, idx []int16) {
+	co.emitFrom(text, spans, idx, false, 0)
+}
+
+// emitTree renders a filter tree in preorder.
+func (co *composer) emitTree(n *node, preds []Case) {
+	switch {
+	case n == nil || n.op == opTrue:
+		co.b = append(co.b, "TRUE"...)
+	case n.op == opLeaf:
+		c := preds[n.pred]
+		co.b = append(co.b, '(')
+		co.emitFrom(c.Text, c.ParamSpans, c.ParamIdx, true, co.treeArgBase)
+		co.b = append(co.b, ')')
+		co.treeArgBase += int16(len(n.args))
+	default:
+		sep := " AND "
+		if n.op == opOr {
+			sep = " OR "
+		}
+		co.b = append(co.b, '(')
+		for i, k := range n.kids {
+			if i > 0 {
+				co.b = append(co.b, sep...)
+			}
+			co.emitTree(k, preds)
+		}
+		co.b = append(co.b, ')')
+	}
 }
 
 // ComposeTree composes a shape that may include one @filter-tree
@@ -244,106 +368,68 @@ func ComposeTree(frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, 
 	return ComposeTreeStyle(StyleDollar, frags, key, tree, caps)
 }
 
+// composeBufSize is the initial capacity of a pooled render scratch,
+// comfortably above a typical composed statement.
+const composeBufSize = 512
+
+// composeBufs recycles render scratch across compositions. A local
+// buffer cannot serve: it shares a frame with the bind plan, which is
+// returned and therefore heap-allocated, so escape analysis drags the
+// scratch to the heap with it. The composed SQL is copied out at exact
+// length, so a recycled buffer is never retained by a cache entry.
+var composeBufs = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, composeBufSize)
+		return &b
+	},
+}
+
 // ComposeTreeStyle is ComposeTree with an explicit placeholder style.
 func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
-	var b strings.Builder
-	assigned := map[bindKey]int{}
-	var binds []Bind
-
-	place := func(k bindKey) {
-		if style == StyleQuestion {
-			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx, Elem: k.elem})
-			b.WriteByte('?')
-			return
-		}
-		n, ok := assigned[k]
-		if !ok {
-			n = len(binds) + 1
-			assigned[k] = n
-			binds = append(binds, Bind{FromTree: k.fromTree, Idx: k.idx, Elem: k.elem})
-		}
-		b.WriteByte('$')
-		b.WriteString(strconv.Itoa(n))
-	}
-	emitFrom := func(text string, spans []Span, idx []int16, fromTree bool, base int16) {
-		last := int32(0)
-		for i, sp := range spans {
-			b.WriteString(text[last:sp.Start])
-			place(bindKey{fromTree: fromTree, idx: base + idx[i]})
-			last = sp.End
-		}
-		b.WriteString(text[last:])
-	}
-	emit := func(text string, spans []Span, idx []int16) {
-		emitFrom(text, spans, idx, false, 0)
-	}
-
-	// Tree emission: preorder; each leaf instance gets its own slice of
-	// the flattened TreeArgs space (repeated predicates bind
-	// independently).
-	treeArgBase := int16(0)
-	var emitTree func(n *node, preds []Case)
-	emitTree = func(n *node, preds []Case) {
-		switch {
-		case n == nil || n.op == opTrue:
-			b.WriteString("TRUE")
-		case n.op == opLeaf:
-			c := preds[n.pred]
-			b.WriteByte('(')
-			emitFrom(c.Text, c.ParamSpans, c.ParamIdx, true, treeArgBase)
-			b.WriteByte(')')
-			treeArgBase += int16(len(n.args))
-		default:
-			sep := " AND "
-			if n.op == opOr {
-				sep = " OR "
-			}
-			b.WriteByte('(')
-			for i, k := range n.kids {
-				if i > 0 {
-					b.WriteString(sep)
-				}
-				emitTree(k, preds)
-			}
-			b.WriteByte(')')
-		}
+	// Released explicitly at both exits rather than by defer: a deferred
+	// closure would capture the composer and force it onto the heap,
+	// which is the allocation this pool exists to remove.
+	bp := composeBufs.Get().(*[]byte)
+	co := composer{style: style, b: (*bp)[:0]}
+	if n := countBinds(frags); n > 0 {
+		co.binds = make([]Bind, 0, n)
 	}
 
 	chooseSeen, orderSeen, inSeen := 0, 0, 0
 	for _, f := range frags {
 		switch f.Kind {
 		case Skel:
-			emit(f.Text, f.ParamSpans, f.ParamIdx)
+			co.emit(f.Text, f.ParamSpans, f.ParamIdx)
 		case OrderBy:
 			var seq []uint8 // nil = maximal (all keys)
 			if key.Orders != nil && orderSeen < len(key.Orders) {
 				seq = key.Orders[orderSeen]
 			}
 			orderSeen++
-			b.WriteByte('\n')
+			co.b = append(co.b, '\n')
 			switch {
 			case seq == nil:
-				b.WriteString("ORDER BY ")
+				co.b = append(co.b, "ORDER BY "...)
 				for i, c := range f.Cases {
 					if i > 0 {
-						b.WriteString(", ")
+						co.b = append(co.b, ", "...)
 					}
-					emit(c.Text, c.ParamSpans, c.ParamIdx)
+					co.emit(c.Text, c.ParamSpans, c.ParamIdx)
 				}
 			case len(seq) == 0:
 				if f.Default != nil && f.Default.Text != "" {
-					emit(f.Default.Text, f.Default.ParamSpans, f.Default.ParamIdx)
+					co.emit(f.Default.Text, f.Default.ParamSpans, f.Default.ParamIdx)
 				}
 			default:
-				b.WriteString("ORDER BY ")
+				co.b = append(co.b, "ORDER BY "...)
 				for i, e := range seq {
 					if i > 0 {
-						b.WriteString(", ")
+						co.b = append(co.b, ", "...)
 					}
 					c := f.Cases[e>>1]
-					emit(c.Text, c.ParamSpans, c.ParamIdx)
+					co.emit(c.Text, c.ParamSpans, c.ParamIdx)
 					if e&1 == 1 {
-						b.WriteString(" DESC")
+						co.b = append(co.b, " DESC"...)
 					}
 				}
 			}
@@ -351,16 +437,16 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps T
 			if key.Guards&f.GuardMask != f.GuardMask {
 				continue
 			}
-			b.WriteByte('\n')
+			co.b = append(co.b, '\n')
 			switch f.Sep {
 			case SepAnd:
-				b.WriteString("AND (")
+				co.b = append(co.b, "AND ("...)
 			case SepComma:
-				b.WriteString(", ")
+				co.b = append(co.b, ", "...)
 			}
-			emit(f.Text, f.ParamSpans, f.ParamIdx)
+			co.emit(f.Text, f.ParamSpans, f.ParamIdx)
 			if f.Sep == SepAnd {
-				b.WriteByte(')')
+				co.b = append(co.b, ')')
 			}
 		case Choose:
 			ord := 0
@@ -368,15 +454,15 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps T
 				ord = int(key.Choices[chooseSeen])
 			}
 			chooseSeen++
-			b.WriteByte('\n')
+			co.b = append(co.b, '\n')
 			if ord >= 0 && ord < len(f.Cases) {
 				c := f.Cases[ord]
-				emit(c.Text, c.ParamSpans, c.ParamIdx)
+				co.emit(c.Text, c.ParamSpans, c.ParamIdx)
 			}
 		case InAny:
-			b.WriteString("= ANY(")
-			place(bindKey{idx: f.ParamIdx[0]})
-			b.WriteByte(')')
+			co.b = append(co.b, "= ANY("...)
+			co.place(Bind{Idx: f.ParamIdx[0]})
+			co.b = append(co.b, ')')
 		case InList:
 			n := int32(1)
 			if inSeen < len(key.Arities) {
@@ -390,32 +476,57 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps T
 				// fallback covers fragment tables generated before it
 				// existed (MySQL form).
 				if f.Text != "" {
-					b.WriteString(f.Text)
+					co.b = append(co.b, f.Text...)
 				} else {
-					b.WriteString("IN (SELECT NULL FROM DUAL WHERE FALSE)")
+					co.b = append(co.b, "IN (SELECT NULL FROM DUAL WHERE FALSE)"...)
 				}
 				continue
 			}
-			b.WriteString("IN (")
+			co.b = append(co.b, "IN ("...)
 			for e := int32(1); e <= n; e++ {
 				if e > 1 {
-					b.WriteString(", ")
+					co.b = append(co.b, ", "...)
 				}
-				place(bindKey{idx: f.ParamIdx[0], elem: int16(e)})
+				co.place(Bind{Idx: f.ParamIdx[0], Elem: int16(e)})
 			}
-			b.WriteByte(')')
+			co.b = append(co.b, ')')
 		case FilterTree:
 			if tree.IsZero() {
-				b.WriteString("TRUE")
+				co.b = append(co.b, "TRUE"...)
 				continue
 			}
 			if err := tree.validate(len(f.Cases), caps); err != nil {
+				*bp = co.b[:0]
+				composeBufs.Put(bp)
 				return "", nil, err
 			}
-			emitTree(tree.n, f.Cases)
+			co.emitTree(tree.n, f.Cases)
 		}
 	}
-	return b.String(), binds, nil
+	sql := string(co.b)
+	*bp = co.b[:0] // keep any growth for the next composition
+	composeBufs.Put(bp)
+	return sql, co.binds, nil
+}
+
+// countBinds is an upper bound on the binds a composition can place,
+// used to size the bind slice in one allocation. Over-counting (guards
+// that turn out inactive, @choose cases not selected) only wastes a
+// little capacity on the miss path; under-counting would just fall back
+// to append's growth, so the estimate need not be tight.
+func countBinds(frags []Frag) int {
+	n := 0
+	for i := range frags {
+		f := &frags[i]
+		n += len(f.ParamIdx)
+		for j := range f.Cases {
+			n += len(f.Cases[j].ParamIdx)
+		}
+		if f.Default != nil {
+			n += len(f.Default.ParamIdx)
+		}
+	}
+	return n
 }
 
 // ErrChooseRequired is returned before any SQL is sent when a required
@@ -500,13 +611,39 @@ func Lookup(shapes map[string]Expanded, key ShapeKey) (string, []int16, error) {
 	return e.SQL, e.ArgIdx, nil
 }
 
-// ComposedCache memoizes composed SQL per (query, shape), LRU-bounded.
-// Hits compare the full key, never just its string form.
+// ComposedCache memoizes composed SQL per (query, shape), bounded by a
+// capacity with approximate-LRU eviction. Hits compare the full key,
+// never just its string form.
+//
+// Reads take no lock. Composition is deterministic and entries are
+// immutable once published, so hits are served from an atomically
+// published snapshot of the entry map; only misses — bounded in a
+// healthy workload by the number of shapes an application uses, which
+// is typically tiny — take the mutex.
+//
+// Eviction is second-chance (CLOCK) rather than exact LRU: a lock-free
+// hit records recency by setting a bit on its own entry instead of
+// reordering shared state, and eviction skips once over entries whose
+// bit is set. Recency is therefore approximate, which bounds memory
+// exactly as strict LRU would while letting hits scale across cores.
 type ComposedCache struct {
+	// fast is an immutable snapshot of m, read without any lock. It may
+	// lag m: an entry evicted from m stays readable here until the next
+	// publish, which is harmless — composition is deterministic, so a
+	// stale entry is the same SQL — and bounds retained entries at
+	// twice the capacity.
+	fast atomic.Pointer[map[string]*cacheEntry]
+
 	mu    sync.Mutex
 	cap   int
-	m     map[string]*list.Element
-	order *list.List // front = most recent
+	m     map[string]*cacheEntry
+	order *list.List // front = most recent; the CLOCK hand walks from back
+	// sinceSnap counts inserts since the last publish, and evictedSince
+	// records whether any eviction happened in that window. Publishing
+	// copies the map, so a workload whose shape set exceeds the capacity
+	// amortizes it instead of paying O(cap) on every miss.
+	sinceSnap    int
+	evictedSince bool
 }
 
 type cacheEntry struct {
@@ -514,13 +651,37 @@ type cacheEntry struct {
 	key    ShapeKey
 	sql    string
 	binds  []Bind
+	// argIdx is the Bind.Idx projection the non-tree API returns. It is
+	// derived once at insertion rather than rebuilt on every hit;
+	// callers only read it (BuildArgs), exactly as they already only
+	// read the shared binds.
+	argIdx []int16
+
+	// ref is the second-chance bit: a hit sets it without any lock, and
+	// eviction clears it to grant one reprieve. Every other field is
+	// immutable once the entry is published.
+	ref atomic.Bool
+	// el is the entry's position in the recency list, guarded by the
+	// cache mutex.
+	el *list.Element
+}
+
+func newCacheEntry(mapKey string, key ShapeKey, sql string, binds []Bind) *cacheEntry {
+	e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, binds: binds}
+	if len(binds) > 0 {
+		e.argIdx = make([]int16, len(binds))
+		for i, bd := range binds {
+			e.argIdx[i] = bd.Idx
+		}
+	}
+	return e
 }
 
 func NewComposedCache(capacity int) *ComposedCache {
 	if capacity <= 0 {
 		capacity = 256
 	}
-	return &ComposedCache{cap: capacity, m: map[string]*list.Element{}, order: list.New()}
+	return &ComposedCache{cap: capacity, m: map[string]*cacheEntry{}, order: list.New()}
 }
 
 func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (string, []int16) {
@@ -529,15 +690,11 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 
 // GetStyle is Get with an explicit placeholder style.
 func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []int16) {
-	sql, binds, err := c.get(style, queryName, frags, key, Tree{}, DefaultTreeCaps)
+	e, err := c.entry(style, queryName, frags, key, Tree{}, DefaultTreeCaps)
 	if err != nil {
 		panic(err) // no failure modes without a tree
 	}
-	argIdx := make([]int16, len(binds))
-	for i, bd := range binds {
-		argIdx[i] = bd.Idx
-	}
-	return sql, argIdx
+	return e.sql, e.argIdx
 }
 
 // GetBindsStyle is GetStyle returning the full bind plan — needed
@@ -559,40 +716,142 @@ func (c *ComposedCache) GetTreeStyle(style Style, queryName string, frags []Frag
 }
 
 func (c *ComposedCache) get(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
-	mapKey := queryName + "|" + key.String()
-	c.mu.Lock()
-	if el, ok := c.m[mapKey]; ok {
-		e := el.Value.(*cacheEntry)
-		if keysEqual(e.key, key) {
-			c.order.MoveToFront(el)
-			sql, binds := e.sql, e.binds
-			c.mu.Unlock()
-			return sql, binds, nil
-		}
-		// Full-key mismatch (canonical-encoding collision would be a
-		// bug, but never trust the string form): drop and recompute.
-		c.order.Remove(el)
-		delete(c.m, mapKey)
-	}
-	c.mu.Unlock()
-
-	sql, binds, err := ComposeTreeStyle(style, frags, key, tree, caps)
+	e, err := c.entry(style, queryName, frags, key, tree, caps)
 	if err != nil {
 		return "", nil, err
 	}
+	return e.sql, e.binds, nil
+}
+
+func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (*cacheEntry, error) {
+	// The map key is built into stack scratch and indexed as
+	// string(buf), which the compiler lowers to a lookup that does not
+	// copy: a cache hit allocates nothing at all. Only a miss pays for
+	// the string, where it is retained by the entry anyway.
+	var buf [keyBufSize]byte
+	mk := append(buf[:0], queryName...)
+	mk = append(mk, '|')
+	mk = key.appendTo(mk)
+
+	// Lock-free hit.
+	if snap := c.fast.Load(); snap != nil {
+		if e, ok := (*snap)[string(mk)]; ok && keysEqual(e.key, key) {
+			touch(e)
+			return e, nil
+		}
+	}
+
+	c.mu.Lock()
+	if e, ok := c.m[string(mk)]; ok {
+		// Present but not (yet) in the published snapshot.
+		if keysEqual(e.key, key) {
+			c.order.MoveToFront(e.el)
+			c.mu.Unlock()
+			touch(e)
+			return e, nil
+		}
+		// Full-key mismatch (canonical-encoding collision would be a
+		// bug, but never trust the string form): drop and recompute.
+		c.remove(e)
+	}
+	c.mu.Unlock()
+
+	// Composed outside the lock: composition is pure, so a duplicate
+	// under a race costs work but never correctness, and holding the
+	// mutex across it would serialize every cold shape.
+	sql, binds, err := ComposeTreeStyle(style, frags, key, tree, caps)
+	if err != nil {
+		return nil, err
+	}
+	mapKey := string(mk)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.m[mapKey]; !ok {
-		e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, binds: binds}
-		c.m[mapKey] = c.order.PushFront(e)
-		for len(c.m) > c.cap {
-			oldest := c.order.Back()
-			c.order.Remove(oldest)
-			delete(c.m, oldest.Value.(*cacheEntry).mapKey)
+	if e, ok := c.m[mapKey]; ok {
+		// Raced with another composer of the same shape; keep the entry
+		// already published so all callers share one instance. A
+		// full-key mismatch still wins over the encoding, as above.
+		if keysEqual(e.key, key) {
+			c.order.MoveToFront(e.el)
+			touch(e)
+			return e, nil
 		}
+		c.remove(e)
 	}
-	return sql, binds, nil
+	e := newCacheEntry(mapKey, key, sql, binds)
+	e.el = c.order.PushFront(e)
+	c.m[mapKey] = e
+	for len(c.m) > c.cap {
+		c.evictOne()
+	}
+	c.publish()
+	return e, nil
+}
+
+// touch records that an entry was used. The load guard matters: the bit
+// stays set until eviction considers the entry, so an unconditional
+// store would have every core repeatedly claiming the same cache line
+// exclusively — the exact contention the lock-free read path exists to
+// avoid. Reading a line that is already shared costs nothing.
+func touch(e *cacheEntry) {
+	if !e.ref.Load() {
+		e.ref.Store(true)
+	}
+}
+
+// remove drops an entry from both the map and the recency list. Callers
+// hold c.mu.
+func (c *ComposedCache) remove(e *cacheEntry) {
+	c.order.Remove(e.el)
+	delete(c.m, e.mapKey)
+	c.evictedSince = true
+}
+
+// evictOne discards one entry by second chance: an entry touched since
+// it was last considered gets its bit cleared and moves to the front
+// instead of being dropped. Callers hold c.mu.
+func (c *ComposedCache) evictOne() {
+	// Bounded so that entries being touched concurrently cannot keep
+	// the hand spinning: after one full sweep the oldest goes
+	// regardless.
+	for i := len(c.m); i > 0; i-- {
+		el := c.order.Back()
+		if el == nil {
+			return
+		}
+		e := el.Value.(*cacheEntry)
+		if e.ref.Swap(false) {
+			c.order.MoveToFront(el)
+			continue
+		}
+		c.remove(e)
+		return
+	}
+	if el := c.order.Back(); el != nil {
+		c.remove(el.Value.(*cacheEntry))
+	}
+}
+
+// publish snapshots the entry map for the lock-free read path. Callers
+// hold c.mu.
+func (c *ComposedCache) publish() {
+	c.sinceSnap++
+	// While the cache is merely filling up, every insert publishes, so
+	// a steady-state workload ends up serving all of its shapes without
+	// a lock. Once the shape set outgrows the capacity, publishing is
+	// amortized: copying the map on every miss would otherwise make the
+	// degenerate case far more expensive than the composition it
+	// caches.
+	if c.evictedSince && c.sinceSnap < c.cap {
+		return
+	}
+	snap := make(map[string]*cacheEntry, len(c.m))
+	for k, v := range c.m {
+		snap[k] = v
+	}
+	c.fast.Store(&snap)
+	c.sinceSnap = 0
+	c.evictedSince = false
 }
 
 func cloneKey(k ShapeKey) ShapeKey {

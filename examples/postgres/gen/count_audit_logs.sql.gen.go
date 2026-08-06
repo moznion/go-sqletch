@@ -27,7 +27,7 @@ func (q *Queries) CountAuditLogs(ctx context.Context, tenantID TenantID, arg Cou
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("CountAuditLogs", countAuditLogsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{int64(tenantID)})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i CountAuditLogsRow
 	if err := row.Scan(&i.Total); err != nil {

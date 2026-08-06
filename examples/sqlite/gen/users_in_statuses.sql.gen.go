@@ -34,7 +34,7 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.TenantID, arg.Statuses, arg.Limit}, nil)
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

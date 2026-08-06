@@ -57,7 +57,7 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

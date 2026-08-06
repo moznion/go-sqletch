@@ -37,9 +37,9 @@ func (q *Queries) WithTx(tx pgx.Tx) *Queries {
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
-func (q *Queries) hook(shapeKey, sql string) {
+func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
-		q.onQuery(shapeKey, sql)
+		q.onQuery(key.String(), sql)
 	}
 }
 
