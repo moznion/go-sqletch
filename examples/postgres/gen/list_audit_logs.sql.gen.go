@@ -35,7 +35,7 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	}
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID, arg.Limit})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

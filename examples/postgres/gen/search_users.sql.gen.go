@@ -75,7 +75,7 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	key.Choices = []uint8{ord0}
 	sqlText, argIdx := q.cache.Get("SearchUsers", searchUsersFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.OrganizationID, arg.Status, arg.EmailPrefix, arg.CreatedAfter, arg.Limit})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

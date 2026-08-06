@@ -24,7 +24,7 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("AllAuditActions", allAuditActionsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

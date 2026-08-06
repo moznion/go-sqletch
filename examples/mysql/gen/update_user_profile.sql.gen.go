@@ -35,7 +35,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		return 0, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.NewEmail, arg.Nickname, arg.ID}, nil)
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	res, err := q.db.ExecContext(ctx, sqlText, args...)
 	if err != nil {
 		return 0, err

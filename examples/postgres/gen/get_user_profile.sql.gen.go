@@ -34,7 +34,7 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	}
 	sqlText, argIdx := q.cache.Get("GetUserProfile", getUserProfileFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i GetUserProfileRow
 	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.OrgID); err != nil {

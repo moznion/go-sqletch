@@ -54,7 +54,7 @@ func (q *Queries) ListUsersSorted(ctx context.Context, arg ListUsersSortedParams
 	key.Orders = [][]uint8{oseq0}
 	sqlText, argIdx := q.cache.Get("ListUsersSorted", listUsersSortedFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.Limit, arg.IncludeBanned})
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

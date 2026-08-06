@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -214,6 +215,194 @@ func TestComposedCache_HitAndEvict(t *testing.T) {
 	s1c, _ := c.Get("Q", frags, k1) // recomputed after eviction
 	if s1c != s1 {
 		t.Fatal("recomputed SQL must equal the original")
+	}
+}
+
+// TestComposedCache_BoundedUnderChurn pins the capacity bound that
+// survives the move from exact LRU to second-chance eviction: recency
+// is approximate, the bound is not.
+func TestComposedCache_BoundedUnderChurn(t *testing.T) {
+	frags := testFrags()
+	const capacity = 4
+	c := NewComposedCache(capacity)
+
+	for g := uint64(0); g < 64; g++ {
+		key := ShapeKey{Guards: g, Choices: []uint8{0}}
+		got, _ := c.Get("Q", frags, key)
+		want, _ := Compose(frags, key)
+		if got != want {
+			t.Fatalf("guards=%d: cached SQL diverged from a fresh composition:\ngot  %q\nwant %q", g, got, want)
+		}
+		c.mu.Lock()
+		n, listLen := len(c.m), c.order.Len()
+		c.mu.Unlock()
+		if n > capacity {
+			t.Fatalf("guards=%d: cache holds %d entries, capacity %d", g, n, capacity)
+		}
+		if n != listLen {
+			t.Fatalf("guards=%d: map has %d entries but recency list has %d", g, n, listLen)
+		}
+	}
+}
+
+// TestComposedCache_Concurrent exercises the lock-free read path: hits
+// are served from an atomically published snapshot while other
+// goroutines insert and evict. Run under -race, this is what guards the
+// unsynchronized reads.
+func TestComposedCache_Concurrent(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+
+	// Precompute expectations serially so the goroutines compare against
+	// a fixed reference rather than against each other.
+	const shapes = 32
+	want := make([]string, shapes)
+	for g := range shapes {
+		want[g], _ = Compose(frags, ShapeKey{Guards: uint64(g), Choices: []uint8{0}})
+	}
+
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 500 {
+				// Workers walk the shape space out of phase, so hits,
+				// misses and evictions interleave.
+				g := (i + w*7) % shapes
+				sql, argIdx := c.Get("Q", frags, ShapeKey{Guards: uint64(g), Choices: []uint8{0}})
+				if sql != want[g] {
+					t.Errorf("guards=%d: got %q, want %q", g, sql, want[g])
+					return
+				}
+				if argIdx == nil {
+					t.Errorf("guards=%d: nil argIdx", g)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	c.mu.Lock()
+	n := len(c.m)
+	c.mu.Unlock()
+	if n > 8 {
+		t.Fatalf("cache holds %d entries after concurrent churn, capacity 8", n)
+	}
+}
+
+// TestGetTree_DerivesTreeSegment pins the contract generated code
+// relies on: the cache derives the `;t=` key segment itself, so a call
+// site that passes a key without Trees lands on the same entry as one
+// that fills it in. That is what lets generated code stop encoding the
+// tree a second time for the OnQuery hook — and the hook's own
+// derivation must still spell out the identical key.
+func TestGetTree_DerivesTreeSegment(t *testing.T) {
+	frags := []Frag{
+		{Kind: Skel, Text: "SELECT id FROM t WHERE TRUE AND "},
+		{Kind: FilterTree, Cases: []Case{
+			{Text: "t.tenant_id = :tenant", ParamSpans: []Span{{14, 21}}, ParamIdx: []int16{0}},
+			{Text: "t.status = :status", ParamSpans: []Span{{11, 18}}, ParamIdx: []int16{0}},
+		}},
+	}
+	tree := And(NewLeaf(0, int64(7)), NewLeaf(1, "active"))
+	c := NewComposedCache(8)
+
+	// What generated code now passes: no Trees on the key.
+	sqlDerived, _, err := c.GetTree("Q", frags, ShapeKey{}, tree, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What a caller filling the segment in itself would pass.
+	sqlExplicit, _, err := c.GetTree("Q", frags, ShapeKey{Trees: []string{tree.Encode()}}, tree, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDerived != sqlExplicit {
+		t.Fatalf("derived and explicit tree keys composed differently:\n%q\nvs\n%q", sqlDerived, sqlExplicit)
+	}
+
+	c.mu.Lock()
+	n := len(c.m)
+	var stored ShapeKey
+	for _, e := range c.m {
+		stored = e.key
+	}
+	c.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the two forms must key to one entry, got %d", n)
+	}
+
+	// The key the hook spells out (hookTree's derivation) must equal the
+	// one the cache stored, `;t=` segment included.
+	hookKey := ShapeKey{Trees: []string{tree.Encode()}}
+	if got := hookKey.String(); got != stored.String() {
+		t.Errorf("hook key %q != cached key %q", got, stored.String())
+	}
+	if !strings.Contains(hookKey.String(), ";t=") {
+		t.Errorf("hook key lost the tree segment: %q", hookKey.String())
+	}
+}
+
+// TestComposedCache_StyleIsPartOfTheKey pins that the placeholder style
+// separates cache entries. The same query name and shape key compose
+// differently per style — dollar numbers a reused bind once, question
+// repeats it — so a key that ignored the style would serve one caller
+// the other's SQL.
+func TestComposedCache_StyleIsPartOfTheKey(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+	key := ShapeKey{Guards: 0b11, Choices: []uint8{0}}
+
+	dollar, _ := c.GetStyle(StyleDollar, "Q", frags, key)
+	question, _ := c.GetStyle(StyleQuestion, "Q", frags, key)
+
+	if strings.Contains(dollar, "?") {
+		t.Errorf("dollar style served question-style SQL:\n%s", dollar)
+	}
+	if strings.Contains(question, "$") {
+		t.Errorf("question style served dollar-style SQL:\n%s", question)
+	}
+	// Both must still equal a direct composition in that style.
+	if want, _ := ComposeStyle(StyleDollar, frags, key); dollar != want {
+		t.Errorf("dollar:\n got %q\nwant %q", dollar, want)
+	}
+	if want, _ := ComposeStyle(StyleQuestion, frags, key); question != want {
+		t.Errorf("question:\n got %q\nwant %q", question, want)
+	}
+	// Order of first use must not matter: warm the reverse order.
+	c2 := NewComposedCache(8)
+	q2, _ := c2.GetStyle(StyleQuestion, "Q", frags, key)
+	d2, _ := c2.GetStyle(StyleDollar, "Q", frags, key)
+	if q2 != question || d2 != dollar {
+		t.Error("cache results depend on which style was composed first")
+	}
+}
+
+// TestComposedCache_FullKeyOnHit pins that entries are matched on the
+// full key, never on its string encoding alone (the encoding is an
+// index). A forged entry under a colliding map key must be rejected and
+// recomputed rather than served.
+func TestComposedCache_FullKeyOnHit(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+
+	key := ShapeKey{Guards: 1, Choices: []uint8{0}}
+	want, _ := Compose(frags, key)
+
+	// Publish an entry whose stored key disagrees with the one callers
+	// will ask for, under the map key the caller's request derives.
+	mapKey := "Q|" + key.String()
+	bogus := newCacheEntry(mapKey, ShapeKey{Guards: 999, Choices: []uint8{0}}, "SELECT 'wrong'", nil)
+	c.mu.Lock()
+	bogus.el = c.order.PushFront(bogus)
+	c.m[mapKey] = bogus
+	c.publish()
+	c.mu.Unlock()
+
+	if got, _ := c.Get("Q", frags, key); got != want {
+		t.Fatalf("full-key mismatch served from cache: got %q, want %q", got, want)
 	}
 }
 

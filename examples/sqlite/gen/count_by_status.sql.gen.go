@@ -28,7 +28,7 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.TenantID}, nil)
-	q.hook(key.String(), sqlText)
+	q.hook(key, sqlText)
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err
