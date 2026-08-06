@@ -134,8 +134,8 @@ conformance test enforces equality):
    (flattened index) to bind — `Bind` dereferences pointers (guard
    active ⇒ non-nil by construction).
 
-Composed `(sql, argIdx)` is cached per canonical `key.String()` in a
-bounded cache (`statement_cache_size`, default 256 entries/query is
+Composed `(sql, argIdx)` is cached per placeholder style + query name +
+canonical `key.String()` in a bounded cache (`statement_cache_size`, default 256 entries/query is
 plenty: shapes-in-use are few). Key comparison on hit is full struct
 equality, not the string hash.
 

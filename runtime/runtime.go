@@ -740,8 +740,16 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 	// string(buf), which the compiler lowers to a lookup that does not
 	// copy: a cache hit allocates nothing at all. Only a miss pays for
 	// the string, where it is retained by the entry anyway.
+	// The style leads the key because it changes the composed text for
+	// an otherwise identical (query, shape): dollar numbers a reused
+	// bind once, question repeats it. Generated code fixes the style per
+	// package so it cannot mix, but the entry points take it as an
+	// argument, and a cache that ignored it would hand a caller the
+	// other style's SQL. This key is internal — nothing outside the
+	// cache observes its encoding.
 	var buf [keyBufSize]byte
-	mk := append(buf[:0], queryName...)
+	mk := append(buf[:0], '0'+byte(style), '|')
+	mk = append(mk, queryName...)
 	mk = append(mk, '|')
 	mk = key.appendTo(mk)
 

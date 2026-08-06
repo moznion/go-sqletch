@@ -345,6 +345,41 @@ func TestGetTree_DerivesTreeSegment(t *testing.T) {
 	}
 }
 
+// TestComposedCache_StyleIsPartOfTheKey pins that the placeholder style
+// separates cache entries. The same query name and shape key compose
+// differently per style — dollar numbers a reused bind once, question
+// repeats it — so a key that ignored the style would serve one caller
+// the other's SQL.
+func TestComposedCache_StyleIsPartOfTheKey(t *testing.T) {
+	frags := testFrags()
+	c := NewComposedCache(8)
+	key := ShapeKey{Guards: 0b11, Choices: []uint8{0}}
+
+	dollar, _ := c.GetStyle(StyleDollar, "Q", frags, key)
+	question, _ := c.GetStyle(StyleQuestion, "Q", frags, key)
+
+	if strings.Contains(dollar, "?") {
+		t.Errorf("dollar style served question-style SQL:\n%s", dollar)
+	}
+	if strings.Contains(question, "$") {
+		t.Errorf("question style served dollar-style SQL:\n%s", question)
+	}
+	// Both must still equal a direct composition in that style.
+	if want, _ := ComposeStyle(StyleDollar, frags, key); dollar != want {
+		t.Errorf("dollar:\n got %q\nwant %q", dollar, want)
+	}
+	if want, _ := ComposeStyle(StyleQuestion, frags, key); question != want {
+		t.Errorf("question:\n got %q\nwant %q", question, want)
+	}
+	// Order of first use must not matter: warm the reverse order.
+	c2 := NewComposedCache(8)
+	q2, _ := c2.GetStyle(StyleQuestion, "Q", frags, key)
+	d2, _ := c2.GetStyle(StyleDollar, "Q", frags, key)
+	if q2 != question || d2 != dollar {
+		t.Error("cache results depend on which style was composed first")
+	}
+}
+
 // TestComposedCache_FullKeyOnHit pins that entries are matched on the
 // full key, never on its string encoding alone (the encoding is an
 // index). A forged entry under a colliding map key must be rejected and
