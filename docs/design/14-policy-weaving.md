@@ -346,9 +346,36 @@ accident; `ErrFilterRequired` refuses it, and `Tree.IsZero` keeps it
 distinct from `Unscoped()` so that "did not decide" and "decided not to
 scope" cannot collapse into each other.
 
-A policy parameter cannot be hardened this way: it is an ordinary
-`int64` or `string`, and Go has no type whose zero is unrepresentable.
-"Cannot omit" is the whole of what is achievable there.
+A policy parameter cannot be hardened this way: its underlying type is
+an ordinary `int64` or `string`, and Go has no type whose zero is
+unrepresentable. "Cannot omit" is the whole of what is achievable
+against forgetting.
+
+**Amended: a distinct named type per policy parameter.** What CAN be
+hardened is the next failure mode over: two policy arguments of the
+same underlying type swapped at a call site — `(orgID, tenantID)` for
+`(tenantID, orgID)` compiles with plain `int64`s and scopes each
+predicate by the other policy's value. Codegen therefore declares one
+named type per woven parameter name in `policy.gen.go`
+(`type TenantID int64`, name = the parameter's Go name), used in every
+generated signature; the wrong order is then a type mismatch. The
+decisions:
+
+- **One type per parameter name, package-wide** — shared by every
+  query, and every policy, that binds that name, so the value is
+  passable across call sites. Parameters that agree on the name but
+  resolve to different Go types are `SQLETCH310`, never a silently
+  different second type; likewise a policy type name colliding with a
+  query-generated type (the check runs after all queries have claimed
+  their names, in sorted order for determinism).
+- **The driver never sees the named type**: the bind site converts
+  back to the underlying type (`int64(tenantID)`), so wire behavior,
+  renderings, and the cache fingerprint are untouched.
+- **Untyped constants still convert** (`q.AllAudit(ctx, 1, …)`) — Go
+  semantics; the protection is against swapping *variables*, which is
+  where real values live.
+- The zero (`TenantID(0)`) stays representable; presence, not
+  correctness, remains the guarantee.
 
 ### D4 — Diagnostic span attribution
 

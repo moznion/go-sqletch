@@ -432,20 +432,18 @@ SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id
 
 		src := string(files["count_logs.sql.gen.go"])
 		for _, want := range []string{
-			`func \(q \*Queries\) CountLogs\(ctx context\.Context, tenantID int64, arg CountLogsParams\)`,
+			`func \(q \*Queries\) CountLogs\(ctx context\.Context, tenantID TenantID, arg CountLogsParams\)`,
 			`type CountLogsParams struct \{\n\}`,
 		} {
 			if !regexp.MustCompile(want).MatchString(src) {
 				t.Errorf("missing pattern %q\n----\n%s", want, src)
 			}
 		}
-		if regexp.MustCompile(`TenantID\s+int64`).MatchString(src) {
+		if regexp.MustCompile(`TenantID\s+int64\b`).MatchString(src) {
 			t.Errorf("policy parameter stayed a params field; omitting it would compile\n----\n%s", src)
 		}
-		// querier.go repeats the signature, so it must import what the
-		// signature names.
 		if !strings.Contains(string(files["querier.gen.go"]),
-			"CountLogs(ctx context.Context, tenantID int64, arg CountLogsParams)") {
+			"CountLogs(ctx context.Context, tenantID TenantID, arg CountLogsParams)") {
 			t.Errorf("querier.go missing the argument\n----\n%s", files["querier.gen.go"])
 		}
 	})
@@ -514,4 +512,173 @@ t.tenant_id = :scope_tenant_id
 			t.Errorf("optional tree should not become an argument\n----\n%s", src)
 		}
 	})
+}
+
+// A policy parameter's argument gets a distinct named type (one per
+// woven parameter, shared by every query the policy touches), so two
+// same-typed policy arguments cannot be swapped at a call site: the
+// wrong order is a type mismatch instead of a silent cross-scoping.
+func TestGenerate_PolicyParamNamedTypes(t *testing.T) {
+	weave := func(t *testing.T, src string, policies map[string]string) *template.QueryTemplate {
+		t.Helper()
+		q := scanOne(t, src)
+		// Stand in for the weaver: each parameter carries the name of
+		// the policy that injected it.
+		for param, pol := range policies {
+			q.Params[param].Policy = pol
+		}
+		return q
+	}
+
+	t.Run("distinct type per parameter", func(t *testing.T) {
+		q := weave(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs
+WHERE audit_logs.tenant_id = :tenant_id AND audit_logs.org_id = :org_id;
+`, map[string]string{"tenant_id": "tenant_scope", "org_id": "org_scope"})
+
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}, "org_id": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+
+		pol := string(files["policy.gen.go"])
+		for _, want := range []string{"type TenantID int64", "type OrgID int64"} {
+			if !strings.Contains(pol, want) {
+				t.Errorf("policy.gen.go missing %q\n----\n%s", want, pol)
+			}
+		}
+		// Deterministic emission: type declarations in sorted name order.
+		if strings.Index(pol, "type OrgID") > strings.Index(pol, "type TenantID") {
+			t.Errorf("policy types not sorted\n----\n%s", pol)
+		}
+		if !strings.Contains(pol, "tenant_scope") {
+			t.Errorf("type doc does not name the weaving policy\n----\n%s", pol)
+		}
+
+		src := string(files["count_logs.sql.gen.go"])
+		if !regexp.MustCompile(
+			`func \(q \*Queries\) CountLogs\(ctx context\.Context, tenantID TenantID, orgID OrgID, arg CountLogsParams\)`).MatchString(src) {
+			t.Errorf("signature does not use the named types\n----\n%s", src)
+		}
+		// The driver sees the underlying type: the named type is a
+		// call-site discipline, never a wire change.
+		if !strings.Contains(src, "int64(tenantID), int64(orgID)") {
+			t.Errorf("bind site does not convert back to the underlying type\n----\n%s", src)
+		}
+		if !strings.Contains(string(files["querier.gen.go"]),
+			"CountLogs(ctx context.Context, tenantID TenantID, orgID OrgID, arg CountLogsParams)") {
+			t.Errorf("querier.go signature does not use the named types\n----\n%s", files["querier.gen.go"])
+		}
+	})
+
+	t.Run("one shared type across queries", func(t *testing.T) {
+		a := weave(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id;
+`, map[string]string{"tenant_id": "tenant_scope"})
+		b := weave(t, `-- name: ListLogs :many
+SELECT l.id FROM audit_logs AS l WHERE l.tenant_id = :tenant_id;
+`, map[string]string{"tenant_id": "tenant_scope"})
+
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{
+			{Q: a, Frags: BuildFrags(postgres.Profile{}, a),
+				Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}}},
+			{Q: b, Frags: BuildFrags(postgres.Profile{}, b),
+				Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}}},
+		})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+		pol := string(files["policy.gen.go"])
+		if got := strings.Count(pol, "type TenantID int64"); got != 1 {
+			t.Errorf("want exactly one shared declaration, got %d\n----\n%s", got, pol)
+		}
+		for _, f := range []string{"count_logs.sql.gen.go", "list_logs.sql.gen.go"} {
+			if !strings.Contains(string(files[f]), "tenantID TenantID") {
+				t.Errorf("%s does not use the shared type\n----\n%s", f, files[f])
+			}
+		}
+	})
+
+	t.Run("same name, different Go types is a collision", func(t *testing.T) {
+		a := weave(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id;
+`, map[string]string{"tenant_id": "tenant_scope"})
+		b := weave(t, `-- name: ListLogs :many
+SELECT l.id FROM audit_logs AS l WHERE l.tenant_id = :tenant_id;
+`, map[string]string{"tenant_id": "other_scope"})
+
+		_, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{
+			{Q: a, Frags: BuildFrags(postgres.Profile{}, a),
+				Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}}},
+			{Q: b, Frags: BuildFrags(postgres.Profile{}, b),
+				Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 25}}},
+		})
+		if !hasCode(diags, diagnostics.CodeNameCollision) {
+			t.Fatalf("conflicting underlying types must be a name collision, got %+v", diags)
+		}
+	})
+
+	t.Run("collision with a query-generated type", func(t *testing.T) {
+		// Query "Tenant" with @choose(id) claims enum type TenantID —
+		// the same name the policy parameter tenant_id generates.
+		enumQ := scanOne(t, `-- name: Tenant :many
+SELECT t.a FROM t
+@choose(id)
+@case(x)
+ORDER BY t.a ASC
+@default
+ORDER BY t.a DESC
+@end;
+`)
+		polQ := weave(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id;
+`, map[string]string{"tenant_id": "tenant_scope"})
+
+		_, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{
+			{Q: enumQ, Frags: BuildFrags(postgres.Profile{}, enumQ),
+				Columns:    []dialect.ColumnDesc{{Name: "a", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{}},
+			{Q: polQ, Frags: BuildFrags(postgres.Profile{}, polQ),
+				Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}}},
+		})
+		if !hasCode(diags, diagnostics.CodeNameCollision) {
+			t.Fatalf("policy type colliding with a query type must be reported, got %+v", diags)
+		}
+	})
+}
+
+func TestGenerate_PolicyParamReservedName(t *testing.T) {
+	// The generated package already declares Queries, Querier, DBTX,
+	// New, and Ptr; a policy parameter whose Go name lands on one of
+	// them must be a diagnostic, not a file that fails to compile.
+	q := scanOne(t, `-- name: CountLogs :one
+SELECT count(*) AS total FROM audit_logs WHERE audit_logs.queries = :queries;
+`)
+	q.Params["queries"].Policy = "quota_scope"
+
+	_, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+		Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+		Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+		Nullable:   []bool{false},
+		ParamTypes: map[string]dialect.TypeRef{"queries": {OID: 20}},
+	}})
+	if !hasCode(diags, diagnostics.CodeNameCollision) {
+		t.Fatalf("reserved policy type name must be a collision, got %+v", diags)
+	}
 }

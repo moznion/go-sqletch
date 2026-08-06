@@ -22,11 +22,11 @@ var countAuditLogsFrags = []runtime.Frag{
 }
 
 // tenantID is required (policy tenant_scope).
-func (q *Queries) CountAuditLogs(ctx context.Context, tenantID int64, arg CountAuditLogsParams) (CountAuditLogsRow, error) {
+func (q *Queries) CountAuditLogs(ctx context.Context, tenantID TenantID, arg CountAuditLogsParams) (CountAuditLogsRow, error) {
 	var zero CountAuditLogsRow
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("CountAuditLogs", countAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{tenantID})
+	args := runtime.BuildArgs(argIdx, []any{int64(tenantID)})
 	q.hook(key.String(), sqlText)
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i CountAuditLogsRow

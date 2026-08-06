@@ -261,15 +261,18 @@ func main() {
 	q := gen.New(conn)
 
 	// The woven query is tenant-scoped even though its template never
-	// mentioned tenants, and the value it scopes by is an argument: a
-	// call that forgets it does not compile.
-	t1, err := q.AllAudit(ctx, 1, gen.AllAuditParams{})
+	// mentioned tenants, and the value it scopes by is an argument of
+	// the distinct type gen.TenantID: a call that forgets it does not
+	// compile, and neither would swapping it with another policy's
+	// same-underlying-typed argument.
+	tenant1 := gen.TenantID(1)
+	t1, err := q.AllAudit(ctx, tenant1, gen.AllAuditParams{})
 	die(err)
 	expect(len(t1) == 2, "tenant 1 sees exactly its two rows")
 	for _, r := range t1 {
 		expect(r.Action != "secret", "tenant 2's row must not leak")
 	}
-	t2, err := q.AllAudit(ctx, 2, gen.AllAuditParams{})
+	t2, err := q.AllAudit(ctx, gen.TenantID(2), gen.AllAuditParams{})
 	die(err)
 	expect(len(t2) == 1 && t2[0].Action == "secret", "tenant 2 sees its row")
 

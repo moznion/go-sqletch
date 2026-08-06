@@ -97,12 +97,16 @@ on MySQL/SQLite (where it is mandatory). There is no ambient state and
 no context extraction.
 
 It is **an argument of the generated method**, not a field of the
-params struct:
+params struct, and its type is a **distinct named type** declared once
+per parameter in `policy.gen.go`:
 
 ```go
+// policy.gen.go
+type TenantID int64
+
 func (q *Queries) ListOrders(
 	ctx context.Context,
-	tenantID int64,               // policy tenant_scope
+	tenantID TenantID,            // policy tenant_scope
 	arg ListOrdersParams,
 ) ([]ListOrdersRow, error)
 ```
@@ -122,13 +126,33 @@ matched". Only as an argument does forgetting the value fail to
 compile, which is what makes "you cannot forget it" true of *your*
 code and not only of the SQL.
 
-The residual is an argument given an explicit zero (`0`, `""`). That is
-a deliberate act rather than an oversight; policies still guarantee the
-predicate's presence, never its argument's correctness (see
-[Boundary](#boundary)). Unlike a `@filter-tree!` scope — whose type is a
-struct, so `nil` does not compile — a policy parameter is an ordinary
-`int64` or `string`, and its zero is an ordinary value of that type.
-There is no type-level way to exclude it.
+The named type closes the next failure mode over: two policy arguments
+of the same underlying type swapped at a call site. With plain `int64`
+arguments,
+
+```go
+q.ListOrders(ctx, orgID, tenantID, arg)   // swapped — compiles
+```
+
+runs and scopes each predicate by the *other* policy's value. With one
+distinct type per parameter (`TenantID`, `OrgID`), the wrong order is a
+type mismatch. The type is shared by every query — and every policy —
+that binds the same parameter name, so a `TenantID` obtained once flows
+through all tenant-scoped call sites; construct it explicitly at the
+boundary: `gen.TenantID(claims.TenantID)`. An untyped constant
+(`q.AllAudit(ctx, 1, …)`) still converts implicitly, as untyped
+constants do everywhere in Go. Two policies whose parameters share a
+name but disagree on the Go type are rejected at generation time
+(SQLETCH310), never given a silently different second type.
+
+The residual is an argument given an explicit zero (`TenantID(0)`,
+`""`). That is a deliberate act rather than an oversight; policies
+still guarantee the predicate's presence, never its argument's
+correctness (see [Boundary](#boundary)). Unlike a `@filter-tree!`
+scope — whose type is a struct, so `nil` does not compile — a policy
+parameter's underlying type is an ordinary `int64` or `string`, and
+its zero is an ordinary value of that type. There is no type-level way
+to exclude it.
 
 Adding a policy therefore breaks every call site of every query it
 touches, on purpose: a security control that could be adopted without
