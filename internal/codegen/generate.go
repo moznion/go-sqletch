@@ -62,15 +62,16 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		caps.MaxDepth = runtime.DefaultTreeCaps.MaxDepth
 	}
 
-	typeNames := map[string]string{} // generated type name -> query
-	fileStems := map[string]string{} // generated file stem -> query
+	typeNames := map[string]string{}        // generated type name -> query
+	fileStems := map[string]string{}        // generated file stem -> query
+	policyTypes := map[string]*policyType{} // named type -> policy parameter
 	var querier []string
 	sigImports := map[string]bool{}
 
 	for _, in := range sorted {
 		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
 			sigImports: map[string]bool{}}
-		src, sig, ds := g.emit(typeNames)
+		src, sig, ds := g.emit(typeNames, policyTypes)
 		for imp := range g.sigImports {
 			sigImports[imp] = true
 		}
@@ -93,6 +94,18 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		querier = append(querier, sig)
 	}
 
+	// A policy type is declared once for the package, so a per-query
+	// claimType cannot see it; the cross-check runs here, after every
+	// query has claimed its own names (sorted for determinism).
+	for _, tn := range sortedKeys(policyTypes) {
+		if q, ok := typeNames[tn]; ok {
+			pt := policyTypes[tn]
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision, pt.span,
+				"generated type %q collides between query %s and policy parameter %q; rename one",
+				tn, q, pt.param))
+		}
+	}
+
 	if !diagnostics.HasErrors(diags) {
 		if opts.Style == runtime.StyleQuestion {
 			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package))
@@ -100,6 +113,9 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 			files["db.gen.go"] = []byte(dbFile(opts.Package))
 		}
 		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier, sigImports))
+		if len(policyTypes) > 0 {
+			files["policy.gen.go"] = []byte(policyFile(opts.Package, policyTypes))
+		}
 	}
 
 	for name, src := range files {
@@ -141,7 +157,7 @@ type orderMeta struct {
 
 type field struct{ name, typ, comment string }
 
-func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnostics.Diagnostic) {
+func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*policyType) ([]byte, string, []diagnostics.Diagnostic) {
 	var diags []diagnostics.Diagnostic
 	q := g.in.Q
 	g.imports = map[string]bool{"context": true, runtimeImport: true}
@@ -253,13 +269,45 @@ func (g *queryGen) emit(typeNames map[string]string) ([]byte, string, []diagnost
 			// params-struct field omitted from a keyed literal compiles
 			// and sends the zero value, so the woven predicate silently
 			// matches nothing instead of scoping the read.
-			if typImport != "" {
-				g.sigImports[typImport] = true
+			//
+			// The argument's type is a distinct named type declared once
+			// for the package (policy.gen.go), shared by every query the
+			// policy touches: two same-typed policy arguments cannot be
+			// swapped at a call site, because the wrong order is a type
+			// mismatch. The named type never reaches the driver — the
+			// bind site converts back to the underlying type.
+			tn := GoName(name)
+			switch tn {
+			case "Queries", "Querier", "DBTX", "New", "Ptr":
+				// db.gen.go / querier.gen.go declare these; the collision
+				// would otherwise surface as generated code that does not
+				// compile in the user's module.
+				fail(diagnostics.CodeNameCollision, paramSpanOf(q, name),
+					"policy parameter %q would generate type %q, which the generated package already declares; rename the parameter", name, tn)
+				continue
+			}
+			if pt, ok := policyTypes[tn]; ok {
+				if pt.underlying != typ || pt.param != name {
+					fail(diagnostics.CodeNameCollision, paramSpanOf(q, name),
+						"policy type %q is %s for parameter %q of query %s but %s for parameter %q of query %s; align the policies' declared types or rename a parameter",
+						tn, pt.underlying, pt.param, pt.query, typ, name, q.Name)
+					continue
+				}
+				pt.policies[p.Policy] = true
+			} else {
+				policyTypes[tn] = &policyType{
+					underlying: typ,
+					imp:        typImport,
+					param:      name,
+					policies:   map[string]bool{p.Policy: true},
+					query:      q.Name,
+					span:       paramSpanOf(q, name),
+				}
 			}
 			requiredArgs = append(requiredArgs, requiredArg{
 				name:  argIdent(name),
-				typ:   typ,
-				expr:  argIdent(name),
+				typ:   tn,
+				expr:  convertExpr(typ, argIdent(name)),
 				doc:   fmt.Sprintf("policy %s", p.Policy),
 				param: name,
 			})
@@ -426,6 +474,75 @@ type requiredArg struct {
 	expr  string // how the body refers to it
 	doc   string // why it is required, for the signature comment
 	param string // template parameter name
+}
+
+// policyType is the distinct named Go type generated for one
+// policy-woven parameter. Policies guarantee the predicate's presence,
+// never its argument's correctness; the named type closes the residual
+// a plain `int64` leaves open — two same-typed policy arguments swapped
+// at a call site. One type per parameter name, shared by every query
+// (and every policy) that binds it, so the value stays passable across
+// call sites; parameters agreeing on the name but not the Go type are
+// a name collision, never a silent second type.
+type policyType struct {
+	underlying string          // Go type the name wraps
+	imp        string          // import the underlying type needs ("" = none)
+	param      string          // template parameter name
+	policies   map[string]bool // policies that wove it, for the doc comment
+	query      string          // first registering query, for diagnostics
+	span       diagnostics.Span
+}
+
+// convertExpr spells the conversion of ident back to the underlying
+// type at the bind site, so the driver never sees the named type.
+func convertExpr(typ, ident string) string {
+	if strings.HasPrefix(typ, "*") {
+		// *T(x) would parse as *(T(x)).
+		return "(" + typ + ")(" + ident + ")"
+	}
+	return typ + "(" + ident + ")"
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// policyFile emits policy.gen.go: the named types of every policy-woven
+// parameter, in sorted order.
+func policyFile(pkg string, types map[string]*policyType) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "// Code generated by sqletch. DO NOT EDIT.\n\npackage %s\n\n", pkg)
+	imports := map[string]bool{}
+	for _, pt := range types {
+		if pt.imp != "" {
+			imports[pt.imp] = true
+		}
+	}
+	if len(imports) > 0 {
+		fmt.Fprint(&b, "import (\n")
+		for _, imp := range sortedKeys(imports) {
+			fmt.Fprintf(&b, "\t%q\n", imp)
+		}
+		fmt.Fprint(&b, ")\n\n")
+	}
+	for _, tn := range sortedKeys(types) {
+		pt := types[tn]
+		pols := sortedKeys(pt.policies)
+		label := "policy " + pols[0]
+		if len(pols) > 1 {
+			label = "policies " + strings.Join(pols, ", ")
+		}
+		fmt.Fprintf(&b, "// %s is the %q argument woven by %s.\n", tn, pt.param, label)
+		fmt.Fprint(&b, "// A distinct type keeps same-typed policy arguments from being\n")
+		fmt.Fprintf(&b, "// swapped at a call site; construct it explicitly: %s(v).\n", tn)
+		fmt.Fprintf(&b, "type %s %s\n\n", tn, pt.underlying)
+	}
+	return b.String()
 }
 
 // argIdent names a required argument. Reserved identifiers get a
