@@ -341,26 +341,27 @@ func main() {
 	expect(err != nil, "duplicate order key rejected")
 
 	// @filter-tree!: typed values cross the layer boundary, never SQL.
-	// Required mode: nil errors before the DB; Unscoped is the
-	// explicit opt-out; And/Or compose the closed vocabulary.
-	_, err = q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 100})
-	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "nil tree rejected by @filter-tree!")
+	// Required mode: the scope is an argument of a value type, so both
+	// omitting it and passing nil fail to compile; the zero Tree is the
+	// only way left to arrive without a decision, and it errors before
+	// the DB. Unscoped is the explicit opt-out; And/Or compose the
+	// closed vocabulary.
+	_, err = q.FilterUsers(ctx, sqletchruntime.Tree{}, gen.FilterUsersParams{Limit: 100})
+	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "zero tree rejected by @filter-tree!")
 
-	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{Scope: gen.FilterUsersUnscoped(), Limit: 100})
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersUnscoped(), gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(unscoped) == 5, "Unscoped sees everyone")
 
-	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
-		Limit: 100,
-	})
+	scoped, err := q.FilterUsers(ctx,
+		gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+		gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(scoped) == 4, "tenant AND active")
 
-	either, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
-		Limit: 100,
-	})
+	either, err := q.FilterUsers(ctx,
+		gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+		gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(either) == 2, "banned OR alice*")
 

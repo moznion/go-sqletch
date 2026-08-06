@@ -136,7 +136,8 @@ func TestFilterTree_TrueRenderingVerified(t *testing.T) {
 	// explicit Unscoped tree) is byte-identical to the verified
 	// empty-tree rendering, with identical bind order.
 	frags := codegen.BuildFrags(postgres.Profile{}, q)
-	for _, tree := range []*runtime.Tree{nil, runtime.Unscoped()} {
+	// The zero Tree and an explicit Unscoped() must render alike.
+	for _, tree := range []runtime.Tree{{}, runtime.Unscoped()} {
 		sql, binds, err := runtime.ComposeTree(frags, runtime.ShapeKey{Guards: 1}, tree, runtime.DefaultTreeCaps)
 		if err != nil {
 			t.Fatal(err)
@@ -225,7 +226,7 @@ func TestFilterTree_HavingSlot(t *testing.T) {
 	if sql != rs[0].SQL {
 		t.Fatalf("runtime maximal != renderer:\n%q\n%q", sql, rs[0].SQL)
 	}
-	sql, _, err = runtime.ComposeTree(frags, runtime.ShapeKey{}, nil, runtime.DefaultTreeCaps)
+	sql, _, err = runtime.ComposeTree(frags, runtime.ShapeKey{}, runtime.Tree{}, runtime.DefaultTreeCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +255,8 @@ func TestFilterTree_RuntimeShapes(t *testing.T) {
 	frags := codegen.BuildFrags(postgres.Profile{}, q)
 	fe := postgres.Frontend{}
 
-	cases := []*runtime.Tree{
-		nil, // non-required path renders TRUE (required-ness is enforced in generated code)
+	cases := []runtime.Tree{
+		{}, // the zero Tree renders TRUE (required-ness is enforced in generated code)
 		runtime.Unscoped(),
 		runtime.NewLeaf(0, int64(1)),
 		runtime.Or(runtime.NewLeaf(0, int64(1)), runtime.NewLeaf(1, int64(2))),
@@ -273,7 +274,7 @@ func TestFilterTree_RuntimeShapes(t *testing.T) {
 			t.Fatalf("tree %s does not parse: %v\n%s", tree.Encode(), err, sql)
 		}
 		// Repeated predicates bind independently.
-		if tree != nil && tree.Encode() == "&(p2,|(p0,p0))" && len(binds) != 4 {
+		if !tree.IsZero() && tree.Encode() == "&(p2,|(p0,p0))" && len(binds) != 4 {
 			t.Fatalf("repeated predicate binds = %d, want 4", len(binds))
 		}
 	}

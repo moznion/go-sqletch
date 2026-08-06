@@ -44,11 +44,10 @@ func main() {
 
 	// v0.3: typed filters cross the repository boundary as values —
 	// never as SQL strings (@filter-tree!).
-	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.And(
-			gen.FilterUsersTenant(1),
-			gen.FilterUsersStatusEq("active"),
-		),
+	scoped, err := q.FilterUsers(ctx, gen.And(
+		gen.FilterUsersTenant(1),
+		gen.FilterUsersStatusEq("active"),
+	), gen.FilterUsersParams{
 		Limit: 20,
 	})
 	if err != nil {
@@ -56,15 +55,26 @@ func main() {
 	}
 	fmt.Printf("scoped: %d users\n", len(scoped))
 
-	// The `!` in @filter-tree!(scope) makes the filter required: a
-	// forgotten scope fails before any SQL is sent…
-	if _, err := q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 20}); !errors.Is(err, runtime.ErrFilterRequired) {
+	// The `!` in @filter-tree!(scope) makes the filter required, and the
+	// scope is an argument of a value type, so the two ways to forget it
+	// are both refused. Omitting it does not compile:
+	//
+	//	q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 20})
+	//	→ not enough arguments in call to q.FilterUsers
+	//
+	// and neither does the shape a forgotten scope usually takes:
+	//
+	//	q.FilterUsers(ctx, nil, gen.FilterUsersParams{Limit: 20})
+	//	→ cannot use nil as runtime.Tree value in argument to q.FilterUsers
+	//
+	// What is left is the zero Tree, which nobody writes by accident. It
+	// fails before any SQL is sent…
+	if _, err := q.FilterUsers(ctx, runtime.Tree{}, gen.FilterUsersParams{Limit: 20}); !errors.Is(err, runtime.ErrFilterRequired) {
 		log.Fatalf("expected ErrFilterRequired, got %v", err)
 	}
 	// …and deliberately unfiltered access is one greppable call.
-	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.FilterUsersUnscoped(), // renders TRUE
-		Limit: 20,
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersUnscoped(), gen.FilterUsersParams{
+		Limit: 20, // renders TRUE
 	})
 	if err != nil {
 		log.Fatal(err)

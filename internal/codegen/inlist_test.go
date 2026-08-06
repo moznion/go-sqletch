@@ -68,7 +68,7 @@ func inListConformance(t *testing.T, profile dialect.LexerProfile, fe dialect.Fr
 		}
 		got, binds, err := runtime.ComposeTreeStyle(runtime.StyleQuestion, frags,
 			runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders, Arities: k.Arities()},
-			nil, runtime.DefaultTreeCaps)
+			runtime.Tree{}, runtime.DefaultTreeCaps)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func inListConformance(t *testing.T, profile dialect.LexerProfile, fe dialect.Fr
 	// Runtime arities beyond the representative: still parseable, one
 	// bind per element.
 	sql, binds, err := runtime.ComposeTreeStyle(runtime.StyleQuestion, frags,
-		runtime.ShapeKey{Guards: 1, Arities: []int32{3}}, nil, runtime.DefaultTreeCaps)
+		runtime.ShapeKey{Guards: 1, Arities: []int32{3}}, runtime.Tree{}, runtime.DefaultTreeCaps)
 	if err != nil {
 		t.Fatal(err)
 	}

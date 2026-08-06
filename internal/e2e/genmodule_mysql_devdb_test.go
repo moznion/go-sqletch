@@ -316,21 +316,19 @@ func main() {
 	expect(err != nil, "duplicate order key rejected")
 
 	// @filter-tree!: required, unscoped, composed.
-	_, err = q.FilterUsers(ctx, gen.FilterUsersParams{Limit: 100})
-	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "nil tree rejected by @filter-tree!")
-	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{Scope: gen.FilterUsersUnscoped(), Limit: 100})
+	// Omitting the scope and passing nil are both compile errors now;
+	// the zero Tree is the only undecided value that reaches here.
+	_, err = q.FilterUsers(ctx, sqletchruntime.Tree{}, gen.FilterUsersParams{Limit: 100})
+	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "zero tree rejected by @filter-tree!")
+	unscoped, err := q.FilterUsers(ctx, gen.FilterUsersUnscoped(), gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(unscoped) == 4, "Unscoped sees everyone")
-	scoped, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
-		Limit: 100,
-	})
+	scoped, err := q.FilterUsers(ctx, gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+		gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(scoped) == 3, "tenant AND active")
-	either, err := q.FilterUsers(ctx, gen.FilterUsersParams{
-		Scope: gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
-		Limit: 100,
-	})
+	either, err := q.FilterUsers(ctx, gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+		gen.FilterUsersParams{Limit: 100})
 	die(err)
 	expect(len(either) == 2, "banned OR alice*")
 

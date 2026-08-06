@@ -10,7 +10,6 @@ import (
 
 type FilterUsersParams struct {
 	Limit int64
-	Scope *runtime.Tree // required: nil is an error, use FilterUsersUnscoped() to opt out
 }
 
 type FilterUsersRow struct {
@@ -29,34 +28,35 @@ var filterUsersFrags = []runtime.Frag{
 }
 
 // FilterUsersTenant builds the "tenant" predicate of @filter-tree(scope).
-func FilterUsersTenant(scopeTenantID int64) *runtime.Tree {
+func FilterUsersTenant(scopeTenantID int64) runtime.Tree {
 	return runtime.NewLeaf(0, scopeTenantID)
 }
 
 // FilterUsersStatusEq builds the "status_eq" predicate of @filter-tree(scope).
-func FilterUsersStatusEq(scopeStatus string) *runtime.Tree {
+func FilterUsersStatusEq(scopeStatus string) runtime.Tree {
 	return runtime.NewLeaf(1, scopeStatus)
 }
 
 // FilterUsersEmailPrefix builds the "email_prefix" predicate of @filter-tree(scope).
-func FilterUsersEmailPrefix(scopePrefix string) *runtime.Tree {
+func FilterUsersEmailPrefix(scopePrefix string) runtime.Tree {
 	return runtime.NewLeaf(2, scopePrefix)
 }
 
 // FilterUsersUnscoped is the explicit, greppable opt-out: it renders TRUE.
-func FilterUsersUnscoped() *runtime.Tree { return runtime.Unscoped() }
+func FilterUsersUnscoped() runtime.Tree { return runtime.Unscoped() }
 
-func (q *Queries) FilterUsers(ctx context.Context, arg FilterUsersParams) ([]FilterUsersRow, error) {
+// scope is required (@filter-tree!; FilterUsersUnscoped() opts out).
+func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error) {
 	var key runtime.ShapeKey
-	if arg.Scope == nil {
+	if scope.IsZero() {
 		return nil, runtime.ErrFilterRequired
 	}
-	key.Trees = []string{arg.Scope.Encode()}
-	sqlText, binds, err := q.cache.GetTreeStyle(runtime.StyleQuestion, "FilterUsers", filterUsersFrags, key, arg.Scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
+	key.Trees = []string{scope.Encode()}
+	sqlText, binds, err := q.cache.GetTreeStyle(runtime.StyleQuestion, "FilterUsers", filterUsersFrags, key, scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
 	if err != nil {
 		return nil, err
 	}
-	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(arg.Scope))
+	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
 	q.hook(key.String(), sqlText)
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {

@@ -11,9 +11,25 @@ import (
 // predicate vocabulary. Values are opaque to the composer: they travel
 // exclusively as bind parameters. Construct trees only through the
 // generated per-query predicate constructors plus And/Or/Unscoped.
-type Tree struct {
+//
+// Tree is a value type, not a pointer, so that `nil` is not a Tree —
+// passing it to a required @filter-tree! argument does not compile:
+//
+//	cannot use nil as runtime.Tree value in argument to FilterUsers
+//
+// That matters because `nil` is the shape a forgotten scope takes. The
+// only zero Tree that survives compilation is one written out as
+// `runtime.Tree{}`, which nobody types by accident; it is still refused
+// at runtime with ErrFilterRequired, and Unscoped() remains the way to
+// say "no scope" on purpose.
+type Tree struct{ n *node }
+
+// node is the internal representation. Keeping it unexported is what
+// lets Tree be a value while the structure stays shared and cheap to
+// pass around.
+type node struct {
 	op   uint8 // opLeaf, opAnd, opOr, opTrue
-	kids []*Tree
+	kids []*node
 	pred int16
 	args []any
 }
@@ -25,37 +41,43 @@ const (
 	opTrue
 )
 
+// IsZero reports whether no tree was supplied. It distinguishes "the
+// caller did not decide" from Unscoped(), which is a decision.
+func (t Tree) IsZero() bool { return t.n == nil }
+
 // And combines subtrees conjunctively. And() with no children is TRUE.
-func And(ts ...*Tree) *Tree { return combine(opAnd, ts) }
+func And(ts ...Tree) Tree { return combine(opAnd, ts) }
 
 // Or combines subtrees disjunctively. Or() with no children is TRUE.
-func Or(ts ...*Tree) *Tree { return combine(opOr, ts) }
+func Or(ts ...Tree) Tree { return combine(opOr, ts) }
 
-func combine(op uint8, ts []*Tree) *Tree {
-	kids := make([]*Tree, 0, len(ts))
+func combine(op uint8, ts []Tree) Tree {
+	kids := make([]*node, 0, len(ts))
 	for _, t := range ts {
-		if t != nil {
-			kids = append(kids, t)
+		// A zero Tree carries no constraint, so it drops out of the
+		// combination rather than making the whole thing zero.
+		if t.n != nil {
+			kids = append(kids, t.n)
 		}
 	}
 	if len(kids) == 0 {
 		return Unscoped()
 	}
 	if len(kids) == 1 {
-		return kids[0]
+		return Tree{n: kids[0]}
 	}
-	return &Tree{op: op, kids: kids}
+	return Tree{n: &node{op: op, kids: kids}}
 }
 
 // NewLeaf is called by generated predicate constructors; user code
 // never calls it directly.
-func NewLeaf(pred int16, args ...any) *Tree {
-	return &Tree{op: opLeaf, pred: pred, args: args}
+func NewLeaf(pred int16, args ...any) Tree {
+	return Tree{n: &node{op: opLeaf, pred: pred, args: args}}
 }
 
 // Unscoped is the explicit, greppable opt-out of a required
 // @filter-tree!: it renders as TRUE.
-func Unscoped() *Tree { return &Tree{op: opTrue} }
+func Unscoped() Tree { return Tree{n: &node{op: opTrue}} }
 
 // TreeCaps bounds adversarially large trees (spec defaults).
 type TreeCaps struct {
@@ -66,19 +88,22 @@ type TreeCaps struct {
 var DefaultTreeCaps = TreeCaps{MaxNodes: 32, MaxDepth: 8}
 
 var (
-	// ErrFilterRequired is returned when a @filter-tree! parameter is
-	// nil; deliberate unscoped access must use the generated Unscoped
-	// constructor.
-	ErrFilterRequired = errors.New("sqletch: required @filter-tree parameter is nil (use the generated Unscoped() for deliberate opt-out)")
+	// ErrFilterRequired is returned when a @filter-tree! argument is the
+	// zero Tree; deliberate unscoped access must use the generated
+	// Unscoped constructor.
+	ErrFilterRequired = errors.New("sqletch: required @filter-tree argument is the zero Tree (use the generated Unscoped() for deliberate opt-out)")
 	ErrTreeTooLarge   = errors.New("sqletch: filter tree exceeds the configured caps")
 	ErrTreePredicate  = errors.New("sqletch: filter tree references an unknown predicate")
 )
 
 // validate checks caps and predicate ranges.
-func (t *Tree) validate(numPreds int, caps TreeCaps) error {
+func (t Tree) validate(numPreds int, caps TreeCaps) error {
+	if t.n == nil {
+		return nil
+	}
 	nodes := 0
-	var rec func(n *Tree, depth int) error
-	rec = func(n *Tree, depth int) error {
+	var rec func(n *node, depth int) error
+	rec = func(n *node, depth int) error {
 		nodes++
 		if nodes > caps.MaxNodes || depth > caps.MaxDepth {
 			return fmt.Errorf("%w (max %d nodes, depth %d)", ErrTreeTooLarge, caps.MaxNodes, caps.MaxDepth)
@@ -93,18 +118,18 @@ func (t *Tree) validate(numPreds int, caps TreeCaps) error {
 		}
 		return nil
 	}
-	return rec(t, 1)
+	return rec(t.n, 1)
 }
 
 // Encode is the canonical structural encoding (values excluded) used
 // in cache keys: leaves "p<idx>", nodes "&(...)"/"|(...)", TRUE "T".
-func (t *Tree) Encode() string {
-	if t == nil {
+func (t Tree) Encode() string {
+	if t.n == nil {
 		return "T"
 	}
 	var b strings.Builder
-	var rec func(n *Tree)
-	rec = func(n *Tree) {
+	var rec func(n *node)
+	rec = func(n *node) {
 		switch n.op {
 		case opTrue:
 			b.WriteByte('T')
@@ -127,16 +152,16 @@ func (t *Tree) Encode() string {
 			b.WriteByte(')')
 		}
 	}
-	rec(t)
+	rec(t.n)
 	return b.String()
 }
 
 // TreeArgs flattens leaf argument values in preorder — the order the
 // composer's tree-bind indices reference.
-func TreeArgs(t *Tree) []any {
+func TreeArgs(t Tree) []any {
 	var out []any
-	var rec func(n *Tree)
-	rec = func(n *Tree) {
+	var rec func(n *node)
+	rec = func(n *node) {
 		if n == nil {
 			return
 		}
@@ -148,6 +173,6 @@ func TreeArgs(t *Tree) []any {
 			rec(k)
 		}
 	}
-	rec(t)
+	rec(t.n)
 	return out
 }

@@ -854,20 +854,31 @@ ORDER BY o.id DESC;
 **Go** — one constructor per predicate, plus `And` / `Or` / `Unscoped`
 
 ```go
-func ListOrdersTenant(tenantID int64) *runtime.Tree
-func ListOrdersStatusEq(status string) *runtime.Tree
-func ListOrdersCreatedIn(from, to time.Time) *runtime.Tree
-func ListOrdersUnscoped() *runtime.Tree   // renders TRUE — the explicit opt-out
+func ListOrdersTenant(tenantID int64) runtime.Tree
+func ListOrdersStatusEq(status string) runtime.Tree
+func ListOrdersCreatedIn(from, to time.Time) runtime.Tree
+func ListOrdersUnscoped() runtime.Tree   // renders TRUE — the explicit opt-out
 
-type ListOrdersParams struct {
-    Scope *runtime.Tree // required: nil is an error, use ListOrdersUnscoped() to opt out
-}
+// The tree is an argument of a value type, so both ways of forgetting
+// it are refused by the compiler: omitting it is "not enough arguments",
+// and `nil` is not a runtime.Tree.
+func (q *Queries) ListOrders(
+    ctx context.Context,
+    scope runtime.Tree,           // @filter-tree!; ListOrdersUnscoped() opts out
+    arg ListOrdersParams,
+) ([]ListOrdersRow, error)
 ```
+
+The one zero that still compiles is `runtime.Tree{}`, written out in
+full — not something a caller produces by accident. It is refused at
+runtime with `ErrFilterRequired`. `Unscoped()` remains how you say "no
+scope" deliberately, and the two are distinguishable: `Tree{}` means
+the caller did not decide.
 
 ```go
 // A repository that does not hard-code its filtering:
 func (r *OrderRepo) List(ctx context.Context, scope *runtime.Tree) ([]gen.ListOrdersRow, error) {
-    return r.q.ListOrders(ctx, gen.ListOrdersParams{Scope: scope})
+    return r.q.ListOrders(ctx, scope, gen.ListOrdersParams{})
 }
 
 // Callers decide applicability and combination:

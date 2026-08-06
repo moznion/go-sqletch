@@ -29,7 +29,8 @@ SELECT o.id, o.total FROM orders AS o ORDER BY o.id;
 ```
 
 compiles as if you had written `WHERE o.tenant_id = :tenant_id`, and
-`tenant_id` appears in `ListOrdersParams` like any other parameter.
+`tenant_id` becomes a required argument of `ListOrders` — see
+[The parameter](#the-parameter).
 The SQL that is verified against the database **is** the scoped SQL —
 there is no runtime rewriting layer, and no window where the verified
 statement and the executed statement differ.
@@ -90,13 +91,49 @@ assert on the opt-out set.
 
 ## The parameter
 
-The policy parameter is an ordinary parameter: it lands in the
-affected queries' `Params` structs, typed by the oracle on PostgreSQL
-(where `param.type` is asserted like a `-- @param` hint) and by
-`param.type` on MySQL/SQLite (where it is mandatory). There is no
-ambient state and no context extraction — the generated API contract
-is unchanged, and forgetting the value is a compile error in *your*
-code, not a runtime leak.
+The policy parameter is typed by the oracle on PostgreSQL (where
+`param.type` is asserted like a `-- @param` hint) and by `param.type`
+on MySQL/SQLite (where it is mandatory). There is no ambient state and
+no context extraction.
+
+It is **an argument of the generated method**, not a field of the
+params struct:
+
+```go
+func (q *Queries) ListOrders(
+	ctx context.Context,
+	tenantID int64,               // policy tenant_scope
+	arg ListOrdersParams,
+) ([]ListOrdersRow, error)
+```
+
+The reason is that Go cannot make a struct field mandatory. A keyed
+composite literal that omits one compiles and yields the zero value,
+so a policy parameter kept as a field would let
+
+```go
+q.ListOrders(ctx, gen.ListOrdersParams{Limit: 20})   // tenant_id == 0
+```
+
+compile, run, and return the rows of no tenant at all — the woven
+predicate matching nothing rather than scoping the read. That failure
+is silent: no error, just an empty result that looks like "nothing
+matched". Only as an argument does forgetting the value fail to
+compile, which is what makes "you cannot forget it" true of *your*
+code and not only of the SQL.
+
+The residual is an argument given an explicit zero (`0`, `""`). That is
+a deliberate act rather than an oversight; policies still guarantee the
+predicate's presence, never its argument's correctness (see
+[Boundary](#boundary)). Unlike a `@filter-tree!` scope — whose type is a
+struct, so `nil` does not compile — a policy parameter is an ordinary
+`int64` or `string`, and its zero is an ordinary value of that type.
+There is no type-level way to exclude it.
+
+Adding a policy therefore breaks every call site of every query it
+touches, on purpose: a security control that could be adopted without
+anyone revisiting the callers would be one whose absence nobody
+notices either.
 
 ## Boundary
 

@@ -4,11 +4,13 @@ package gen
 
 import (
 	"context"
+
+	"github.com/moznion/go-sqletch/runtime"
 )
 
 // Querier lets user code mock the generated queries.
 type Querier interface {
-	FilterUsers(ctx context.Context, arg FilterUsersParams) ([]FilterUsersRow, error)
+	FilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error)
 	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (int64, error)
 	UsersInStatuses(ctx context.Context, arg UsersInStatusesParams) ([]UsersInStatusesRow, error)
