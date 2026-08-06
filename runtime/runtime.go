@@ -604,7 +604,11 @@ var ErrShapeNotExpanded = errors.New("sqletch: shape missing from the static exp
 
 // Lookup fetches a precomposed shape.
 func Lookup(shapes map[string]Expanded, key ShapeKey) (string, []int16, error) {
-	e, ok := shapes[key.String()]
+	// Indexing through stack scratch rather than key.String() keeps the
+	// encoding out of the string heap entirely — the map index of a
+	// string(...) conversion does not copy.
+	var buf [keyBufSize]byte
+	e, ok := shapes[string(key.appendTo(buf[:0]))]
 	if !ok {
 		return "", nil, ErrShapeNotExpanded
 	}

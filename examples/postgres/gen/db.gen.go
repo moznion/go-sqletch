@@ -43,6 +43,16 @@ func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	}
 }
 
+// hookTree is hook for a @filter-tree query. The tree's key segment is
+// derived here rather than at the call site so that a query without an
+// installed hook never encodes its tree twice.
+func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
+	if q.onQuery != nil {
+		key.Trees = []string{t.Encode()}
+		q.onQuery(key.String(), sql)
+	}
+}
+
 // Ptr is a convenience for presence parameters: Ptr("x") yields *string.
 func Ptr[T any](v T) *T { return &v }
 

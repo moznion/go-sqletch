@@ -292,6 +292,59 @@ func TestComposedCache_Concurrent(t *testing.T) {
 	}
 }
 
+// TestGetTree_DerivesTreeSegment pins the contract generated code
+// relies on: the cache derives the `;t=` key segment itself, so a call
+// site that passes a key without Trees lands on the same entry as one
+// that fills it in. That is what lets generated code stop encoding the
+// tree a second time for the OnQuery hook — and the hook's own
+// derivation must still spell out the identical key.
+func TestGetTree_DerivesTreeSegment(t *testing.T) {
+	frags := []Frag{
+		{Kind: Skel, Text: "SELECT id FROM t WHERE TRUE AND "},
+		{Kind: FilterTree, Cases: []Case{
+			{Text: "t.tenant_id = :tenant", ParamSpans: []Span{{14, 21}}, ParamIdx: []int16{0}},
+			{Text: "t.status = :status", ParamSpans: []Span{{11, 18}}, ParamIdx: []int16{0}},
+		}},
+	}
+	tree := And(NewLeaf(0, int64(7)), NewLeaf(1, "active"))
+	c := NewComposedCache(8)
+
+	// What generated code now passes: no Trees on the key.
+	sqlDerived, _, err := c.GetTree("Q", frags, ShapeKey{}, tree, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What a caller filling the segment in itself would pass.
+	sqlExplicit, _, err := c.GetTree("Q", frags, ShapeKey{Trees: []string{tree.Encode()}}, tree, DefaultTreeCaps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDerived != sqlExplicit {
+		t.Fatalf("derived and explicit tree keys composed differently:\n%q\nvs\n%q", sqlDerived, sqlExplicit)
+	}
+
+	c.mu.Lock()
+	n := len(c.m)
+	var stored ShapeKey
+	for _, e := range c.m {
+		stored = e.key
+	}
+	c.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the two forms must key to one entry, got %d", n)
+	}
+
+	// The key the hook spells out (hookTree's derivation) must equal the
+	// one the cache stored, `;t=` segment included.
+	hookKey := ShapeKey{Trees: []string{tree.Encode()}}
+	if got := hookKey.String(); got != stored.String() {
+		t.Errorf("hook key %q != cached key %q", got, stored.String())
+	}
+	if !strings.Contains(hookKey.String(), ";t=") {
+		t.Errorf("hook key lost the tree segment: %q", hookKey.String())
+	}
+}
+
 // TestComposedCache_FullKeyOnHit pins that entries are matched on the
 // full key, never on its string encoding alone (the encoding is an
 // index). A forged entry under a colliding map key must be rejected and

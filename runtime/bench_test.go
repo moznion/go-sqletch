@@ -179,25 +179,38 @@ var (
 	sinkKey  string
 )
 
-// BenchmarkGeneratedCallTree is the @filter-tree hot path.
+// BenchmarkGeneratedCallTree is the @filter-tree hot path. Generated
+// code leaves the `;t=` key segment to the cache, so with no hook
+// installed the tree is encoded once per call rather than twice;
+// with_hook is what observability costs on top.
 func BenchmarkGeneratedCallTree(b *testing.B) {
 	frags := benchTreeFrags()
 	cache := NewComposedCache(256)
 	tree := benchTree()
 	limit := int64(100)
 
-	b.ReportAllocs()
-	for b.Loop() {
-		var key ShapeKey
-		key.Trees = []string{tree.Encode()}
-		sqlText, binds, err := cache.GetTree("FilterUsers", frags, key, tree, DefaultTreeCaps)
-		if err != nil {
-			b.Fatal(err)
+	for _, hooked := range []bool{false, true} {
+		name := "no_hook"
+		if hooked {
+			name = "with_hook"
 		}
-		args := ResolveArgs(binds, []any{limit}, TreeArgs(tree))
-		sink = sqlText
-		sinkArgs = args
-		sinkKey = key.String()
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				var key ShapeKey
+				sqlText, binds, err := cache.GetTree("FilterUsers", frags, key, tree, DefaultTreeCaps)
+				if err != nil {
+					b.Fatal(err)
+				}
+				args := ResolveArgs(binds, []any{limit}, TreeArgs(tree))
+				sink = sqlText
+				sinkArgs = args
+				if hooked { // what hookTree does
+					key.Trees = []string{tree.Encode()}
+					sinkKey = key.String()
+				}
+			}
+		})
 	}
 }
 
@@ -270,6 +283,26 @@ func BenchmarkCacheGetShapes(b *testing.B) {
 		sqlText, _ := cache.Get("SearchUsers", frags, keys[i%len(keys)])
 		sink = sqlText
 		i++
+	}
+}
+
+// BenchmarkLookup is the static_expansion dispatch path: no composition
+// at all, just a canonical-key index into the precomposed table.
+func BenchmarkLookup(b *testing.B) {
+	shapes := map[string]Expanded{}
+	var keys []ShapeKey
+	for g := uint64(0); g < 16; g++ {
+		k := ShapeKey{Guards: g, Choices: []uint8{1}}
+		shapes[k.String()] = Expanded{SQL: "SELECT 1", ArgIdx: []int16{0, 1}}
+		keys = append(keys, k)
+	}
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		sqlText, _, err := Lookup(shapes, keys[i%len(keys)])
+		if err != nil {
+			b.Fatal(err)
+		}
+		sink = sqlText
 	}
 }
 
