@@ -44,8 +44,8 @@ func ptr[T any](v T) *T // exported as Ptr; examples alias it
 
 `pgx.Tx` satisfies `DBTX` — one transaction serves sqlc- and
 sqletch-generated code (spec: Generated API Conventions). The
-composed-SQL cache is on `Queries` (shared via `WithTx` copies, guarded
-by `sync.RWMutex`).
+composed-SQL cache is on `Queries` (shared via `WithTx` copies; hits are
+lock-free, misses take a mutex — see §4).
 
 ## 3. Per-query emission
 
