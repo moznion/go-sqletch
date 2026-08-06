@@ -667,6 +667,14 @@ type cacheEntry struct {
 }
 
 func newCacheEntry(mapKey string, key ShapeKey, sql string, binds []Bind) *cacheEntry {
+	// The composer sizes its bind slice from an upper bound that counts
+	// every @choose case, not just the selected one. That slack is free
+	// on the miss path but an entry outlives the call, so it is copied
+	// down to exact length here rather than retained for the life of
+	// the cache.
+	if cap(binds) > len(binds) {
+		binds = append(make([]Bind, 0, len(binds)), binds...)
+	}
 	e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, binds: binds}
 	if len(binds) > 0 {
 		e.argIdx = make([]int16, len(binds))
