@@ -125,8 +125,18 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		}
 	}
 
-	for name, src := range files {
-		formatted, err := format.Source(src)
+	return files, append(diags, formatFiles(files)...)
+}
+
+// formatFiles gofmts each generated file in place and reports the ones
+// that do not parse. It walks sorted names because the diagnostics it
+// emits carry no span: they would otherwise come out in map order, and
+// diagnostics.Sort cannot separate entries that share (file, offset,
+// code). Determinism is not conditional on the output being valid.
+func formatFiles(files map[string][]byte) []diagnostics.Diagnostic {
+	var diags []diagnostics.Diagnostic
+	for _, name := range sortedKeys(files) {
+		formatted, err := format.Source(files[name])
 		if err != nil {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision,
 				diagnostics.Span{}, "internal: generated %s does not gofmt: %v", name, err))
@@ -134,7 +144,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		}
 		files[name] = formatted
 	}
-	return files, diags
+	return diags
 }
 
 type queryGen struct {

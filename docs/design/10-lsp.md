@@ -75,6 +75,13 @@ mandatory header; unknown headers are skipped). Hand-rolled in
 `internal/lsp/jsonrpc.go` — the message vocabulary is small enough
 that a dependency is not worth its transitive weight.
 
+`Content-Length` sizes an allocation from a number the peer chose, so
+it is bounded (`maxContentLength`, 64 MiB — far above any document an
+editor sends, far below a size that threatens the process). Over the
+bound is a framing error; unbounded, a malformed frame is an
+out-of-memory abort, which takes the server down with nothing to
+report.
+
 Inbound bodies and params decode with `encoding/json/v2` (still
 stdlib): duplicate members and invalid UTF-8 are rejected, and member
 names match case-sensitively, as JSON-RPC requires. Outbound
@@ -189,6 +196,7 @@ stderr; the last good diagnostics stay published.
 ## 7. Testing
 
 - Framing: round-trip, multi-header parse, missing Content-Length,
+  oversized Content-Length (and a 1 MiB body that must still pass),
   EOF mid-message.
 - Positions: offset↔UTF-16 both directions over ASCII, CJK, emoji
   (surrogate pair), CRLF; out-of-range clamps.
