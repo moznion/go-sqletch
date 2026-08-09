@@ -24,7 +24,7 @@ codes).
 | SQLETCH007 | A construct at a clause that is not one of its slots (e.g. `@if-present` in a projection, `@in` inside a guarded body). The message names the slot rules. |
 | SQLETCH008 | An optional WHERE/HAVING conjunct whose body does not start with `AND`; or a `@filter-tree` that does not directly follow an unconditional `AND`, or whose conjunct continues after `@end` (its empty tree renders `TRUE`, which must substitute one whole conjunct). |
 | SQLETCH009 | Malformed `@choose`/`@order-by`/`@filter-tree` structure (a `@case` outside `@choose`, empty case list, duplicate `@default`, …). |
-| SQLETCH010 | Too many guard atoms for one query (the shape bitmask is 64 bits wide). |
+| SQLETCH010 | A construct exceeds the shape key's encoding: more than 64 guard atoms in one query (the bitmask is 64 bits wide), more than 64 `@order-by` keys in one block, or more than 255 `@choose` cases in one block (the `@default` body counts). These are fixed compiler limits — split the query rather than expecting a knob. |
 | SQLETCH011 | A positional placeholder (`$1`, `?`) in a template. Templates use `:name` parameters; the compiler owns placeholder emission. |
 | SQLETCH012 | A guarded construct inside another guarded body (rule R5). Flatten: multi-param `@if-present(a, b)` expresses conjunction. |
 | SQLETCH020 | A `.go` file listed in `queries:` does not parse. Templates are read syntactically, so the file must at least be valid Go syntax (it need not type-check). |

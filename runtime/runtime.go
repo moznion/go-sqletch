@@ -533,11 +533,38 @@ func countBinds(frags []Frag) int {
 // @choose parameter carries its zero value.
 var ErrChooseRequired = errors.New("sqletch: required @choose parameter has its zero value")
 
+// Structural limits of the ShapeKey encoding. The compiler refuses
+// templates that exceed them (SQLETCH010), so generated code can never
+// reach the checks below; they exist because silent truncation here
+// composes a DIFFERENT query's SQL — a wrong case, a wrong sort column
+// — with no error anywhere. internal/codegen pins these against the
+// scanner's copies.
+const (
+	// MaxOrderKeys: sequence elements pack as key<<1|desc into a uint8,
+	// and the duplicate-key mask below is 64 bits wide.
+	MaxOrderKeys = 64
+	// MaxChooseOrdinals: ShapeKey.Choices holds one uint8 per @choose
+	// block, counting the @default body.
+	MaxChooseOrdinals = 255
+)
+
+// ErrShapeKeyLimit reports a construct too large for the shape key's
+// encoding. Reaching it means codegen and the scanner disagree.
+var ErrShapeKeyLimit = errors.New("sqletch: construct exceeds the shape-key encoding limit")
+
 // ChooseOrdinal maps a generated enum value to the composer's case
 // ordinal. With a @default, enum 0 selects the default (ordinal
 // numNamed); named cases are 1..numNamed. Without a default, 0 is an
 // error.
 func ChooseOrdinal(v, numNamed int, hasDefault bool) (uint8, error) {
+	ordinals := numNamed
+	if hasDefault {
+		ordinals++
+	}
+	if ordinals > MaxChooseOrdinals {
+		return 0, fmt.Errorf("%w: %d @choose cases exceeds %d",
+			ErrShapeKeyLimit, ordinals, MaxChooseOrdinals)
+	}
 	switch {
 	case v == 0 && hasDefault:
 		return uint8(numNamed), nil
@@ -558,8 +585,12 @@ var ErrOrderKey = errors.New("sqletch: invalid @order-by key selection")
 // sequence, validating range and rejecting duplicate keys (the same
 // key in both directions makes no sense either).
 func OrderSeq[T ~int](vals []T, numKeys int) ([]uint8, error) {
+	if numKeys > MaxOrderKeys {
+		return nil, fmt.Errorf("%w: %d @order-by keys exceeds %d",
+			ErrShapeKeyLimit, numKeys, MaxOrderKeys)
+	}
 	seq := make([]uint8, 0, len(vals))
-	var seen uint32
+	var seen uint64
 	for _, v := range vals {
 		e := int(v)
 		k := e >> 1

@@ -79,7 +79,26 @@ func (c clauseCtx) String() string {
 	}
 }
 
-const maxGuards = 64
+// Structural limits of the shape key's encoding (runtime.ShapeKey).
+// They are compiler limits, not policy: past them the encoding decays
+// silently — a truncated @choose ordinal selects a different case's
+// SQL, a truncated @order-by element sorts by a different column — so
+// the scanner refuses the template rather than let an unverified shape
+// reach a database.
+// They are exported so the encoding's other end can pin them: see
+// TestShapeKeyLimitsAgree in internal/codegen.
+const (
+	// MaxGuards: one bit per guard atom in ShapeKey.Guards (uint64).
+	MaxGuards = 64
+	// MaxOrderKeys: elements pack as key<<1|desc into a uint8, and both
+	// shape.orderOptions and runtime.OrderSeq track used keys in a
+	// bitmask. 64 keeps the packing well inside uint8 and mirrors
+	// MaxGuards.
+	MaxOrderKeys = 64
+	// MaxChooseOrdinals: ShapeKey.Choices holds one uint8 ordinal per
+	// @choose block, counting the @default body.
+	MaxChooseOrdinals = 255
+)
 
 type fileScan struct {
 	path    string
@@ -1388,6 +1407,7 @@ func (fs *fileScan) finalize(file *QueryFile, upTo int) {
 	}
 	qb.flushSkeleton(fs, upTo)
 	fs.checkFilterTreeTail(qb.q)
+	fs.checkShapeKeyLimits(qb.q)
 	fs.assignGuardBits(qb.q)
 	file.Queries = append(file.Queries, qb.q)
 	fs.qb = nil
@@ -1477,6 +1497,33 @@ func (fs *fileScan) firstSignificantToken(text string) string {
 	}
 }
 
+// checkShapeKeyLimits rejects constructs whose selection space the
+// shape key cannot encode. Unlike the guard limit it cannot be folded
+// into assignGuardBits: these dimensions are per block, and a query may
+// carry several blocks, each of which should be reported.
+func (fs *fileScan) checkShapeKeyLimits(q *QueryTemplate) {
+	for _, it := range q.Items {
+		switch v := it.(type) {
+		case *OrderBy:
+			if n := len(v.Keys); n > MaxOrderKeys {
+				fs.errorf(diagnostics.CodeTooManyGuards, v.Span,
+					"@order-by(%s) declares %d sort keys; at most %d are supported",
+					v.Param, n, MaxOrderKeys)
+			}
+		case *Choose:
+			n := len(v.Cases)
+			if v.Default != nil {
+				n++
+			}
+			if n > MaxChooseOrdinals {
+				fs.errorf(diagnostics.CodeTooManyGuards, v.Span,
+					"@choose(%s) declares %d cases (counting @default); at most %d are supported",
+					v.Param, n, MaxChooseOrdinals)
+			}
+		}
+	}
+}
+
 func (fs *fileScan) assignGuardBits(q *QueryTemplate) {
 	seen := map[GuardAtom]int{}
 	for _, it := range q.Items {
@@ -1489,9 +1536,9 @@ func (fs *fileScan) assignGuardBits(q *QueryTemplate) {
 				continue
 			}
 			bit := len(q.GuardAtoms)
-			if bit >= maxGuards {
+			if bit >= MaxGuards {
 				fs.errorf(diagnostics.CodeTooManyGuards, ip.Span,
-					"a query may have at most %d guard conditions", maxGuards)
+					"a query may have at most %d guard conditions", MaxGuards)
 				return
 			}
 			seen[g] = bit

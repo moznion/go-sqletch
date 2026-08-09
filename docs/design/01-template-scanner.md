@@ -159,12 +159,26 @@ This is raw data for R9 (P3); the scanner itself only rejects
 malformed names (`SQLETCH002`) and positional refs (`$1`, `?` —
 `SQLETCH011`, "named parameters only").
 
-## 8. Guard-bit assignment
+## 8. Guard-bit assignment and shape-key limits
 
 Guard atoms get bits in first-appearance document order (stable across
 runs by construction). >64 atoms: `SQLETCH010`. Multiple blocks with
 the same guard *set* share nothing structurally (they remain separate
 fragments) but naturally share bits per atom.
+
+`checkShapeKeyLimits` enforces the encoding's other two bounds, same
+code: **≤64 `@order-by` keys per block** (sequence elements pack as
+`key<<1|desc` into a uint8, and the used-key masks in
+`shape.orderOptions` and `runtime.OrderSeq` are 64 bits) and **≤255
+`@choose` ordinals per block**, counting the `@default` body
+(`ShapeKey.Choices` is one uint8 per block).
+
+These are refusals, not policy knobs: past them the encoding truncates
+and composes a *different* query — the wrong `@choose` case, the wrong
+sort column — with no error at any layer. `runtime` re-checks both
+(`ErrShapeKeyLimit`) so a codegen/scanner disagreement surfaces as an
+error instead of wrong SQL, and `internal/codegen` pins the two ends'
+constants against each other.
 
 ## 9. Output invariants (checked by debug assertions + tests)
 
