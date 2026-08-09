@@ -30,9 +30,10 @@ goimports -w .                             # run after every change
 go run ./cmd/sqletch generate --config examples/postgres/sqletch.yaml
 go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=15s
 go test ./internal/codegen  -run '^$' -fuzz=FuzzComposeConformance -fuzztime=15s
+go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=15s
 ```
 
-Both fuzz targets run in CI for 30s. A crasher is written to the
+All three fuzz targets run in CI for 30s. A crasher is written to the
 package's `testdata/fuzz/<target>/`; commit it — that file *is* the
 regression test.
 

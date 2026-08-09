@@ -135,6 +135,8 @@ jobs:
         run: go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=30s
       - name: Compose/render differential fuzz (30s)
         run: go test ./internal/codegen -run '^$' -fuzz=FuzzComposeConformance -fuzztime=30s
+      - name: Provenance-flag drift fuzz (30s)
+        run: go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=30s
       # A crasher is written to testdata/fuzz/<target>/ inside the runner.
       # Without this the input is discarded with the runner and the finding
       # is unreproducible; commit the uploaded file to pin the regression.
@@ -146,6 +148,7 @@ jobs:
           path: |
             internal/template/testdata/fuzz/
             internal/codegen/testdata/fuzz/
+            internal/dialect/postgres/testdata/fuzz/
           if-no-files-found: ignore
 
   grammars:
