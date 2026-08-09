@@ -308,6 +308,90 @@ SELECT u.*, count(*) AS n FROM users AS u GROUP BY u.id, u.email, u.org_id;
 	assertNullable(t, got, []bool{false, false, true, true})
 }
 
+// Reasons are part of the explain contract: each verdict names the
+// gate that produced it, so a conservative verdict is auditable.
+func TestAnalyzeVerdicts_Reasons(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u.id, o.name, u.org_id, upper(u.email) AS e, count(*) AS n
+FROM users AS u LEFT JOIN orgs AS o ON o.id = u.org_id;
+`
+	f, diags := template.NewScanner(postgres.Profile{}).ScanFile("t.sql", []byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("scan: %+v", diags)
+	}
+	rs, err := ast.Renderings(postgres.Profile{}, f.Queries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := AnalyzeVerdicts(tree, rs[0], dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("id", 100, 1), col("name", 200, 2), col("org_id", 100, 3),
+		{Name: "e"}, {Name: "n"},
+	}}, cat(), map[string]bool{"e": false})
+	want := []Verdict{
+		{Nullable: false, Reason: "users.id is NOT NULL in the catalog"},
+		{Nullable: true, Reason: "orgs.name is null-extended by an outer join"},
+		{Nullable: true, Reason: "users.org_id is nullable in the catalog"},
+		{Nullable: false, Reason: "forced by null_overrides"},
+		{Nullable: false, Reason: "total function count()"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("verdicts = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("column %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestAnalyzeVerdicts_UntrustedReasons(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u.id FROM users AS u LEFT JOIN (SELECT o.id FROM orgs AS o) AS s ON s.id = u.org_id;
+`
+	got := analyzeVerdictsOf(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("id", 100, 1),
+	}})
+	wantReason := "narrowing disabled: statement contains a derived table, CTE, or set operation"
+	if !got[0].Nullable || got[0].Reason != wantReason {
+		t.Errorf("verdict = %+v, want nullable with reason %q", got[0], wantReason)
+	}
+
+	src = `-- name: Q :many
+SELECT u.email, count(*) AS n FROM users AS u GROUP BY ROLLUP(u.email);
+`
+	got = analyzeVerdictsOf(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("email", 100, 2), {Name: "n"},
+	}})
+	wantReason = "narrowing disabled: ROLLUP/CUBE/GROUPING SETS nulls grouping columns"
+	if !got[0].Nullable || got[0].Reason != wantReason {
+		t.Errorf("verdict = %+v, want nullable with reason %q", got[0], wantReason)
+	}
+	if got[1].Nullable {
+		t.Errorf("count(*) = %+v, must stay total under grouping sets", got[1])
+	}
+}
+
+func analyzeVerdictsOf(t *testing.T, src string, desc dialect.Desc) []Verdict {
+	t.Helper()
+	f, diags := template.NewScanner(postgres.Profile{}).ScanFile("t.sql", []byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("scan: %+v", diags)
+	}
+	rs, err := ast.Renderings(postgres.Profile{}, f.Queries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return AnalyzeVerdicts(tree, rs[0], desc, cat(), nil)
+}
+
 func assertNullable(t *testing.T, got, want []bool) {
 	t.Helper()
 	if len(got) != len(want) {

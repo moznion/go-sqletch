@@ -116,6 +116,12 @@ const (
 	CodeShapeCapReached Code = "SQLETCH304" // shape enumeration stopped at its cap (explain --max-shapes, verification.max_shapes)
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
+	// null_overrides hygiene: overrides are the analyzer's escape
+	// hatch and are applied by RESULT-COLUMN NAME, so a key that
+	// matches nothing is dead config and a key matching several
+	// same-named columns forces all of them at once.
+	CodeOverrideUnknownColumn   Code = "SQLETCH312" // null_overrides names no result column of the query
+	CodeOverrideAmbiguousColumn Code = "SQLETCH313" // null_overrides matches multiple same-named result columns
 )
 
 type Diagnostic struct {
