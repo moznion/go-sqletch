@@ -4,6 +4,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -31,12 +32,18 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 	key.Arities = []int32{int32(len(arg.Statuses))}
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UsersInStatuses", usersInStatusesFrags, key)
 	if err != nil {
+		q.observeReject("UsersInStatuses", err)
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.TenantID, arg.Statuses, arg.Limit}, nil)
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec("UsersInStatuses", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -44,9 +51,11 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 	for rows.Next() {
 		var i UsersInStatusesRow
 		if err := rows.Scan(&i.ID, &i.Email, &i.Status); err != nil {
+			q.observeExec("UsersInStatuses", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExec("UsersInStatuses", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

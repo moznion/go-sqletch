@@ -4,6 +4,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -32,13 +33,25 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	}
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UpdateUserProfile", updateUserProfileFrags, key)
 	if err != nil {
+		q.observeReject("UpdateUserProfile", err)
 		return 0, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.NewEmail, arg.Nickname, arg.ID}, nil)
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	res, err := q.db.ExecContext(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec("UpdateUserProfile", key, execStart, -1, err)
 		return 0, err
 	}
-	return res.RowsAffected()
+	n, rerr := res.RowsAffected()
+	if rerr != nil {
+		q.observeExec("UpdateUserProfile", key, execStart, -1, rerr)
+		return 0, rerr
+	}
+	q.observeExec("UpdateUserProfile", key, execStart, n, nil)
+	return n, nil
 }

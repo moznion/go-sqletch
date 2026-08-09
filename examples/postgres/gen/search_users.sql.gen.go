@@ -70,14 +70,20 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	}
 	ord0, err := runtime.ChooseOrdinal(int(arg.Sort), 3, true)
 	if err != nil {
+		q.observeReject("SearchUsers", err)
 		return nil, fmt.Errorf("SearchUsers: %w", err)
 	}
 	key.Choices = []uint8{ord0}
 	sqlText, argIdx := q.cache.Get("SearchUsers", searchUsersFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.OrganizationID, arg.Status, arg.EmailPrefix, arg.CreatedAfter, arg.Limit})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec("SearchUsers", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -85,9 +91,11 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	for rows.Next() {
 		var i SearchUsersRow
 		if err := rows.Scan(&i.ID, &i.Email, &i.Status, &i.CreatedAt); err != nil {
+			q.observeExec("SearchUsers", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExec("SearchUsers", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

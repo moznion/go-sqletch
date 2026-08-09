@@ -40,7 +40,7 @@ func (r *recordingObserver) ObserveCompose(query string, key ShapeKey, hit bool)
 	r.composes = append(r.composes, composeEvent{query: query, key: key.String(), hit: hit})
 }
 
-func (r *recordingObserver) ObserveExec(query string, _ ShapeKey, _ time.Duration, rows int64, err error) {
+func (r *recordingObserver) ObserveExec(query, _ string, _ time.Duration, rows int64, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.execs = append(r.execs, execEvent{query: query, rows: rows, err: err})
@@ -75,8 +75,8 @@ func (o *countingObserver) ObserveCompose(_ string, _ ShapeKey, hit bool) {
 		o.hits.Add(1)
 	}
 }
-func (o *countingObserver) ObserveExec(string, ShapeKey, time.Duration, int64, error) {}
-func (o *countingObserver) ObserveReject(string, error)                               {}
+func (o *countingObserver) ObserveExec(string, string, time.Duration, int64, error) {}
+func (o *countingObserver) ObserveReject(string, error)                             {}
 
 func keyG(g uint64) ShapeKey { return ShapeKey{Guards: g, Choices: []uint8{1}} }
 

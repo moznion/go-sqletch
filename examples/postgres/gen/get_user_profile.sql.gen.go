@@ -4,6 +4,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -35,10 +36,16 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	sqlText, argIdx := q.cache.Get("GetUserProfile", getUserProfileFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i GetUserProfileRow
 	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.OrgID); err != nil {
+		q.observeExec("GetUserProfile", key, execStart, -1, err)
 		return zero, err
 	}
+	q.observeExec("GetUserProfile", key, execStart, 1, nil)
 	return i, nil
 }

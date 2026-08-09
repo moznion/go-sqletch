@@ -121,8 +121,15 @@ type Observer interface {
 
 	// ObserveExec fires after a database call completes: duration,
 	// rows (returned for queries, affected for execs; -1 when the
-	// scan aborted early), and the driver error if any.
-	ObserveExec(query string, key ShapeKey, d time.Duration, rows int64, err error)
+	// count was unknown), and the driver error if any. It takes the
+	// key's canonical ENCODING, not a ShapeKey: generated code builds
+	// its key on the stack, and passing that value through an
+	// interface call would heap-allocate the key's slices on every
+	// call, observed or not — the string is built inside the observer
+	// guard, so only observed calls pay (implementation finding,
+	// 2026-08-09; ObserveCompose can pass the cache's retained key
+	// for free, which is why the two signatures differ).
+	ObserveExec(query, shapeKey string, d time.Duration, rows int64, err error)
 
 	// ObserveReject fires when a call is refused before any SQL is
 	// sent: ErrChooseRequired, ErrOrderKey, ErrFilterRequired,
@@ -208,6 +215,11 @@ func (q *Queries) SetObserver(o runtime.Observer) {
 	q.obs = o
 	q.cache.SetObserver(o)
 }
+
+// Cache exposes the composed-SQL cache for scrape-time Stats and
+// TopShapes — the wiring an exporter needs, without opening the
+// field itself.
+func (q *Queries) Cache() *runtime.ComposedCache { return q.cache }
 ```
 
 Per query method, around the existing call:
@@ -224,8 +236,13 @@ if q.obs != nil { q.obs.ObserveExec("SearchUsers", key, time.Since(start), n, er
 
 and every early-return validation branch (`ChooseOrdinal`,
 `OrderSeq`, required-tree, caps) reports `ObserveReject` before
-returning. `:one` reports rows 1 (or 0 on `ErrNoRows`); `:exec`
-reports `RowsAffected`; a scan abort reports -1 with the error.
+returning. `:one` reports rows 1; `:exec`/`:execrows` report
+`RowsAffected` (the database/sql flavor consults it only under the
+observer guard — some drivers make it a round-trip); any errored call
+reports rows -1. A @filter-tree query's exec event routes through a
+generated `observeExecTree` helper that folds the `;t=` key segment
+in under the observer guard — the call site never re-derives it,
+exactly the hookTree discipline.
 
 **Statically expanded queries** (`runtime.Lookup` path) have no cache
 and no composition cost: they emit `ObserveExec`/`ObserveReject` only.

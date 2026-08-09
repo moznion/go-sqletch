@@ -42,10 +42,16 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	sqlText, argIdx := q.cache.Get("UpdateUserProfile", updateUserProfileFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.Email, arg.Nickname, arg.ID})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i UpdateUserProfileRow
 	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.UpdatedAt); err != nil {
+		q.observeExec("UpdateUserProfile", key, execStart, -1, err)
 		return zero, err
 	}
+	q.observeExec("UpdateUserProfile", key, execStart, 1, nil)
 	return i, nil
 }

@@ -22,9 +22,16 @@ type Observer interface {
 
 	// ObserveExec fires from generated code after a database call
 	// completes: the call's duration, its row count (rows returned for
-	// queries, rows affected for execs; -1 when a scan aborted before
-	// the count was known), and the driver error if any.
-	ObserveExec(query string, key ShapeKey, d time.Duration, rows int64, err error)
+	// queries, rows affected for execs; -1 when the count was unknown
+	// — a driver error or an aborted scan), and the driver error if
+	// any. It receives the shape key as its canonical encoding, not a
+	// ShapeKey: generated code builds its key on the stack, and
+	// passing that through an interface call would heap-allocate the
+	// key's slices on every call, observed or not — the encoding is
+	// built inside the observer guard instead, so only observed calls
+	// pay for it. (ObserveCompose can pass the cache's retained key
+	// for free, which is why the two differ.)
+	ObserveExec(query, shapeKey string, d time.Duration, rows int64, err error)
 
 	// ObserveReject fires from generated code when a call is refused
 	// before any SQL is sent: [ErrChooseRequired], [ErrOrderKey],

@@ -5,6 +5,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -21,6 +22,7 @@ type Queries struct {
 	db      DBTX
 	cache   *runtime.ComposedCache
 	onQuery func(shapeKey, sql string)
+	obs     runtime.Observer
 }
 
 func New(db DBTX) *Queries {
@@ -28,17 +30,59 @@ func New(db DBTX) *Queries {
 }
 
 func (q *Queries) WithTx(tx *sql.Tx) *Queries {
-	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery}
+	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery, obs: q.obs}
 }
 
 // OnQuery installs an observability hook receiving the shape key and
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
+// SetObserver installs a runtime observer receiving compose, exec,
+// and reject events for every query on this Queries value and any
+// WithTx derivative (design doc 17). Install it before serving
+// traffic; Cache() exposes the same cache for scrape-time Stats and
+// TopShapes.
+func (q *Queries) SetObserver(o runtime.Observer) {
+	q.obs = o
+	q.cache.SetObserver(o)
+}
+
+// Cache exposes the composed-SQL cache for scrape-time inspection
+// (Stats, TopShapes). Mutating it is the generated code's business,
+// not the caller's.
+func (q *Queries) Cache() *runtime.ComposedCache { return q.cache }
+
 func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
 		q.onQuery(key.String(), sql)
 	}
+}
+
+// observeExec encodes the key only when an observer is installed: an
+// unobserved call must not pay for the canonical encoding.
+func (q *Queries) observeExec(query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+	if q.obs != nil {
+		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+	}
+}
+
+func (q *Queries) observeReject(query string, err error) {
+	if q.obs != nil {
+		q.obs.ObserveReject(query, err)
+	}
+}
+
+// observeExecResult consults RowsAffected only when an observer is
+// installed: some drivers make it a round-trip.
+func (q *Queries) observeExecResult(query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
+	if q.obs == nil {
+		return
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		n = -1
+	}
+	q.obs.ObserveExec(query, key.String(), time.Since(start), n, nil)
 }
 
 // hookTree is hook for a @filter-tree query. The tree's key segment is
@@ -49,6 +93,30 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 		key.Trees = []string{t.Encode()}
 		q.onQuery(key.String(), sql)
 	}
+}
+
+// observeExecTree is observeExec for a @filter-tree query: the tree's
+// key segment is folded in here, under the observer guard, so an
+// unobserved call never encodes its tree a second time (the same
+// trade hookTree makes).
+func (q *Queries) observeExecTree(query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
+	if q.obs != nil {
+		key.Trees = []string{t.Encode()}
+		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+	}
+}
+
+// ShapeSpace describes each query's reachable shape space, computed
+// at generate time (design doc 17): the enumerable dimensions' shape
+// count, whether that count is exact (large @order-by permutation
+// spaces saturate at MaxUint64), and whether unbounded dimensions
+// exist (@filter-tree structure; @in arity on expanding dialects) —
+// under which used-vs-reachable coverage is a floor, never a ratio.
+var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
+	"FilterUsers":       {Enumerable: 1, Exact: true, Unbounded: true},
+	"SearchUsers":       {Enumerable: 8, Exact: true, Unbounded: false},
+	"UpdateUserProfile": {Enumerable: 4, Exact: true, Unbounded: false},
+	"UsersInStatuses":   {Enumerable: 1, Exact: true, Unbounded: true},
 }
 
 // Ptr is a convenience for presence parameters: Ptr("x") yields *string.

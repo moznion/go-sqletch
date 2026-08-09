@@ -36,8 +36,13 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID, arg.Limit})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec("ListAuditLogs", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -45,9 +50,11 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	for rows.Next() {
 		var i ListAuditLogsRow
 		if err := rows.Scan(&i.ID, &i.ActorID, &i.Action, &i.CreatedAt); err != nil {
+			q.observeExec("ListAuditLogs", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExec("ListAuditLogs", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
