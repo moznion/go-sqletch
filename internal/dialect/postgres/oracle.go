@@ -94,6 +94,7 @@ func (o *Oracle) PlanText(ctx context.Context, sql string) (string, error) {
 
 const snapshotQuery = `
 SELECT n.nspname, c.relname, c.oid,
+       (c.relhassubclass AND c.relkind = 'r') AS has_children,
        a.attname, a.attnum, a.atttypid, t.typname, a.attnotnull, a.atthasdef
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -117,12 +118,14 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 		var schema, rel, col, typ string
 		var oid, typOID uint32
 		var att int16
-		var notNull, hasDef bool
-		if err := rows.Scan(&schema, &rel, &oid, &col, &att, &typOID, &typ, &notNull, &hasDef); err != nil {
+		var hasChildren, notNull, hasDef bool
+		if err := rows.Scan(&schema, &rel, &oid, &hasChildren, &col, &att, &typOID, &typ, &notNull, &hasDef); err != nil {
 			return nil, err
 		}
 		if cur == nil || cur.OID != oid {
-			cat.Tables = append(cat.Tables, cache.Table{Schema: schema, Name: rel, OID: oid})
+			cat.Tables = append(cat.Tables, cache.Table{
+				Schema: schema, Name: rel, OID: oid, HasChildren: hasChildren,
+			})
 			cur = &cat.Tables[len(cat.Tables)-1]
 		}
 		cur.Cols = append(cur.Cols, cache.Column{

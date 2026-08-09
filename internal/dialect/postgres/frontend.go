@@ -263,7 +263,7 @@ func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType, nullable bool)
 	}
 	return dialect.RelRef{
 		Alias: alias, Table: rv.Relname, Schema: rv.Schemaname,
-		Loc:  int(rv.Location),
+		Only: !rv.Inh, Loc: int(rv.Location),
 		Join: join, NullableSide: nullable,
 	}
 }

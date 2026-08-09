@@ -76,6 +76,16 @@ SrcRel narrowing is therefore gated on **provenance trust**:
   are attributed to the target relation only); sublinks are not
   FROM-reachable and stay transparent.
 
+**Plain inheritance** (2026-08): a PostgreSQL inheritance child can
+DROP an inherited NOT NULL (proven on PG 16), so a parent scan can
+return NULL where `attnotnull` says otherwise. The catalog records
+`has_children` (`relhassubclass AND relkind = 'r'`; omitempty keeps
+inheritance-free catalogs byte-identical) and the analyzer refuses to
+narrow such a table's columns unless the reference is `FROM ONLY`
+(`RelRef.Only`) or a skeleton IS NOT NULL filter applies. Partitioned
+parents are exempt: partitions cannot drop an inherited NOT NULL
+(42P16, pinned by the probe).
+
 Views need no special case under this rule: PostgreSQL and MySQL
 report the *view's own* identity (whose catalog rows carry the
 engine's per-view nullability), and SQLite resolves through to a base
@@ -169,10 +179,13 @@ P6 maps `nullable=false` → value field + direct `Scan`; `nullable=true`
 → `optional.Option[T]` field (go-optional adoption, design 17; the
 scan still targets a `*T` temporary — pgx handles NULL→nil — and
 converts with `optional.FromNillable`).
-The analysis result is recorded in the oracle cache entry
-(`columns[].nullable`) so warm runs skip `Analyze` recomputation only
-if inputs (catalog fp) match — cheap either way, but keeps cache
-entries self-describing for `explain`.
+Verdicts are NOT recorded in oracle cache entries (amended 2026-08:
+the original plan to store `columns[].nullable` was never wired up —
+the field sat vestigially false — and storing it would couple
+byte-pinned oracle facts to the analyzer's version and the overrides
+config). The analysis is recomputed from catalog + parse tree on
+every run; `explain` gets its verdicts (with reasons, §2a) from that
+recomputation.
 
 ## 5. Testing & acceptance criteria
 

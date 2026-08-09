@@ -53,13 +53,19 @@ type EntryType struct {
 	Name string `json:"name"`
 }
 
+// EntryColumn records what the ORACLE said about a result column —
+// and nothing derived: nullability verdicts are recomputed from the
+// catalog and the parse tree on every run (design 05 §4), so they
+// never enter these byte-pinned files. (A vestigial always-false
+// "nullable" field was removed 2026-08 without a FormatVersion bump:
+// old entries still decode — v1 tolerates the extra field — and
+// re-derivation gates were regenerated.)
 type EntryColumn struct {
 	Name     string `json:"name"`
 	OID      uint32 `json:"oid"`
 	TypeName string `json:"type_name"`
 	SrcRel   uint32 `json:"src_rel,omitempty"`
 	SrcAtt   int16  `json:"src_att,omitempty"`
-	Nullable bool   `json:"nullable"`
 }
 
 // OracleEntry is one cached Describe result, self-describing with its

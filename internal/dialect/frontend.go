@@ -38,8 +38,12 @@ type RelRef struct {
 	Alias  string // alias if present, else ""
 	Table  string // relation name ("" for subselects etc.)
 	Schema string // explicit schema/database qualifier, "" when unqualified
-	Loc    int    // byte offset of the relation in the parsed SQL
-	Join   JoinType
+	// Only marks a `FROM ONLY table` reference (PostgreSQL): the scan
+	// excludes inheritance children, so child rows cannot undermine
+	// the parent's NOT NULL declarations.
+	Only bool
+	Loc  int // byte offset of the relation in the parsed SQL
+	Join JoinType
 	// NullableSide reports whether this relation sits on a
 	// null-extended side of an outer join in this statement (right of
 	// LEFT, left of RIGHT, either side of FULL) — the nullability

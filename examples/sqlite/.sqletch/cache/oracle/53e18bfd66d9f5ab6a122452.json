@@ -14,14 +14,12 @@
       "oid": 3,
       "type_name": "text",
       "src_rel": 1,
-      "src_att": 3,
-      "nullable": false
+      "src_att": 3
     },
     {
       "name": "n",
       "oid": 0,
-      "type_name": "",
-      "nullable": false
+      "type_name": ""
     }
   ]
 }

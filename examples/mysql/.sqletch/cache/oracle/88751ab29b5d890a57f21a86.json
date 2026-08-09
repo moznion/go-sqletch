@@ -18,24 +18,21 @@
       "oid": 8,
       "type_name": "bigint",
       "src_rel": 1,
-      "src_att": 1,
-      "nullable": false
+      "src_att": 1
     },
     {
       "name": "email",
       "oid": 253,
       "type_name": "varchar",
       "src_rel": 1,
-      "src_att": 2,
-      "nullable": false
+      "src_att": 2
     },
     {
       "name": "status",
       "oid": 253,
       "type_name": "varchar",
       "src_rel": 1,
-      "src_att": 3,
-      "nullable": false
+      "src_att": 3
     }
   ]
 }
