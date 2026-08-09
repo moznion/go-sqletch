@@ -157,6 +157,10 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 		if err := errors.Join(err1, err2, err3, err4, err5, err6); err != nil {
 			return nil, fmt.Errorf("snapshot row %d: %w", i, err)
 		}
+		// go-mysql's GetString is zero-copy over pooled row buffers;
+		// anything retained past res.Close() must own its bytes, or a
+		// later query on the connection rewrites the catalog in place.
+		tbl, col, typ = strings.Clone(tbl), strings.Clone(col), strings.Clone(typ)
 		if cur == nil || cur.Name != tbl {
 			cat.Tables = append(cat.Tables, cache.Table{
 				Schema: schema, Name: tbl, OID: uint32(len(cat.Tables) + 1),
@@ -184,7 +188,8 @@ func (o *Oracle) ServerVersion(ctx context.Context) (string, error) {
 		return "", toOracleError(err)
 	}
 	defer res.Close()
-	return res.GetString(0, 0)
+	v, err := res.GetString(0, 0)
+	return strings.Clone(v), err // GetString aliases pooled buffers
 }
 
 func (o *Oracle) catalog(ctx context.Context) (*cache.Catalog, error) {
@@ -204,7 +209,8 @@ func (o *Oracle) schemaName() (string, error) {
 		return "", toOracleError(err)
 	}
 	defer res.Close()
-	return res.GetString(0, 0)
+	s, err := res.GetString(0, 0)
+	return strings.Clone(s), err // GetString aliases pooled buffers
 }
 
 // binaryCharset is the MySQL collation id for binary data; string-ish
