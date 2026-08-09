@@ -719,7 +719,10 @@ The alias `bucket` is defined in the constant skeleton, which is why
 
 Data-grid sorting: any subset of a closed key set, in any order, each
 ascending or descending — without `@choose`'s factorial case count.
-Each key expression is verified once.
+Each key expression is verified once. One block declares at most **64
+keys** (SQLETCH010); `@choose` allows at most **255 cases** counting
+`@default`. Both are fixed limits of the shape key's encoding, well
+past any hand-written query.
 
 ```
 @order-by(param)

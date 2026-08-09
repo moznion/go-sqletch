@@ -185,6 +185,38 @@ func TestChooseOrdinal(t *testing.T) {
 	}
 }
 
+// The compiler rejects these templates, so these paths are unreachable
+// from generated code. They are pinned because the failure they replace
+// was silent: case 257 of 300 used to truncate to ordinal 0 and compose
+// the FIRST case's SQL, and key 128 used to sort by key 0.
+func TestShapeKeyEncodingLimits(t *testing.T) {
+	if _, err := ChooseOrdinal(1, MaxChooseOrdinals, false); err != nil {
+		t.Errorf("%d cases is the limit and must be accepted: %v", MaxChooseOrdinals, err)
+	}
+	// One named case too many, counting the default.
+	if _, err := ChooseOrdinal(1, MaxChooseOrdinals, true); !errors.Is(err, ErrShapeKeyLimit) {
+		t.Errorf("%d cases + @default must be ErrShapeKeyLimit, got %v", MaxChooseOrdinals, err)
+	}
+	if _, err := ChooseOrdinal(1, MaxChooseOrdinals+1, false); !errors.Is(err, ErrShapeKeyLimit) {
+		t.Errorf("%d cases must be ErrShapeKeyLimit, got %v", MaxChooseOrdinals+1, err)
+	}
+
+	if _, err := OrderSeq([]int{(MaxOrderKeys - 1) << 1}, MaxOrderKeys); err != nil {
+		t.Errorf("%d keys is the limit and must be accepted: %v", MaxOrderKeys, err)
+	}
+	if _, err := OrderSeq([]int{0}, MaxOrderKeys+1); !errors.Is(err, ErrShapeKeyLimit) {
+		t.Errorf("%d keys must be ErrShapeKeyLimit, got %v", MaxOrderKeys+1, err)
+	}
+	// The duplicate-key mask must cover every key the limit allows: the
+	// old uint32 stopped detecting repeats from key 32 on.
+	for _, k := range []int{0, 31, 32, MaxOrderKeys - 1} {
+		e := k << 1
+		if _, err := OrderSeq([]int{e, e}, MaxOrderKeys); !errors.Is(err, ErrOrderKey) {
+			t.Errorf("key %d selected twice must be ErrOrderKey, got %v", k, err)
+		}
+	}
+}
+
 func TestBuildArgs(t *testing.T) {
 	v := "x"
 	vals := []any{&v, int64(7), nil}

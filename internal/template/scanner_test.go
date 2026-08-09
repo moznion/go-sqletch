@@ -512,6 +512,96 @@ func TestScan_GuardLimit(t *testing.T) {
 	}
 }
 
+// The shape key packs each @order-by selection as key<<1|desc in a
+// uint8 and tracks used keys in a bitmask. Past the limit both the
+// compiler's enumeration and the runtime's duplicate check decay
+// silently — the 65th key used to compose as key 0 — so the scanner
+// refuses the template instead.
+func TestScan_OrderByKeyLimit(t *testing.T) {
+	orderBy := func(n int) string {
+		var b strings.Builder
+		b.WriteString("-- name: Wide :many\nSELECT t.id FROM t\n@order-by(sort)\n")
+		for i := range n {
+			b.WriteString("@key(k")
+			b.WriteString(itoa(i))
+			b.WriteString(")\nt.c")
+			b.WriteString(itoa(i))
+			b.WriteString("\n")
+		}
+		b.WriteString("@end\n;\n")
+		return b.String()
+	}
+
+	src := orderBy(MaxOrderKeys)
+	if _, diags := scan(t, src); hasCode(diags, diagnostics.CodeTooManyGuards) {
+		t.Errorf("%d keys is the limit and must be accepted, got:\n%s",
+			MaxOrderKeys, renderAll(diags, src))
+	}
+
+	over := orderBy(MaxOrderKeys + 1)
+	diags := mustCode(t, over, diagnostics.CodeTooManyGuards)
+	if !strings.Contains(diags, "sort keys") {
+		t.Errorf("the message must name what overflowed:\n%s", diags)
+	}
+}
+
+// @choose ordinals are uint8 in the shape key, so a case past 255 used
+// to select a different case's SQL at runtime with no error.
+func TestScan_ChooseCaseLimit(t *testing.T) {
+	choose := func(n int) string {
+		var b strings.Builder
+		b.WriteString("-- name: Many :many\nSELECT t.id FROM t\n@choose(mode)\n")
+		for i := range n {
+			b.WriteString("@case(c")
+			b.WriteString(itoa(i))
+			b.WriteString(")\nORDER BY t.c")
+			b.WriteString(itoa(i))
+			b.WriteString("\n")
+		}
+		b.WriteString("@end\n;\n")
+		return b.String()
+	}
+
+	src := choose(MaxChooseOrdinals)
+	if _, diags := scan(t, src); hasCode(diags, diagnostics.CodeTooManyGuards) {
+		t.Errorf("%d cases is the limit and must be accepted, got:\n%s",
+			MaxChooseOrdinals, renderAll(diags, src))
+	}
+
+	over := choose(MaxChooseOrdinals + 1)
+	diags := mustCode(t, over, diagnostics.CodeTooManyGuards)
+	if !strings.Contains(diags, "cases") {
+		t.Errorf("the message must name what overflowed:\n%s", diags)
+	}
+}
+
+// The @default body occupies an ordinal too, so it counts against the
+// same budget — otherwise MaxChooseOrdinals named cases plus a default
+// would encode ordinal 256 as 0.
+func TestScan_ChooseDefaultCountsTowardLimit(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("-- name: Many :many\nSELECT t.id FROM t\n@choose(mode)\n")
+	for i := range MaxChooseOrdinals {
+		b.WriteString("@case(c")
+		b.WriteString(itoa(i))
+		b.WriteString(")\nORDER BY t.c")
+		b.WriteString(itoa(i))
+		b.WriteString("\n")
+	}
+	b.WriteString("@default\nORDER BY t.id\n@end\n;\n")
+	mustCode(t, b.String(), diagnostics.CodeTooManyGuards)
+}
+
+func mustCode(t *testing.T, src string, code diagnostics.Code) string {
+	t.Helper()
+	_, diags := scan(t, src)
+	rendered := renderAll(diags, src)
+	if !hasCode(diags, code) {
+		t.Fatalf("want %s, got:\n%s", code, rendered)
+	}
+	return rendered
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

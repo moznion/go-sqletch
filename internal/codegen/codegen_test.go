@@ -156,6 +156,30 @@ ORDER BY 1;
 // for every enumerable shape, the runtime composer over the generated
 // fragment table must produce byte-identical SQL to the verification
 // renderer, and identical parameter binding order.
+// The scanner rejects oversized constructs and the runtime defends
+// against them; both ends must agree on where the line is, or the
+// compiler accepts a template whose composition then errors — or
+// worse, silently truncates. This package is the only one that imports
+// both, so the pin lives here.
+func TestShapeKeyLimitsAgree(t *testing.T) {
+	if template.MaxOrderKeys != runtime.MaxOrderKeys {
+		t.Errorf("MaxOrderKeys: scanner %d, runtime %d",
+			template.MaxOrderKeys, runtime.MaxOrderKeys)
+	}
+	if template.MaxChooseOrdinals != runtime.MaxChooseOrdinals {
+		t.Errorf("MaxChooseOrdinals: scanner %d, runtime %d",
+			template.MaxChooseOrdinals, runtime.MaxChooseOrdinals)
+	}
+	// The packed element key<<1|desc must stay inside a uint8, and
+	// shape.orderOptions tracks used keys in a uint64.
+	if max := (runtime.MaxOrderKeys-1)<<1 | 1; max > 255 {
+		t.Errorf("packed order element %d overflows uint8", max)
+	}
+	if runtime.MaxOrderKeys > 64 {
+		t.Errorf("MaxOrderKeys %d overflows the used-key mask", runtime.MaxOrderKeys)
+	}
+}
+
 func TestComposeConformance(t *testing.T) {
 	conformanceOver(t, postgres.Profile{}, runtime.StyleDollar)
 }

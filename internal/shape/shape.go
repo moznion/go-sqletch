@@ -160,7 +160,10 @@ func orderOptions(numKeys int, emit func([]uint8) bool) bool {
 		return false
 	}
 	cur := make([]uint8, 0, numKeys)
-	var used uint32
+	// 64 bits: the scanner caps a block at template.MaxOrderKeys keys.
+	// A narrower mask would stop marking the high keys as used, and rec
+	// would then re-select them forever.
+	var used uint64
 	var rec func() bool
 	rec = func() bool {
 		for k := range numKeys {
