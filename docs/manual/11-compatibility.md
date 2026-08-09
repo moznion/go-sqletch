@@ -134,6 +134,21 @@ committed before the record existed keep working unchanged.
 If step 2 or 3 surfaces a new diagnostic on an unchanged template, that
 is a bug in the release — the promises above say it should not happen.
 
+### One-time step: `server_version` now means what it says
+
+The pin used to be compared by **major only** on PostgreSQL and
+MySQL — everything you wrote after the first dot was discarded, so
+`server_version: "8.4"` quietly accepted a MySQL 8.0 server. It is now
+a dotted prefix on every dialect (what SQLite always did).
+
+Nothing changes for a major-only pin (`"16"`, `"8"`), which is the
+common case. If you pinned a minor, a run that connects may now report
+SQLETCH200 where it used to pass — that is the pin doing the job it
+looked like it was doing. Either point the DSN at a server the pin
+actually describes, or shorten the pin (the diagnostic's hint spells
+both options). Note that changing the pin re-keys the cache: it is a
+fingerprint input, so the next run is cold.
+
 ### One-time step: the `.gen.go` rename
 
 Generated files used to be `<query>.sql.go`, `db.go`, `querier.go`;

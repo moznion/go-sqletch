@@ -26,7 +26,7 @@ func TestConfig_RecordVersion(t *testing.T) {
 	// form is what the drift diagnostic must be able to quote.
 	var det Detected
 	cfg := Config{ServerVersion: "16", Detected: &det}
-	if err := cfg.recordVersion("16.4 (Debian 16.4-1.pgdg120+1)", "PostgreSQL", false); err != nil {
+	if err := cfg.recordVersion("16.4 (Debian 16.4-1.pgdg120+1)", "PostgreSQL"); err != nil {
 		t.Fatal(err)
 	}
 	if det.ServerVersion != "16.4 (Debian 16.4-1.pgdg120+1)" {
@@ -36,7 +36,7 @@ func TestConfig_RecordVersion(t *testing.T) {
 
 func TestConfig_RecordVersion_FillsSinkWithoutAPin(t *testing.T) {
 	var det Detected
-	if err := (Config{Detected: &det}).recordVersion("8.0.36-log", "MySQL", false); err != nil {
+	if err := (Config{Detected: &det}).recordVersion("8.0.36-log", "MySQL"); err != nil {
 		t.Fatal(err)
 	}
 	if det.ServerVersion != "8.0.36-log" {
@@ -47,27 +47,13 @@ func TestConfig_RecordVersion_FillsSinkWithoutAPin(t *testing.T) {
 func TestConfig_RecordVersion_PinStillEnforced(t *testing.T) {
 	// Detection must not weaken the existing pin check (SQLETCH200).
 	var det Detected
-	err := (Config{ServerVersion: "16", Detected: &det}).recordVersion("15.2", "PostgreSQL", false)
+	err := (Config{ServerVersion: "16", Detected: &det}).recordVersion("15.2", "PostgreSQL")
 	var vme *VersionMismatchError
 	if !errors.As(err, &vme) {
 		t.Fatalf("pin mismatch must still fail, got %v", err)
 	}
 	if vme.Actual != "15.2" || vme.Pinned != "16" || vme.Server != "PostgreSQL" {
 		t.Errorf("unexpected mismatch error: %+v", vme)
-	}
-}
-
-func TestConfig_RecordVersion_PrefixMatchIsSQLiteOnly(t *testing.T) {
-	// SQLite's major is always 3, so its pin compares as a dotted
-	// prefix; the other engines compare majors.
-	if err := (Config{ServerVersion: "3.50"}).recordVersion("3.50.4", "SQLite", true); err != nil {
-		t.Errorf("3.50 must accept 3.50.4: %v", err)
-	}
-	if err := (Config{ServerVersion: "3.50"}).recordVersion("3.5.4", "SQLite", true); err == nil {
-		t.Error("3.50 must reject 3.5.4")
-	}
-	if err := (Config{ServerVersion: "16"}).recordVersion("16.4", "PostgreSQL", false); err != nil {
-		t.Errorf("major pin 16 must accept 16.4: %v", err)
 	}
 }
 

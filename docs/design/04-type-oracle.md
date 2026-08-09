@@ -55,7 +55,13 @@ func Acquire(ctx context.Context, cfg config.Database)
 
 - `cfg.DSN` set → connect, verify pinned `server_version` matches
   (`SQLETCH200` on mismatch — the pin is authoritative, not the
-  server), apply schema, return.
+  server), apply schema, return. The pin is a DOTTED PREFIX on every
+  dialect (`devdb.versionPinMatch`): `"16"` accepts every 16.x,
+  `"16.4"` only 16.4.x. Both sides are reduced by
+  `cache.NumericVersionPrefix` first, so the build suffixes engines
+  attach (`16.4 (Debian …)`, `8.0.36-log`) neither defeat a pin nor
+  let one through. PostgreSQL and MySQL compared majors only until
+  v0.5, which silently discarded everything after the first dot.
 - else → testcontainers `postgres:<server_version>` with a tmpfs data
   dir, apply schema, return; `cleanup` terminates the container.
 - Schema application: `cfg.Schema` (ordered globs of plain `.sql`) —
@@ -104,10 +110,11 @@ rendering (keeps the committed dir from accreting garbage).
 
 ### 3.1 Generation-environment record (`env-<fp>.json`)
 
-The fingerprint pins the *pinned* `server_version` (a major, e.g.
-`"16"`), so two servers that satisfy the same pin — 16.4 and 16.9 —
-produce entries the cache cannot tell apart. The sidecar records what
-a run actually connected to, so a later run can:
+The fingerprint pins the *configured* `server_version`, which is a
+dotted prefix and in practice a major (`"16"`), so two servers that
+satisfy the same pin — 16.4 and 16.9 — produce entries the cache
+cannot tell apart. The sidecar records what a run actually connected
+to, so a later run can:
 
 ```json
 {

@@ -82,7 +82,7 @@ func acquireMySQL(ctx context.Context, cfg Config) (*gomysqlclient.Conn, string,
 		}
 		actual, _ := r.GetString(0, 0)
 		r.Close()
-		if err := cfg.recordVersion(actual, "MySQL", false); err != nil {
+		if err := cfg.recordVersion(actual, "MySQL"); err != nil {
 			closeAll()
 			return nil, "", func() {}, err
 		}

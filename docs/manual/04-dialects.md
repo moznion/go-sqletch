@@ -10,7 +10,7 @@ compiler for free, and the generated driver flavor.
 | --- | --- | --- | --- |
 | Tier | 1 (oracle infers everything) | 2 (annotation-assisted) | 2 (annotation-assisted) |
 | Dev database | container or DSN | container or DSN; **or none** (`database.oracle: native`) | **in-process; nothing external** |
-| `server_version` pin | major (e.g. `"16"`) | major (e.g. `"8.4"`) | dotted prefix (e.g. `"3"`, `"3.50"`) |
+| `server_version` pin | dotted prefix (e.g. `"16"`, `"16.4"`) | dotted prefix (e.g. `"8"`, `"8.4"`) | dotted prefix (e.g. `"3"`, `"3.50"`) |
 | Parameter types | inferred (Describe) | `-- @param` mandatory | `-- @param` mandatory |
 | Result types | wire protocol | wire protocol | declared types / affinity; `-- @column` for expressions |
 | Placeholders | `$n` (shared params reuse a number) | `?` per occurrence | `?` per occurrence |

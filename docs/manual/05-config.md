@@ -53,9 +53,12 @@ policies:                      # cross-query policies (see the policies chapter)
 - **`server_version`** does three jobs: selects the auto-managed dev
   database image, is validated against whatever DSN you point at
   (mismatch = SQLETCH200), and is part of the cache fingerprint — the
-  oracle's answers are pinned to a version. PostgreSQL/MySQL compare
-  the major version; SQLite compares a dotted prefix (`"3.50"`
-  matches `3.50.x`).
+  oracle's answers are pinned to a version. Every dialect compares it
+  as a **dotted prefix**: `"16"` accepts every 16.x, `"16.4"` only
+  16.4.x, and `"8.4"` rejects a MySQL 8.0 server. Pin as loosely as
+  your schema tolerates — a deeper pin is stricter, and changing it
+  re-keys the cache (it is a fingerprint input, so the next run is
+  cold).
 - **`database.dsn`** is per-dialect: a PostgreSQL URL, a go-sql-driver
   MySQL DSN, or a SQLite file path. Empty means auto-managed:
   a disposable container (PostgreSQL/MySQL) or a temp file (SQLite).
@@ -103,9 +106,12 @@ policies:                      # cross-query policies (see the policies chapter)
 
 ## Server environment drift
 
-`server_version` pins a *major*, so 16.4 and 16.9 both satisfy
-`"16"` — and the committed cache cannot tell entries typed by one
-from entries typed by the other. Every run that contacts a server
+`server_version` is a prefix, and the usual pin is a major — so 16.4
+and 16.9 both satisfy `"16"`, and the committed cache cannot tell
+entries typed by one from entries typed by the other. (Pinning
+`"16.4"` closes that gap for the *pin*, at the cost of a cold rebuild
+on every patch bump; most projects should not.) Every run that
+contacts a server
 therefore records what it connected to in `env-<fp>.json`, beside the
 cache it produced, and refuses to extend a cache that came from a
 different server:

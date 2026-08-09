@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/moznion/go-sqletch/internal/cache"
 )
 
 type Config struct {
@@ -20,9 +22,10 @@ type Config struct {
 	// public CASCADE) before applying it, so repeated runs are
 	// idempotent. Never point this at a database you care about.
 	DSN string
-	// ServerVersion is the pinned major version (e.g. "16" or
-	// "16.4"); it selects the container image and is validated against
-	// whatever we connect to.
+	// ServerVersion is the pinned version, a dotted prefix: "16"
+	// accepts every 16.x, "16.4" only 16.4.x (versionPinMatch). It
+	// selects the container image and is validated against whatever we
+	// connect to.
 	ServerVersion string
 	// SchemaSQL is executed in order after connecting (plain SQL —
 	// schema files are read by the caller).
@@ -49,18 +52,14 @@ func (c Config) wantVersion() bool { return c.ServerVersion != "" || c.Detected 
 
 // recordVersion hands the reported version to the caller's sink and
 // validates the pin. A nil Detected means "not interested".
-func (c Config) recordVersion(actual, server string, prefixMatch bool) error {
+func (c Config) recordVersion(actual, server string) error {
 	if c.Detected != nil {
 		c.Detected.ServerVersion = actual
 	}
 	if c.ServerVersion == "" {
 		return nil
 	}
-	ok := sameMajor(c.ServerVersion, actual)
-	if prefixMatch {
-		ok = versionPrefixMatch(c.ServerVersion, actual)
-	}
-	if !ok {
+	if !versionPinMatch(c.ServerVersion, actual) {
 		return &VersionMismatchError{Pinned: c.ServerVersion, Actual: actual, Server: server}
 	}
 	return nil
@@ -141,7 +140,7 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 			closeAll()
 			return nil, func() {}, err
 		}
-		if err := cfg.recordVersion(actual, "PostgreSQL", false); err != nil {
+		if err := cfg.recordVersion(actual, "PostgreSQL"); err != nil {
 			closeAll()
 			return nil, func() {}, err
 		}
@@ -177,13 +176,24 @@ func hasSchema(stmts []string) bool {
 	return false
 }
 
-func sameMajor(pinned, actual string) bool {
-	return major(pinned) == major(actual)
-}
-
-func major(v string) string {
-	if i := strings.IndexAny(v, ". "); i >= 0 {
-		return v[:i]
+// versionPinMatch reports whether a server reporting `actual`
+// satisfies `server_version: "<pinned>"`. The pin is a DOTTED PREFIX
+// of the version: "16" accepts every 16.x, "16.4" accepts only 16.4
+// and its patch releases.
+//
+// PostgreSQL and MySQL used to compare majors only, which silently
+// discarded everything the user wrote after the first dot: a pin of
+// "8.4" accepted a MySQL 8.0 server, even though 8.0 and 8.4 differ in
+// ways the oracle's answers depend on. Prefix matching is what SQLite
+// already did, and makes the pin mean what it looks like it means.
+//
+// Both sides are reduced to their leading numeric run first, so the
+// build noise engines attach to a version ("16.4 (Debian …)",
+// "8.0.36-log") neither defeats a pin nor lets one through.
+func versionPinMatch(pinned, actual string) bool {
+	p, a := cache.NumericVersionPrefix(pinned), cache.NumericVersionPrefix(actual)
+	if p == "" || a == "" {
+		return false // an unreadable version satisfies nothing
 	}
-	return v
+	return a == p || strings.HasPrefix(a, p+".")
 }

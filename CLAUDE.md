@@ -262,6 +262,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   shared by all three dialects) maps to SQLETCH200 against
   `config.Config.Path` via `cli.versionPinDiag`, in both pipeline.Run
   and explain --analyze. Exit 1, and it reaches `--format json`/LSP.
+  The pin is a DOTTED PREFIX on every dialect
+  (`devdb.versionPinMatch`, both sides reduced by
+  `cache.NumericVersionPrefix`): `"16"` accepts any 16.x, `"16.4"`
+  only 16.4.x. PG/MySQL compared majors only until v0.5, which
+  silently discarded whatever the user wrote after the first dot
+  (`"8.4"` accepted MySQL 8.0) — do not "restore" that.
 - Editor grammars (doc 11, editors/): TextMate INJECTION grammar into
   source.sql (selector excludes string|comment so directive-shaped
   comments still win at line start); tree-sitter grammar keeps SQL as

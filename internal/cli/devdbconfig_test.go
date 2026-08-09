@@ -116,4 +116,48 @@ func TestRun_VersionPinMismatchIsDiagnostic(t *testing.T) {
 	if d.Span.File != cfgPath {
 		t.Errorf("span file = %q, want the config file %q", d.Span.File, cfgPath)
 	}
+	// The hint must spell a pin that actually matches: the numeric run
+	// of what the server reported, plus the looser prefix most users
+	// want. Pasting it back must not reproduce the mismatch.
+	if !strings.Contains(d.Hint, `server_version: "3.`) {
+		t.Errorf("hint must spell the connected engine's version: %q", d.Hint)
+	}
+	if !strings.Contains(d.Hint, `"3"`) {
+		t.Errorf("hint must offer the shorter prefix: %q", d.Hint)
+	}
+}
+
+// A pin the engine satisfies at a coarser depth than the mismatch
+// suggests: the hint's own suggestion must be accepted on the next run.
+func TestRun_VersionPinHintIsPasteable(t *testing.T) {
+	dir := t.TempDir()
+	cfg, diags := config.Load(writeSQLiteProject(t, dir, "1.0", "dev.sqlite3"))
+	if diagnostics.HasErrors(diags) {
+		t.Fatalf("config: %v", diags)
+	}
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := findCode(res.Diags, diagnostics.CodeServerVersionMismatch)
+	if d == nil {
+		t.Fatalf("want %s, got %v", diagnostics.CodeServerVersionMismatch, res.Diags)
+	}
+	suggested := strings.TrimSuffix(strings.SplitN(d.Hint, `server_version: "`, 2)[1], `"`)
+	if i := strings.Index(suggested, `"`); i >= 0 {
+		suggested = suggested[:i]
+	}
+
+	dir2 := t.TempDir()
+	cfg2, diags := config.Load(writeSQLiteProject(t, dir2, suggested, "dev.sqlite3"))
+	if diagnostics.HasErrors(diags) {
+		t.Fatalf("config: %v", diags)
+	}
+	res2, err := Run(context.Background(), cfg2, ModeCheck, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := findCode(res2.Diags, diagnostics.CodeServerVersionMismatch); d != nil {
+		t.Errorf("the hint suggested %q, which still mismatches: %s", suggested, d.Message)
+	}
 }

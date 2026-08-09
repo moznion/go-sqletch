@@ -63,7 +63,20 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 	}
 	d := diagnostics.Errorf(diagnostics.CodeServerVersionMismatch,
 		diagnostics.Span{File: cfg.Path}, "%v", vme)
-	d.Hint = fmt.Sprintf("set `server_version: \"%s\"`, or point database.dsn at a matching server", vme.Actual)
+	// Spell the pin the way the user should write it: the numeric run,
+	// without the build noise the server reports ("16.4 (Debian …)").
+	// The pin is a dotted prefix, so this exact string is the strictest
+	// pin the connected server satisfies — say so, since a looser one
+	// is usually what the user wants.
+	pin := cache.NumericVersionPrefix(vme.Actual)
+	if pin == "" {
+		pin = vme.Actual
+	}
+	hint := fmt.Sprintf("set `server_version: %q`", pin)
+	if major, _, cut := strings.Cut(pin, "."); cut {
+		hint += fmt.Sprintf(" — or a shorter prefix like %q, which accepts every %s.x", major, major)
+	}
+	d.Hint = hint + "; or point database.dsn at a matching server"
 	return d, true
 }
 
