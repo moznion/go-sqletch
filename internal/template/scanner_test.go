@@ -575,6 +575,32 @@ func TestScan_ChooseCaseLimit(t *testing.T) {
 	}
 }
 
+// Bind plans address the params struct with an int16, so a query past
+// MaxParams would have its indices narrowed in codegen and bind the
+// wrong values. Nobody writes such a query by hand; it is refused
+// because the alternative is silent.
+func TestScan_ParamLimit(t *testing.T) {
+	query := func(n int) string {
+		var b strings.Builder
+		b.WriteString("-- name: Many :many\nSELECT t.id FROM t\nWHERE TRUE\n")
+		for i := range n {
+			b.WriteString("  AND t.c = :p")
+			b.WriteString(itoa(i))
+			b.WriteString("\n")
+		}
+		b.WriteString(";\n")
+		return b.String()
+	}
+
+	src := query(MaxParams)
+	if _, diags := scan(t, src); hasCode(diags, diagnostics.CodeTooManyParams) {
+		t.Errorf("%d parameters is the limit and must be accepted", MaxParams)
+	}
+	if diags := mustCode(t, query(MaxParams+1), diagnostics.CodeTooManyParams); !strings.Contains(diags, "parameters") {
+		t.Errorf("the message must name what overflowed:\n%s", diags)
+	}
+}
+
 // The @default body occupies an ordinal too, so it counts against the
 // same budget — otherwise MaxChooseOrdinals named cases plus a default
 // would encode ordinal 256 as 0.

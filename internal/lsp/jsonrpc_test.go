@@ -86,6 +86,27 @@ func TestConn_ReadMissingContentLength(t *testing.T) {
 	}
 }
 
+// Content-Length sizes an allocation from a number the peer chose, so
+// it needs a ceiling: without one, "Content-Length: 999999999999" is a
+// terabyte allocation and the server dies before it can reject the
+// message. The bound must be reported as a framing error, and it must
+// not fire on an ordinary large payload (a big didChange on a real
+// file).
+func TestConn_ReadRejectsOversizedContentLength(t *testing.T) {
+	wire := fmt.Sprintf("Content-Length: %d\r\n\r\n", maxContentLength+1)
+	c := newConn(strings.NewReader(wire), io.Discard)
+	if _, err := c.read(); err == nil || !strings.Contains(err.Error(), "Content-Length") {
+		t.Fatalf("oversized Content-Length must be a framing error, got %v", err)
+	}
+
+	// A 1 MiB document change stays well inside the bound.
+	body := `{"jsonrpc":"2.0","method":"x","params":{"t":"` + strings.Repeat("a", 1<<20) + `"}}`
+	ok := fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(body), body)
+	if _, err := newConn(strings.NewReader(ok), io.Discard).read(); err != nil {
+		t.Fatalf("a 1 MiB message must still be read: %v", err)
+	}
+}
+
 func TestConn_WriteFraming(t *testing.T) {
 	var buf bytes.Buffer
 	c := newConn(strings.NewReader(""), &buf)

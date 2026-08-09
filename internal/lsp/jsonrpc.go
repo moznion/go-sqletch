@@ -63,6 +63,11 @@ func newConn(r io.Reader, w io.Writer) *conn {
 	return &conn{r: bufio.NewReader(r), w: w}
 }
 
+// maxContentLength bounds one inbound JSON-RPC body. LSP payloads are
+// documents and edits: 64 MiB is far above any source file an editor
+// will send and far below a size that threatens the process.
+const maxContentLength = 64 << 20
+
 func (c *conn) read() (*Message, error) {
 	length := -1
 	for {
@@ -89,6 +94,14 @@ func (c *conn) read() (*Message, error) {
 	}
 	if length < 0 {
 		return nil, errors.New("lsp: missing Content-Length header")
+	}
+	if length > maxContentLength {
+		// The header sizes an allocation from a number the peer chose.
+		// Without a ceiling a malformed frame is an out-of-memory abort
+		// — which takes the server down with no diagnostic — rather
+		// than a framing error it can report and resynchronize from.
+		return nil, fmt.Errorf("lsp: Content-Length %d exceeds the %d-byte limit",
+			length, maxContentLength)
 	}
 	body := make([]byte, length)
 	if _, err := io.ReadFull(c.r, body); err != nil {

@@ -152,10 +152,44 @@ ORDER BY 1;
 `,
 }
 
-// TestComposeConformance is the load-bearing test of the whole design:
-// for every enumerable shape, the runtime composer over the generated
-// fragment table must produce byte-identical SQL to the verification
-// renderer, and identical parameter binding order.
+// Generation must be deterministic even on the internal-error path:
+// these diagnostics carry no span, so nothing downstream can reorder
+// them back into a stable sequence.
+func TestFormatFilesDiagnosticsAreOrdered(t *testing.T) {
+	var first []string
+	for range 8 {
+		files := map[string][]byte{
+			"c.gen.go":  []byte("package p\nfunc ("),
+			"a.gen.go":  []byte("package p\nfunc ("),
+			"b.gen.go":  []byte("package p\nfunc ("),
+			"ok.gen.go": []byte("package p\n"),
+		}
+		diags := formatFiles(files)
+		if len(diags) != 3 {
+			t.Fatalf("diags = %d, want 3: %+v", len(diags), diags)
+		}
+		var got []string
+		for _, d := range diags {
+			got = append(got, d.Message)
+		}
+		if first == nil {
+			first = got
+		}
+		for i := range got {
+			if got[i] != first[i] {
+				t.Fatalf("diagnostic order varies between runs:\n%v\nvs\n%v", got, first)
+			}
+		}
+		if !strings.Contains(got[0], "a.gen.go") || !strings.Contains(got[2], "c.gen.go") {
+			t.Errorf("diagnostics must be ordered by file name: %v", got)
+		}
+		// The valid file is still formatted.
+		if string(files["ok.gen.go"]) != "package p\n" {
+			t.Errorf("ok.gen.go = %q", files["ok.gen.go"])
+		}
+	}
+}
+
 // The scanner rejects oversized constructs and the runtime defends
 // against them; both ends must agree on where the line is, or the
 // compiler accepts a template whose composition then errors — or
@@ -180,6 +214,10 @@ func TestShapeKeyLimitsAgree(t *testing.T) {
 	}
 }
 
+// TestComposeConformance is the load-bearing test of the whole design:
+// for every enumerable shape, the runtime composer over the generated
+// fragment table must produce byte-identical SQL to the verification
+// renderer, and identical parameter binding order.
 func TestComposeConformance(t *testing.T) {
 	conformanceOver(t, postgres.Profile{}, runtime.StyleDollar)
 }
