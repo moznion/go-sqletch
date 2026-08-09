@@ -128,14 +128,17 @@ type Observer interface {
 	// call, observed or not — the string is built inside the observer
 	// guard, so only observed calls pay (implementation finding,
 	// 2026-08-09; ObserveCompose can pass the cache's retained key
-	// for free, which is why the two signatures differ).
-	ObserveExec(query, shapeKey string, d time.Duration, rows int64, err error)
+	// for free, which is why the two signatures differ). The context
+	// enables trace correlation and metric exemplars; ObserveCompose
+	// carries none because the cache API takes none — the exec event
+	// repeats the key, so traces lose nothing.
+	ObserveExec(ctx context.Context, query, shapeKey string, d time.Duration, rows int64, err error)
 
 	// ObserveReject fires when a call is refused before any SQL is
 	// sent: ErrChooseRequired, ErrOrderKey, ErrFilterRequired,
 	// ErrTreeTooLarge, ErrTreePredicate, ErrShapeKeyLimit. Classify
 	// with errors.Is, never by string.
-	ObserveReject(query string, err error)
+	ObserveReject(ctx context.Context, query string, err error)
 }
 
 // SetObserver installs an observer on the cache (compose events).
@@ -231,7 +234,7 @@ start := time.Time{}
 if q.obs != nil { start = time.Now() }
 rows, err := q.db.Query(ctx, sqlText, args...)
 // ... existing scan loop counts n ...
-if q.obs != nil { q.obs.ObserveExec("SearchUsers", key, time.Since(start), n, err) }
+if q.obs != nil { q.obs.ObserveExec(ctx, "SearchUsers", key.String(), time.Since(start), n, err) }
 ```
 
 and every early-return validation branch (`ChooseOrdinal`,
@@ -280,18 +283,24 @@ so the OTel dependency graph never touches `runtime/` or consumers
 who skip it. Surface:
 
 ```go
-// New returns an Observer recording to the given MeterProvider, plus
-// a Registration whose Collect callbacks poll cache.Stats() and
-// TopShapes() at scrape time.
-func New(mp metric.MeterProvider, opts ...Option) *Observer
-func (o *Observer) Bind(name string, q interface{ SetObserver(runtime.Observer) }, c *runtime.ComposedCache, space map[string]runtime.ShapeSpaceInfo)
+// Metrics owns the instrument set; Bind wires one generated Queries
+// value in (its observer, its cache's scrape-time Stats/TopShapes,
+// and its ShapeSpace registry) under an `instance` label.
+func New(mp metric.MeterProvider, opts ...Option) (*Metrics, error)
+
+type Queries interface { // every generated package satisfies this
+	SetObserver(runtime.Observer)
+	Cache() *runtime.ComposedCache
+}
+func (m *Metrics) Bind(instance string, q Queries, space map[string]runtime.ShapeSpaceInfo) (*Binding, error)
+func (b *Binding) Close() error // unregisters the scrape callback
 ```
 
-(`Bind`'s exact shape is implementation detail; the doc-level point is
-one call wires a generated `Queries` + its cache + its `ShapeSpace`
+One call wires a generated `Queries` + its cache + its `ShapeSpace`
 into the meter, with an `instance` label per bind — `New(db)` creates
 a cache per `Queries`, so multi-instance apps either bind each or
-share one `Queries`.)
+share one `Queries`. Options: `WithTopShapes(n)` (clamped to 20),
+`WithUsedShapeBound(n)` (default 4096).
 
 Instruments (OTel names; the Prometheus exporter renders the usual
 `sqletch_*_total` forms). `query` is the only per-event label — it is
