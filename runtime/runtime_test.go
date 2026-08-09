@@ -217,6 +217,41 @@ func TestShapeKeyEncodingLimits(t *testing.T) {
 	}
 }
 
+// Bind.Elem is an int16, so an @in list past 32767 elements used to
+// wrap: element 32768 bound the WHOLE slice (Elem went negative, which
+// ResolveArgs reads as "bind the value whole") and element 65538 bound
+// element 1. Both are silent — the arity is caller data on expanding
+// dialects, and a bulk IN list reaches these sizes.
+func TestInListArityLimit(t *testing.T) {
+	frags := []Frag{{Kind: InList, ParamIdx: []int16{0}, Text: "IN (SELECT NULL WHERE 0)"}}
+	compose := func(arity int32) ([]Bind, error) {
+		_, binds, err := ComposeTreeStyle(StyleQuestion, frags,
+			ShapeKey{Arities: []int32{arity}}, Tree{}, DefaultTreeCaps)
+		return binds, err
+	}
+
+	binds, err := compose(MaxInArity)
+	if err != nil {
+		t.Fatalf("arity %d is the limit and must compose: %v", MaxInArity, err)
+	}
+	if len(binds) != MaxInArity {
+		t.Errorf("binds = %d, want %d", len(binds), MaxInArity)
+	}
+	// Every element is selected exactly once, in order, and none wrapped.
+	for i, b := range binds {
+		if b.Elem != int16(i+1) {
+			t.Fatalf("bind %d has Elem %d, want %d", i, b.Elem, i+1)
+			break
+		}
+	}
+
+	for _, arity := range []int32{MaxInArity + 1, 65538} {
+		if _, err := compose(arity); !errors.Is(err, ErrShapeKeyLimit) {
+			t.Errorf("arity %d must be ErrShapeKeyLimit, got %v", arity, err)
+		}
+	}
+}
+
 func TestBuildArgs(t *testing.T) {
 	v := "x"
 	vals := []any{&v, int64(7), nil}

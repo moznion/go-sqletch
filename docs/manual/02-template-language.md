@@ -954,7 +954,12 @@ no-setup version (`go run .`), and `examples/postgres/`,
   independent bindings; placeholders are numbered per occurrence.
 - The runtime enforces tree caps — default 32 nodes, depth 8,
   configurable via `filter_tree_caps` in `sqletch.yaml` and baked into
-  the generated code. Exceeding them returns `runtime.ErrTreeTooLarge`.
+  the generated code. Exceeding them returns `runtime.ErrTreeTooLarge`,
+  and the check runs before anything walks the tree, so raising the
+  caps for large trees costs work only on trees that are accepted.
+- One tree contributes at most 32767 predicate arguments in total
+  (`runtime.MaxTreeArgs`) regardless of the configured caps — bind
+  indices are 16-bit. Also `ErrTreeTooLarge`.
 - Queries using `@filter-tree` cannot use strict static expansion (the
   tree space is unbounded); their audit surface is the predicate
   vocabulary, the caps, and `sqletch explain`.

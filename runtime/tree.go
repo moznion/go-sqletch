@@ -95,20 +95,36 @@ var (
 	ErrTreePredicate  = errors.New("sqletch: filter tree references an unknown predicate")
 )
 
-// validate checks caps and predicate ranges.
-func (t Tree) validate(numPreds int, caps TreeCaps) error {
+// MaxTreeArgs bounds the predicate arguments one tree may contribute.
+// Bind indices are int16 and the composer accumulates one per argument
+// across the whole tree, so past this the base wraps negative and
+// ResolveArgs indexes out of range. TreeCaps has no upper bound of its
+// own — a project may configure MaxNodes freely — so this is checked
+// against the value, not the caps.
+const MaxTreeArgs = 32767
+
+// checkCaps enforces the size caps alone: node count, depth, and the
+// argument budget. It is separate from validate because it must run
+// BEFORE anything else walks the tree — the encoder that builds the
+// cache key recurses without a depth bound of its own, so an
+// unvalidated tree would overflow the stack rather than be rejected.
+//
+// Every traversal here is bounded: the counters trip within
+// caps.MaxNodes nodes and caps.MaxDepth frames.
+func (t Tree) checkCaps(caps TreeCaps) error {
 	if t.n == nil {
 		return nil
 	}
-	nodes := 0
+	nodes, args := 0, 0
 	var rec func(n *node, depth int) error
 	rec = func(n *node, depth int) error {
 		nodes++
 		if nodes > caps.MaxNodes || depth > caps.MaxDepth {
 			return fmt.Errorf("%w (max %d nodes, depth %d)", ErrTreeTooLarge, caps.MaxNodes, caps.MaxDepth)
 		}
-		if n.op == opLeaf && (n.pred < 0 || int(n.pred) >= numPreds) {
-			return fmt.Errorf("%w: %d", ErrTreePredicate, n.pred)
+		args += len(n.args)
+		if args > MaxTreeArgs {
+			return fmt.Errorf("%w (max %d predicate arguments)", ErrTreeTooLarge, MaxTreeArgs)
 		}
 		for _, k := range n.kids {
 			if err := rec(k, depth+1); err != nil {
@@ -120,8 +136,39 @@ func (t Tree) validate(numPreds int, caps TreeCaps) error {
 	return rec(t.n, 1)
 }
 
+// validate checks caps and predicate ranges.
+func (t Tree) validate(numPreds int, caps TreeCaps) error {
+	if err := t.checkCaps(caps); err != nil {
+		return err
+	}
+	if t.n == nil {
+		return nil
+	}
+	var rec func(n *node) error
+	rec = func(n *node) error {
+		if n.op == opLeaf && (n.pred < 0 || int(n.pred) >= numPreds) {
+			return fmt.Errorf("%w: %d", ErrTreePredicate, n.pred)
+		}
+		for _, k := range n.kids {
+			if err := rec(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return rec(t.n)
+}
+
 // Encode is the canonical structural encoding (values excluded) used
 // in cache keys: leaves "p<idx>", nodes "&(...)"/"|(...)", TRUE "T".
+//
+// The walk is unbounded recursion, so callers must have passed the tree
+// through checkCaps first — the cache entry point does, and generated
+// code only reaches Encode after a successful compose. Encode cannot
+// enforce that itself: it does not receive the caps, and rejecting on
+// a built-in bound would collapse the encoding of legitimate trees in
+// projects that raised filter_tree_caps, which is a cache-key
+// collision (distinct trees sharing composed SQL).
 func (t Tree) Encode() string {
 	if t.n == nil {
 		return "T"
