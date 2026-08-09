@@ -122,6 +122,34 @@ func TestLoad_TreeCaps(t *testing.T) {
 	}
 }
 
+// verification.max_shapes is the shape budget `check --exhaustive`
+// spends; unset means the default, and the value must be raisable so a
+// query whose shape space is large is verifiable at all.
+func TestLoad_VerificationMaxShapes(t *testing.T) {
+	dir := t.TempDir()
+	cfg, diags := Load(write(t, dir, "sqletch.yaml", validYAML))
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if cfg.Verification.MaxShapes != DefaultVerificationMaxShapes {
+		t.Errorf("default verification.max_shapes = %d, want %d",
+			cfg.Verification.MaxShapes, DefaultVerificationMaxShapes)
+	}
+
+	cfg2, diags := Load(write(t, dir, "custom.yaml", validYAML+"verification:\n  max_shapes: 100000\n"))
+	if len(diags) != 0 {
+		t.Fatal(diags)
+	}
+	if cfg2.Verification.MaxShapes != 100000 {
+		t.Errorf("custom verification.max_shapes = %d, want 100000", cfg2.Verification.MaxShapes)
+	}
+
+	bad := write(t, dir, "bad.yaml", validYAML+"verification:\n  max_shapes: -1\n")
+	if _, diags := Load(bad); !hasConfigCode(diags, diagnostics.CodeConfigInvalid) {
+		t.Errorf("negative verification.max_shapes must be SQLETCH301, got %+v", diags)
+	}
+}
+
 func hasConfigCode(diags []diagnostics.Diagnostic, code diagnostics.Code) bool {
 	for _, d := range diags {
 		if d.Code == code {

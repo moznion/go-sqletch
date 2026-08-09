@@ -38,12 +38,12 @@ func TestCLIColdWarmRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "db/schema.sql", cliSchema)
 	writeFile(t, dir, "queries/users.sql", cliQuery)
-	writeConfig := func(dsn string) {
-		writeFile(t, dir, "sqletch.yaml", `version: 1
+	baseConfig := func(dsn string) string {
+		return `version: 1
 dialect: postgres
 server_version: "16"
 database:
-  dsn: `+dsn+`
+  dsn: ` + dsn + `
 schema:
   files: [db/schema.sql]
 queries: [queries/*.sql]
@@ -54,7 +54,10 @@ cache:
   path: .sqletch/cache
 static_expansion:
   queries: [SearchUsers]
-`)
+`
+	}
+	writeConfig := func(dsn string) {
+		writeFile(t, dir, "sqletch.yaml", baseConfig(dsn))
 	}
 	writeConfig(dsn)
 	configPath := filepath.Join(dir, "sqletch.yaml")
@@ -145,6 +148,29 @@ static_expansion:
 	}
 	if !strings.Contains(out, "shapes prepared and planned") {
 		t.Errorf("exhaustive summary missing: %s", out)
+	}
+
+	// 6a. verification.max_shapes is the exhaustive budget: a cap the
+	// query outgrows fails the check (never a silent partial pass), and
+	// raising it makes the same query verifiable again. Without the
+	// second half the cap would be a wall, not a budget.
+	writeFile(t, dir, "sqletch.yaml", baseConfig(dsn)+"verification:\n  max_shapes: 2\n")
+	code, _, errOut = runCLI("check", true)
+	if code != cli.ExitDiagnostics {
+		t.Fatalf("exhaustive over budget: exit %d, want %d\n%s", code, cli.ExitDiagnostics, errOut)
+	}
+	// Same code as explain's cap: one diagnostic for "shape enumeration
+	// stopped at its cap", differing only in whose cap it was.
+	if !strings.Contains(errOut, string(diagnostics.CodeShapeCapReached)) ||
+		!strings.Contains(errOut, "exceeds the exhaustive-check cap of 2 shapes") ||
+		!strings.Contains(errOut, "verification.max_shapes") {
+		t.Errorf("over-budget diagnostic must be %s and name the cap and the config key:\n%s",
+			diagnostics.CodeShapeCapReached, errOut)
+	}
+	writeFile(t, dir, "sqletch.yaml", baseConfig(dsn)+"verification:\n  max_shapes: 10000\n")
+	code, out, errOut = runCLI("check", true)
+	if code != cli.ExitOK {
+		t.Fatalf("exhaustive with a raised budget: exit %d\n%s%s", code, out, errOut)
 	}
 
 	// 6b. explain --analyze prints a plan per shape via the dev DB.

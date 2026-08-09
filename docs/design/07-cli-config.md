@@ -64,9 +64,24 @@ severity error. Designed for `//go:generate sqletch generate`.
 in-memory to catch `SQLETCH3xx`). Offline iff all cache lookups hit;
 prints `offline: yes|no (n misses)` in verbose mode so CI logs show
 when a container was needed. `--exhaustive`: after normal checks,
-enumerate every query's shapes (config `explain_cap`, default 4096;
-exceeding it fails with guidance) and Describe+EXPLAIN each against
-the dev DB — always requires the DB by definition.
+enumerate every query's shapes (config `verification.max_shapes`,
+default 4096; exceeding it is `SQLETCH304` and leaves that query
+unverified, with the key named in the hint) and Describe+EXPLAIN each
+against the dev DB — always requires the DB by definition.
+
+The cap is a **config key, not a flag**, because it decides whether a
+CI gate passes: the verification budget must be identical on every
+machine that runs the check, not a property of who typed the command.
+That is the same line `--max-shapes` sits on the other side of — it
+only governs how much `explain` shows you right now, and builds
+nothing. A query that outgrows the budget fails the check with the key
+named in the hint, so raising it is a deliberate, reviewable edit to
+`sqletch.yaml`; per-query shapes must stay verifiable, so the cap
+exists to stop one query stalling the run, not to bound what may be
+verified. (Earlier drafts of this doc called the key `explain_cap`.
+That name was never implemented, and it was wrong twice over: it
+belongs to `check`, not `explain`, and the quantity it caps is the one
+`static_expansion.max_shapes` already names.)
 
 **explain** — renders from `.sqletch/explain/*.json` (06): per query,
 its guards (param → bit), choose blocks/cases, shape count, param and
@@ -79,7 +94,10 @@ Both enumerating modes are capped — `--enumerate` at 4096 shapes,
 `--max-shapes N` overrides either. Hitting a cap is **SQLETCH304, on
 stderr through the diagnostic channel**, never an SQL comment on
 stdout: stdout is the shape stream, and `explain > shapes.sql` must
-stay clean.
+stay clean. SQLETCH304 is the one code for "shape enumeration stopped
+at its cap" wherever it happens — `check --exhaustive` reports the same
+code against `verification.max_shapes`. Only the cap's owner and the
+severity differ, and both are in the message.
 
 The severity splits by what the mode claims. `--enumerate` is
 inspection — it offered to print shapes, so a cap is a *warning* and

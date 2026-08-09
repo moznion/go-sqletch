@@ -34,6 +34,9 @@ static_expansion:              # strict static expansion (opt-in per query)
   queries: [SearchUsers]
   max_shapes: 256              # default
 
+verification:                  # budget for `check --exhaustive`
+  max_shapes: 4096             # default
+
 filter_tree_caps:              # @filter-tree limits, baked into generated code
   max_nodes: 32                # default
   max_depth: 8                 # default
@@ -92,6 +95,13 @@ policies:                      # cross-query policies (see the policies chapter)
   surface) and dispatch via a precomposed table instead of composing
   at runtime. Refused for unbounded shape spaces (`@filter-tree`
   anywhere; `@in` on MySQL/SQLite) with SQLETCH302.
+- **`verification.max_shapes`** is how many shapes of one query
+  `check --exhaustive` will prepare and plan. A query that reaches more
+  fails the check (SQLETCH304, exit 1) rather than being verified
+  partway — raise the key to give it the budget it needs. It lives in
+  the config, not on the command line, because it decides whether a CI
+  gate passes: every machine running the check must spend the same
+  budget.
 - **`filter_tree_caps`** bound caller-built trees; exceeding them
   returns `runtime.ErrTreeTooLarge` before any SQL is composed.
 - **`policies`** declare predicates woven at compile time into every
