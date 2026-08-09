@@ -20,6 +20,10 @@
 //     [ErrTreePredicate]. These follow Go API compatibility for all
 //     v1 releases.
 //
+//     The observability surface — [Observer], [CacheStats],
+//     [ShapeUse], [ShapeSpaceInfo] and the corresponding
+//     [ComposedCache] methods (design doc 17) — is USER API too.
+//
 //   - The GENERATED-CODE CONTRACT — [Frag], [ShapeKey], [Bind],
 //     [Compose] and friends, [ComposedCache], [Expanded]. These are
 //     public only because generated code lives outside this module.
@@ -693,10 +697,28 @@ type ComposedCache struct {
 	// amortizes it instead of paying O(cap) on every miss.
 	sinceSnap    int
 	evictedSince bool
+
+	// obs receives one ObserveCompose per access; installed before the
+	// cache serves traffic (see SetObserver), so reads need no fence.
+	obs Observer
+	// track gates per-entry hit counting. It flips on (sticky) at the
+	// first SetObserver/Stats/TopShapes call: a cache nobody observes
+	// pays only this shared read on its hit path, never the counter's
+	// exclusive cache-line store — the same trade touch() makes.
+	track atomic.Bool
+	// Cumulative counters behind Stats, guarded by mu. Hits live on the
+	// entries themselves (lock-free path); hitsFolded accumulates the
+	// counts of removed entries so cumulative hits survive eviction.
+	misses     uint64
+	inserts    uint64
+	evictions  uint64
+	hitsFolded uint64
+	sqlBytes   int64
 }
 
 type cacheEntry struct {
 	mapKey string
+	query  string
 	key    ShapeKey
 	sql    string
 	binds  []Bind
@@ -710,12 +732,16 @@ type cacheEntry struct {
 	// eviction clears it to grant one reprieve. Every other field is
 	// immutable once the entry is published.
 	ref atomic.Bool
+	// hits counts accesses served from this entry. Entry-local so cores
+	// contend on a shape's own line only when they already share it for
+	// ref; Stats sums residents and folds evicted counts (hitsFolded).
+	hits atomic.Uint64
 	// el is the entry's position in the recency list, guarded by the
 	// cache mutex.
 	el *list.Element
 }
 
-func newCacheEntry(mapKey string, key ShapeKey, sql string, binds []Bind) *cacheEntry {
+func newCacheEntry(mapKey, query string, key ShapeKey, sql string, binds []Bind) *cacheEntry {
 	// The composer sizes its bind slice from an upper bound that counts
 	// every @choose case, not just the selected one. That slack is free
 	// on the miss path but an entry outlives the call, so it is copied
@@ -724,7 +750,7 @@ func newCacheEntry(mapKey string, key ShapeKey, sql string, binds []Bind) *cache
 	if cap(binds) > len(binds) {
 		binds = append(make([]Bind, 0, len(binds)), binds...)
 	}
-	e := &cacheEntry{mapKey: mapKey, key: cloneKey(key), sql: sql, binds: binds}
+	e := &cacheEntry{mapKey: mapKey, query: query, key: cloneKey(key), sql: sql, binds: binds}
 	if len(binds) > 0 {
 		e.argIdx = make([]int16, len(binds))
 		for i, bd := range binds {
@@ -805,10 +831,21 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 	mk = append(mk, '|')
 	mk = key.appendTo(mk)
 
-	// Lock-free hit.
+	// Lock-free hit. Observer calls pass e.key — the entry's retained
+	// clone — never the caller's key: an interface call's arguments
+	// escape, and threading the caller's key through one would force
+	// every generated call site's key slices onto the heap (measured:
+	// +1 alloc/op on the hit path). keysEqual has just proven the two
+	// keys identical, so the observer cannot tell the difference.
 	if snap := c.fast.Load(); snap != nil {
 		if e, ok := (*snap)[string(mk)]; ok && keysEqual(e.key, key) {
 			touch(e)
+			if c.track.Load() {
+				e.hits.Add(1)
+			}
+			if c.obs != nil {
+				c.obs.ObserveCompose(queryName, e.key, true)
+			}
 			return e, nil
 		}
 	}
@@ -820,6 +857,12 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 			c.order.MoveToFront(e.el)
 			c.mu.Unlock()
 			touch(e)
+			if c.track.Load() {
+				e.hits.Add(1)
+			}
+			if c.obs != nil {
+				c.obs.ObserveCompose(queryName, e.key, true)
+			}
 			return e, nil
 		}
 		// Full-key mismatch (canonical-encoding collision would be a
@@ -837,26 +880,40 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 	}
 	mapKey := string(mk)
 
+	// The observer is called after the unlock at both exits: user code
+	// must never run under the cache mutex. Both exits report hit=false
+	// — composition ran here even when a raced twin's entry is kept, so
+	// compose events can exceed insertions but never undercount work.
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.misses++
 	if e, ok := c.m[mapKey]; ok {
 		// Raced with another composer of the same shape; keep the entry
 		// already published so all callers share one instance. A
 		// full-key mismatch still wins over the encoding, as above.
 		if keysEqual(e.key, key) {
 			c.order.MoveToFront(e.el)
+			c.mu.Unlock()
 			touch(e)
+			if c.obs != nil {
+				c.obs.ObserveCompose(queryName, e.key, false)
+			}
 			return e, nil
 		}
 		c.remove(e)
 	}
-	e := newCacheEntry(mapKey, key, sql, binds)
+	e := newCacheEntry(mapKey, queryName, key, sql, binds)
 	e.el = c.order.PushFront(e)
 	c.m[mapKey] = e
+	c.inserts++
+	c.sqlBytes += int64(len(sql))
 	for len(c.m) > c.cap {
 		c.evictOne()
 	}
 	c.publish()
+	c.mu.Unlock()
+	if c.obs != nil {
+		c.obs.ObserveCompose(queryName, e.key, false)
+	}
 	return e, nil
 }
 
@@ -872,10 +929,16 @@ func touch(e *cacheEntry) {
 }
 
 // remove drops an entry from both the map and the recency list. Callers
-// hold c.mu.
+// hold c.mu. The entry's hit count folds into hitsFolded so cumulative
+// hits survive eviction; hits racing this fold (lock-free path, stale
+// snapshot) can drop from the cumulative total — an accepted skew,
+// bounded per eviction by the goroutines concurrently hitting that
+// entry, on a counter whose consumers read rates and ratios.
 func (c *ComposedCache) remove(e *cacheEntry) {
 	c.order.Remove(e.el)
 	delete(c.m, e.mapKey)
+	c.hitsFolded += e.hits.Load()
+	c.sqlBytes -= int64(len(e.sql))
 	c.evictedSince = true
 }
 
@@ -897,10 +960,12 @@ func (c *ComposedCache) evictOne() {
 			continue
 		}
 		c.remove(e)
+		c.evictions++
 		return
 	}
 	if el := c.order.Back(); el != nil {
 		c.remove(el.Value.(*cacheEntry))
+		c.evictions++
 	}
 }
 

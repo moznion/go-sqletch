@@ -172,18 +172,29 @@ argument:
   `touch()`), and `Stats()` reports a cache-level accumulator plus
   the residents' sum; `remove()` folds an evicted entry's count into
   the accumulator under the mutex so cumulative hits survive
-  eviction. Per-entry placement means cores contend only when
-  hammering the *same shape*, which is the workload where they
-  already share that entry's line for `ref`. If `BenchmarkCacheHit`
-  (parallel) shows a regression with the observer nil, the increment
-  gates behind the same "observer or stats ever requested" branch.
-- **`ObserveCompose` on the hit path** is an interface call with two
-  words of by-value key header — no allocation. The `nil` check is
-  the only cost when unused. The observer is stored in a plain field
-  set before traffic per the contract above (mirrors `OnQuery`).
+  eviction (hits racing a fold can drop — an accepted skew on a
+  rates-and-ratios counter). Per-entry placement means cores contend
+  only when hammering the *same shape*. **Measured outcome
+  (2026-08-09, M4 Pro)**: the ungated increment cost the parallel
+  hit path ~2.5× (12.8→34 ns/op), so the escalation clause fired:
+  counting gates behind a sticky `track atomic.Bool` set by the
+  first `SetObserver`/`Stats`/`TopShapes` call. Unobserved traffic
+  pays one shared load (12.0–12.3 ns/op, at baseline); with metrics
+  enabled the same worst-case workload runs ~130 ns/op
+  (`BenchmarkGeneratedCallParallelObserved` pins both). `Stats`
+  documents that hit counting starts at first observation — delta
+  readers lose nothing past the first scrape interval.
+- **`ObserveCompose` receives the entry's retained key, never the
+  caller's.** An interface call's arguments escape; threading the
+  caller's key through one heap-allocates every generated call
+  site's key slices (measured: +1 alloc/op on the hit path).
+  `keysEqual` has already proven entry key and caller key identical,
+  so the substitution is observationally invisible. The `nil` check
+  is the only cost when unused; the observer is a plain field set
+  before traffic per the contract above (mirrors `OnQuery`).
 - **`ShapeKey` retention hazard** is real (slices share backing
-  arrays with the caller); the interface comment carries the copy
-  rule, and the adapter (§6) only reads scalars/encodes.
+  arrays with the cache entry); the interface comment carries the
+  copy rule, and the adapter (§6) only reads scalars/encodes.
 
 ## 5. Generated-code deltas
 
@@ -358,7 +369,10 @@ every core on every query — precisely the traffic `touch()`'s load
 guard exists to avoid. (b) contends only where the workload already
 shares a line. (c) is the escalation if benchmarks demand it; do not
 start there. Gate: `BenchmarkCacheHit`-parallel must show no
-significant regression with observer nil.
+significant regression with observer nil. *Outcome: the gate fired —
+even the per-entry increment regressed the parallel hit path ~2.5×,
+so counting is additionally gated behind first observability use
+(§4); with that, the unobserved path measures at baseline.*
 
 ### D5 — "Shapes actually used": bounded exact set in the adapter
 
