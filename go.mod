@@ -5,6 +5,7 @@ go 1.27rc2
 require (
 	github.com/go-mysql-org/go-mysql v1.16.0
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/goccy/go-yaml v1.19.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/ncruces/go-sqlite3 v0.35.2
 	github.com/pganalyze/pg_query_go/v6 v6.2.2
@@ -16,7 +17,6 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	github.com/tetratelabs/wazero v1.12.0
 	google.golang.org/protobuf v1.34.2
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -85,4 +85,5 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
