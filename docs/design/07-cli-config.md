@@ -40,8 +40,10 @@ overrides:                   # per-query escape hatches
     nullable: true
 ```
 
-`internal/config.Load` performs strict decoding (unknown keys are
-`SQLETCH300`), env expansion (`${VAR}` only, no shell), and validation
+`internal/config.Load` performs strict decoding (unknown keys and
+duplicate keys are `SQLETCH300`; goccy/go-yaml with
+`DisallowUnknownField` — migrated off the archived gopkg.in/yaml.v3,
+2026-08), env expansion (`${VAR}` only, no shell), and validation
 (`SQLETCH301`: mutually exclusive/required combinations named in the
 message). The loaded config carries its own canonical hash — a config
 change that affects renderings or keys (dialect, server_version,
