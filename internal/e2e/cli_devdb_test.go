@@ -159,16 +159,19 @@ static_expansion:
 	if code != cli.ExitDiagnostics {
 		t.Fatalf("exhaustive over budget: exit %d, want %d\n%s", code, cli.ExitDiagnostics, errOut)
 	}
-	if !strings.Contains(errOut, "exceeds the exhaustive-check cap of 2 shapes") ||
+	// Same code as explain's cap: one diagnostic for "shape enumeration
+	// stopped at its cap", differing only in whose cap it was.
+	if !strings.Contains(errOut, string(diagnostics.CodeShapeCapReached)) ||
+		!strings.Contains(errOut, "exceeds the exhaustive-check cap of 2 shapes") ||
 		!strings.Contains(errOut, "verification.max_shapes") {
-		t.Errorf("over-budget diagnostic must name the cap and the config key:\n%s", errOut)
+		t.Errorf("over-budget diagnostic must be %s and name the cap and the config key:\n%s",
+			diagnostics.CodeShapeCapReached, errOut)
 	}
 	writeFile(t, dir, "sqletch.yaml", baseConfig(dsn)+"verification:\n  max_shapes: 10000\n")
 	code, out, errOut = runCLI("check", true)
 	if code != cli.ExitOK {
 		t.Fatalf("exhaustive with a raised budget: exit %d\n%s%s", code, out, errOut)
 	}
-	writeConfig(dsn)
 
 	// 6b. explain --analyze prints a plan per shape via the dev DB.
 	writeConfig(dsn)

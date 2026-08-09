@@ -65,8 +65,9 @@ in-memory to catch `SQLETCH3xx`). Offline iff all cache lookups hit;
 prints `offline: yes|no (n misses)` in verbose mode so CI logs show
 when a container was needed. `--exhaustive`: after normal checks,
 enumerate every query's shapes (config `verification.max_shapes`,
-default 4096; exceeding it fails with guidance) and Describe+EXPLAIN
-each against the dev DB — always requires the DB by definition.
+default 4096; exceeding it is `SQLETCH304` and leaves that query
+unverified, with the key named in the hint) and Describe+EXPLAIN each
+against the dev DB — always requires the DB by definition.
 
 The cap is a **config key, not a flag**, because it decides whether a
 CI gate passes: the verification budget must be identical on every
@@ -93,7 +94,10 @@ Both enumerating modes are capped — `--enumerate` at 4096 shapes,
 `--max-shapes N` overrides either. Hitting a cap is **SQLETCH304, on
 stderr through the diagnostic channel**, never an SQL comment on
 stdout: stdout is the shape stream, and `explain > shapes.sql` must
-stay clean.
+stay clean. SQLETCH304 is the one code for "shape enumeration stopped
+at its cap" wherever it happens — `check --exhaustive` reports the same
+code against `verification.max_shapes`. Only the cap's owner and the
+severity differ, and both are in the message.
 
 The severity splits by what the mode claims. `--enumerate` is
 inspection — it offered to print shapes, so a cap is a *warning* and

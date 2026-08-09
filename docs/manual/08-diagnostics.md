@@ -24,7 +24,7 @@ codes).
 | SQLETCH007 | A construct at a clause that is not one of its slots (e.g. `@if-present` in a projection, `@in` inside a guarded body). The message names the slot rules. |
 | SQLETCH008 | An optional WHERE/HAVING conjunct whose body does not start with `AND`; or a `@filter-tree` that does not directly follow an unconditional `AND`, or whose conjunct continues after `@end` (its empty tree renders `TRUE`, which must substitute one whole conjunct). |
 | SQLETCH009 | Malformed `@choose`/`@order-by`/`@filter-tree` structure (a `@case` outside `@choose`, empty case list, duplicate `@default`, …). |
-| SQLETCH010 | Too many guard atoms for one query (the shape bitmask is 64 bits wide). Also reported when a query's shape count exceeds `verification.max_shapes` under `check --exhaustive` — raise the key to verify it. |
+| SQLETCH010 | Too many guard atoms for one query (the shape bitmask is 64 bits wide). |
 | SQLETCH011 | A positional placeholder (`$1`, `?`) in a template. Templates use `:name` parameters; the compiler owns placeholder emission. |
 | SQLETCH012 | A guarded construct inside another guarded body (rule R5). Flatten: multi-param `@if-present(a, b)` expresses conjunction. |
 | SQLETCH020 | A `.go` file listed in `queries:` does not parse. Templates are read syntactically, so the file must at least be valid Go syntax (it need not type-check). |
@@ -80,6 +80,6 @@ codes).
 | SQLETCH301 | `sqletch.yaml` field validation (unsupported dialect, missing `server_version`, …). |
 | SQLETCH302 | Static expansion would exceed `static_expansion.max_shapes`, or the query's shape space is unbounded (`@filter-tree`, `@in` on expanding dialects). |
 | SQLETCH303 | A policy declaration in `sqletch.yaml` is malformed (bad name, empty or non-identifier `tables`, unknown `applies_to` kind, …), or its predicate does not parse as one complete boolean expression in the dialect. |
-| SQLETCH304 | `sqletch explain` stopped enumerating shapes at the cap (`--max-shapes`, or the mode's default). A **warning** under `--enumerate`, which only ever offered to print what it could; an **error** under `--analyze`, whose plans would otherwise be read as covering the shape space. Shapes are enumerated in guard-bitmask order, so the ones left out are the later guard combinations, not a random sample. Raise `--max-shapes`. |
+| SQLETCH304 | Shape enumeration stopped at its cap. Under `check --exhaustive` the cap is `verification.max_shapes` and the query is left unverified — raise the key. Under `sqletch explain` it is `--max-shapes` (or the mode's default): a **warning** for `--enumerate`, which only ever offered to print what it could, and an **error** for `--analyze`, whose plans would otherwise be read as covering the shape space. In every case shapes are enumerated in guard-bitmask order, so the ones left out are the later guard combinations, not a random sample. |
 | SQLETCH310 | Generated Go identifiers collide (two queries or columns mapping to the same name). Rename or alias one. |
 | SQLETCH311 | No Go mapping for a database type. Cast to a supported type, or on Tier 2 dialects add/fix the `-- @param` / `-- @column` annotation. |

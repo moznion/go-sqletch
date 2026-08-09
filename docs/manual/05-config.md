@@ -97,7 +97,7 @@ policies:                      # cross-query policies (see the policies chapter)
   anywhere; `@in` on MySQL/SQLite) with SQLETCH302.
 - **`verification.max_shapes`** is how many shapes of one query
   `check --exhaustive` will prepare and plan. A query that reaches more
-  fails the check (SQLETCH010, exit 1) rather than being verified
+  fails the check (SQLETCH304, exit 1) rather than being verified
   partway — raise the key to give it the budget it needs. It lives in
   the config, not on the command line, because it decides whether a CI
   gate passes: every machine running the check must spend the same

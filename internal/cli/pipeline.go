@@ -297,7 +297,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		for _, cq := range queries {
 			keys, truncated := shape.EnumerateExpand(cq.q, cfg.Verification.MaxShapes, drv.expandIn)
 			if truncated {
-				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeTooManyGuards,
+				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeShapeCapReached,
 					cq.q.HeaderSpan, "%s exceeds the exhaustive-check cap of %d shapes",
 					cq.q.Name, cfg.Verification.MaxShapes).
 					WithHint("raise verification.max_shapes in %s to give this query the budget it needs; "+
