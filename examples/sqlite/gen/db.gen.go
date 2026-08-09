@@ -35,9 +35,19 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
-func (q *Queries) hook(shapeKey, sql string) {
+func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
-		q.onQuery(shapeKey, sql)
+		q.onQuery(key.String(), sql)
+	}
+}
+
+// hookTree is hook for a @filter-tree query. The tree's key segment is
+// derived here rather than at the call site so that a query without an
+// installed hook never encodes its tree twice.
+func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
+	if q.onQuery != nil {
+		key.Trees = []string{t.Encode()}
+		q.onQuery(key.String(), sql)
 	}
 }
 

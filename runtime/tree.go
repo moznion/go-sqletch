@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 // Tree is a runtime-composed boolean combination over a query's closed
@@ -127,52 +126,74 @@ func (t Tree) Encode() string {
 	if t.n == nil {
 		return "T"
 	}
-	var b strings.Builder
-	var rec func(n *node)
-	rec = func(n *node) {
-		switch n.op {
-		case opTrue:
-			b.WriteByte('T')
-		case opLeaf:
-			b.WriteByte('p')
-			b.WriteString(strconv.Itoa(int(n.pred)))
-		default:
-			if n.op == opAnd {
-				b.WriteByte('&')
-			} else {
-				b.WriteByte('|')
-			}
-			b.WriteByte('(')
-			for i, k := range n.kids {
-				if i > 0 {
-					b.WriteByte(',')
-				}
-				rec(k)
-			}
-			b.WriteByte(')')
+	// Trees are cap-bounded (32 nodes by default), so the encoding fits
+	// stack scratch in every non-adversarial case and the only
+	// allocation is the returned string.
+	var buf [128]byte
+	return string(t.n.appendEncoding(buf[:0]))
+}
+
+func (n *node) appendEncoding(dst []byte) []byte {
+	switch n.op {
+	case opTrue:
+		return append(dst, 'T')
+	case opLeaf:
+		dst = append(dst, 'p')
+		return strconv.AppendInt(dst, int64(n.pred), 10)
+	default:
+		if n.op == opAnd {
+			dst = append(dst, '&')
+		} else {
+			dst = append(dst, '|')
 		}
+		dst = append(dst, '(')
+		for i, k := range n.kids {
+			if i > 0 {
+				dst = append(dst, ',')
+			}
+			dst = k.appendEncoding(dst)
+		}
+		return append(dst, ')')
 	}
-	rec(t.n)
-	return b.String()
 }
 
 // TreeArgs flattens leaf argument values in preorder — the order the
 // composer's tree-bind indices reference.
 func TreeArgs(t Tree) []any {
-	var out []any
-	var rec func(n *node)
-	rec = func(n *node) {
-		if n == nil {
-			return
-		}
-		if n.op == opLeaf {
-			out = append(out, n.args...)
-			return
-		}
-		for _, k := range n.kids {
-			rec(k)
-		}
+	n := t.n.countArgs()
+	if n == 0 {
+		return nil
 	}
-	rec(t.n)
-	return out
+	// Sized up front: the arg count is one cheap walk, and growing the
+	// slice instead costs an allocation per doubling on a path that runs
+	// per query call.
+	out := make([]any, 0, n)
+	return t.n.appendArgs(out)
+}
+
+func (n *node) countArgs() int {
+	if n == nil {
+		return 0
+	}
+	if n.op == opLeaf {
+		return len(n.args)
+	}
+	c := 0
+	for _, k := range n.kids {
+		c += k.countArgs()
+	}
+	return c
+}
+
+func (n *node) appendArgs(dst []any) []any {
+	if n == nil {
+		return dst
+	}
+	if n.op == opLeaf {
+		return append(dst, n.args...)
+	}
+	for _, k := range n.kids {
+		dst = k.appendArgs(dst)
+	}
+	return dst
 }

@@ -481,6 +481,40 @@ t.tenant_id = :scope_tenant_id
 		if !strings.Contains(src, "runtime.ErrFilterRequired") {
 			t.Errorf("lost the explicit-nil guard\n----\n%s", src)
 		}
+		// The `;t=` key segment is derived once, by the cache. The call
+		// site must NOT derive it a second time for the hook — that
+		// encoded every tree twice per call — and must route the hook
+		// through hookTree so an installed hook still sees the segment.
+		if strings.Contains(src, "key.Trees =") {
+			t.Errorf("call site re-derives the tree key segment\n----\n%s", src)
+		}
+		if !strings.Contains(src, "q.hookTree(key, scope, sqlText)") {
+			t.Errorf("filter-tree query does not hook through hookTree\n----\n%s", src)
+		}
+		if !strings.Contains(string(files["db.gen.go"]), "func (q *Queries) hookTree(") {
+			t.Error("db.gen.go lacks hookTree for a package that has a filter tree")
+		}
+	})
+
+	// hookTree is dead code in a package with no @filter-tree query, and
+	// an unused unexported method is exactly what a consumer's linter
+	// complains about — so it is emitted only where it is called.
+	t.Run("hookTree omitted without a filter tree", func(t *testing.T) {
+		q := scanOne(t, `-- name: Plain :many
+SELECT t.id FROM t WHERE t.a = :a;
+`)
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"a": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("generate: %+v", diags)
+		}
+		if strings.Contains(string(files["db.gen.go"]), "hookTree") {
+			t.Errorf("hookTree emitted for a package with no filter tree\n----\n%s", files["db.gen.go"])
+		}
 	})
 
 	// An optional tree is genuinely omittable (nil renders TRUE), so it

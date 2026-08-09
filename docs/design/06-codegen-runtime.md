@@ -44,8 +44,8 @@ func ptr[T any](v T) *T // exported as Ptr; examples alias it
 
 `pgx.Tx` satisfies `DBTX` — one transaction serves sqlc- and
 sqletch-generated code (spec: Generated API Conventions). The
-composed-SQL cache is on `Queries` (shared via `WithTx` copies, guarded
-by `sync.RWMutex`).
+composed-SQL cache is on `Queries` (shared via `WithTx` copies; hits are
+lock-free, misses take a mutex — see §4).
 
 ## 3. Per-query emission
 
@@ -134,10 +134,22 @@ conformance test enforces equality):
    (flattened index) to bind — `Bind` dereferences pointers (guard
    active ⇒ non-nil by construction).
 
-Composed `(sql, argIdx)` is cached per canonical `key.String()` in an
-LRU (`statement_cache_size`, default 256 entries/query is plenty:
-shapes-in-use are few). Key comparison on hit is full struct equality,
-not the string hash.
+Composed `(sql, argIdx)` is cached per placeholder style + query name +
+canonical `key.String()` in a bounded cache (`statement_cache_size`, default 256 entries/query is
+plenty: shapes-in-use are few). Key comparison on hit is full struct
+equality, not the string hash.
+
+Hits are lock-free: the entry map is published as an immutable snapshot
+read through an atomic pointer, and only misses take the mutex. That
+costs exact LRU ordering — a hit sets a second-chance bit on its own
+entry rather than reordering a shared list, and eviction sweeps from
+the oldest end granting one reprieve per set bit. The snapshot may lag
+the authoritative map after an eviction, which is harmless (composition
+is deterministic, so a stale entry is the same SQL) and bounds retained
+entries at twice the capacity. Republishing copies the map, so it is
+amortized once the shape set outgrows the capacity: a thrashing
+workload falls back to the locked path instead of paying O(cap) per
+miss.
 
 `prepared` statement mode is **not** sqletch code: pgx's
 `QueryExecModeCacheStatement` provides per-connection statement
@@ -185,7 +197,8 @@ recompilation needed for the listing form.
   through `ComposeTree` and through an arity shape dimension, and have
   their own conformance tests; comparing them against plain `Compose`
   would be comparing against the wrong composer.
-- Runtime unit: LRU eviction, ChooseOrdinal error on zero value
+- Runtime unit: capacity bound under churn, concurrent hits under
+  `-race`, full-key comparison on hit, ChooseOrdinal error on zero value
   without default, Bind pointer flattening.
 - End-to-end (`-tags devdb`): `examples/` — generate, `go vet`+build,
   run Use Cases 1–3 against seeded data; `OnQuery` hook observes the
