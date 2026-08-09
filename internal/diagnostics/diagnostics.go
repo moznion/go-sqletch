@@ -53,6 +53,7 @@ const (
 	CodeTooManyGuards      Code = "SQLETCH010"
 	CodePositionalParam    Code = "SQLETCH011"
 	CodeConstructNesting   Code = "SQLETCH012" // guard inside guard (R5)
+	CodeTooManyParams      Code = "SQLETCH013" // more parameters than the bind plan's int16 index holds
 )
 
 // Go-source input codes: templates authored in a `//sqletch:query`

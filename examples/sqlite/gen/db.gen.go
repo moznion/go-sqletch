@@ -115,12 +115,10 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
 	"CountByStatus":   {Enumerable: 1, Exact: true, Unbounded: false},
 	"FilterUsers":     {Enumerable: 1, Exact: true, Unbounded: true},
+	"FindUserByEmail": {Enumerable: 1, Exact: true, Unbounded: false},
 	"SearchUsers":     {Enumerable: 8, Exact: true, Unbounded: false},
 	"UsersInStatuses": {Enumerable: 1, Exact: true, Unbounded: true},
 }
-
-// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
-func Ptr[T any](v T) *T { return &v }
 
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.

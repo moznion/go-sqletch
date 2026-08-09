@@ -17,6 +17,13 @@ import (
 
 const runtimeImport = "github.com/moznion/go-sqletch/runtime"
 
+// optionalImport is the Option[T] package generated code represents
+// absence with: None instead of a nil pointer, for guarded parameters,
+// nullable result columns, and :maybe-one results alike.
+const optionalImport = "github.com/moznion/go-optional"
+
+const pgxImport = "github.com/jackc/pgx/v5"
+
 // QueryInput is everything codegen needs for one query, produced by
 // the earlier pipeline phases.
 type QueryInput struct {
@@ -130,8 +137,18 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		}
 	}
 
-	for name, src := range files {
-		formatted, err := format.Source(src)
+	return files, append(diags, formatFiles(files)...)
+}
+
+// formatFiles gofmts each generated file in place and reports the ones
+// that do not parse. It walks sorted names because the diagnostics it
+// emits carry no span: they would otherwise come out in map order, and
+// diagnostics.Sort cannot separate entries that share (file, offset,
+// code). Determinism is not conditional on the output being valid.
+func formatFiles(files map[string][]byte) []diagnostics.Diagnostic {
+	var diags []diagnostics.Diagnostic
+	for _, name := range sortedKeys(files) {
+		formatted, err := format.Source(files[name])
 		if err != nil {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision,
 				diagnostics.Span{}, "internal: generated %s does not gofmt: %v", name, err))
@@ -139,7 +156,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		}
 		files[name] = formatted
 	}
-	return files, diags
+	return diags
 }
 
 type queryGen struct {
@@ -167,7 +184,10 @@ type orderMeta struct {
 	typeName string
 }
 
-type field struct{ name, typ, comment string }
+// field is one generated struct field. optElem, when non-empty, marks
+// a nullable result column: typ is optional.Option[optElem] and the
+// scan path goes through a *optElem temporary (see writeFunc).
+type field struct{ name, typ, comment, optElem string }
 
 func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*policyType) ([]byte, string, []diagnostics.Diagnostic) {
 	var diags []diagnostics.Diagnostic
@@ -259,8 +279,9 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				comment = " // @in list; empty matches nothing"
 			}
 			if p.Optional {
-				typ = "*" + typ
-				comment = " // nil omits the guarded fragment(s)"
+				typ = "optional.Option[" + typ + "]"
+				comment = " // None omits the guarded fragment(s)"
+				g.addImport(optionalImport)
 			}
 		default:
 			// A parameter the oracle never saw: legal only as a pure
@@ -290,7 +311,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			// bind site converts back to the underlying type.
 			tn := GoName(name)
 			switch tn {
-			case "Queries", "Querier", "DBTX", "New", "Ptr":
+			case "Queries", "Querier", "DBTX", "New":
 				// db.gen.go / querier.gen.go declare these; the collision
 				// would otherwise surface as generated code that does not
 				// compile in the user's module.
@@ -327,7 +348,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		}
 		goName := GoName(name)
 		if claimField(goName, name) {
-			paramFields = append(paramFields, field{goName, typ, comment})
+			paramFields = append(paramFields, field{name: goName, typ: typ, comment: comment})
 		}
 	}
 	for _, cm := range chooses {
@@ -337,7 +358,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			if cm.c.Default != nil {
 				comment = " // zero value selects @default"
 			}
-			paramFields = append(paramFields, field{goName, cm.enumName, comment})
+			paramFields = append(paramFields, field{name: goName, typ: cm.enumName, comment: comment})
 		}
 	}
 	for _, om := range orders {
@@ -347,7 +368,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			if om.o.Default == nil {
 				comment = " // key sequence; empty omits ORDER BY"
 			}
-			paramFields = append(paramFields, field{goName, "[]" + om.typeName, comment})
+			paramFields = append(paramFields, field{name: goName, typ: "[]" + om.typeName, comment: comment})
 		}
 	}
 	if filter != nil {
@@ -366,14 +387,15 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		} else {
 			goName := GoName(filter.Param)
 			if claimField(goName, "@filter-tree("+filter.Param+")") {
-				paramFields = append(paramFields, field{goName, "runtime.Tree", " // zero Tree renders TRUE"})
+				paramFields = append(paramFields, field{name: goName, typ: "runtime.Tree", comment: " // zero Tree renders TRUE"})
 			}
 		}
 	}
 
 	// ---- row struct ------------------------------------------------------
 	rowName := q.Name + "Row"
-	hasRows := q.Annotation == template.AnnotationOne || q.Annotation == template.AnnotationMany
+	hasRows := q.Annotation == template.AnnotationOne || q.Annotation == template.AnnotationMaybeOne ||
+		q.Annotation == template.AnnotationMany
 	var rowFields []field
 	if hasRows {
 		claimType(rowName)
@@ -387,9 +409,10 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				continue
 			}
 			g.addImport(goType.Import)
-			typ := goType.Name
+			typ, optElem := goType.Name, ""
 			if i < len(g.in.Nullable) && g.in.Nullable[i] {
-				typ = "*" + typ
+				typ, optElem = "optional.Option["+goType.Name+"]", goType.Name
+				g.addImport(optionalImport)
 			}
 			goName := GoName(col.Name)
 			if prev, dup := colNames[goName]; dup {
@@ -398,7 +421,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				continue
 			}
 			colNames[goName] = col.Name
-			rowFields = append(rowFields, field{goName, typ, ""})
+			rowFields = append(rowFields, field{name: goName, typ: typ, optElem: optElem})
 		}
 	}
 
@@ -408,12 +431,23 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 
 	// ---- render ----------------------------------------------------------
 	// Imports must be complete before the header is written: the
-	// choose/order error paths use fmt, and the observer's exec clock
-	// uses time in every method body.
+	// choose/order error paths use fmt, the observer's exec clock uses
+	// time in every method body, and :maybe-one's no-row branch needs
+	// the Option package plus the driver's no-rows sentinel.
 	if len(chooses) > 0 || len(orders) > 0 {
 		g.imports["fmt"] = true
 	}
 	g.imports["time"] = true
+	if q.Annotation == template.AnnotationMaybeOne {
+		g.addImport(optionalImport)
+		g.sigImports[optionalImport] = true
+		g.imports["errors"] = true
+		if g.style == runtime.StyleQuestion {
+			g.imports["database/sql"] = true
+		} else {
+			g.addImport(pgxImport)
+		}
+	}
 	w := &g.b
 	fmt.Fprintf(w, "// Code generated by sqletch. DO NOT EDIT.\n\npackage %s\n\n", g.pkg)
 	g.writeImports(w)
@@ -777,6 +811,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		ret, zero = "([]"+rowName+", error)", "nil"
 	case template.AnnotationOne:
 		ret, zero = "("+rowName+", error)", "zero"
+	case template.AnnotationMaybeOne:
+		ret, zero = "(optional.Option["+rowName+"], error)", "zero"
 	case template.AnnotationExecRows:
 		ret, zero = "(int64, error)", "0"
 	default:
@@ -796,8 +832,12 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "// %s is required (%s).\n", ra.name, ra.doc)
 	}
 	fmt.Fprintf(w, "func (q *Queries) %s {\n", sig)
-	if q.Annotation == template.AnnotationOne {
+	switch q.Annotation {
+	case template.AnnotationOne:
 		fmt.Fprintf(w, "\tvar zero %s\n", rowName)
+	case template.AnnotationMaybeOne:
+		// Option's zero value is None, which doubles as the no-row result.
+		fmt.Fprintf(w, "\tvar zero optional.Option[%s]\n", rowName)
 	}
 
 	errRet := func(errExpr string) string {
@@ -820,7 +860,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 				GoName(atom.Param), op, goLiteral(atom), i)
 			continue
 		}
-		fmt.Fprintf(w, "\tif arg.%s != nil {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
+		fmt.Fprintf(w, "\tif arg.%s.IsSome() {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
 	}
 	if len(chooses) > 0 {
 		g.imports["fmt"] = true
@@ -871,6 +911,11 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			vals = append(vals, "nil /* predicate arg */")
 		case argExpr[name] != "":
 			vals = append(vals, argExpr[name])
+		case q.Params[name].Optional:
+			// The composed plan selects this slot only in shapes whose
+			// guard is on (Some), and UnwrapAsPtr keeps the value the
+			// driver sees identical to the pre-Option pointer bind.
+			vals = append(vals, "arg."+GoName(name)+".UnwrapAsPtr()")
 		default:
 			vals = append(vals, "arg."+GoName(name))
 		}
@@ -937,9 +982,42 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	// in emit, ahead of the header.)
 	fmt.Fprint(w, "\tvar execStart time.Time\n\tif q.obs != nil {\n\t\texecStart = time.Now()\n\t}\n")
 
+	// Nullable columns scan through a *T temporary and convert with
+	// optional.FromNillable afterwards: the driver keeps seeing exactly
+	// the pointer destinations it saw before Option adoption, so no
+	// scan path depends on Option implementing sql.Scanner (pgx would
+	// route that through a lossy driver.Value detour).
+	declTemps := func(indent string) string {
+		var b strings.Builder
+		n := 0
+		for _, f := range rowFields {
+			if f.optElem != "" {
+				fmt.Fprintf(&b, "%svar nul%d *%s\n", indent, n, f.optElem)
+				n++
+			}
+		}
+		return b.String()
+	}
+	assignTemps := func(indent string) string {
+		var b strings.Builder
+		n := 0
+		for _, f := range rowFields {
+			if f.optElem != "" {
+				fmt.Fprintf(&b, "%si.%s = optional.FromNillable(nul%d)\n", indent, f.name, n)
+				n++
+			}
+		}
+		return b.String()
+	}
 	scanList := func() string {
 		var refs []string
+		n := 0
 		for _, f := range rowFields {
+			if f.optElem != "" {
+				refs = append(refs, fmt.Sprintf("&nul%d", n))
+				n++
+				continue
+			}
 			refs = append(refs, "&i."+f.name)
 		}
 		return strings.Join(refs, ", ")
@@ -968,18 +1046,39 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprintf(w, "\tvar items []%s\n", rowName)
 		fmt.Fprint(w, "\tfor rows.Next() {\n")
 		fmt.Fprintf(w, "\t\tvar i %s\n", rowName)
+		fmt.Fprint(w, declTemps("\t\t"))
 		fmt.Fprintf(w, "\t\tif err := rows.Scan(%s); err != nil {\n%s\t\t\treturn nil, err\n\t\t}\n",
 			scanList(), observe("\t\t\t", "-1", "err"))
+		fmt.Fprint(w, assignTemps("\t\t"))
 		fmt.Fprint(w, "\t\titems = append(items, i)\n\t}\n")
 		fmt.Fprint(w, observe("\t", "int64(len(items))", "rows.Err()"))
 		fmt.Fprint(w, "\treturn items, rows.Err()\n")
 	case template.AnnotationOne:
 		fmt.Fprintf(w, "\trow := q.db.%s(ctx, sqlText, args...)\n", queryRow)
 		fmt.Fprint(w, "\tvar i "+rowName+"\n")
+		fmt.Fprint(w, declTemps("\t"))
 		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n%s\t\treturn zero, err\n\t}\n",
 			scanList(), observe("\t\t", "-1", "err"))
+		fmt.Fprint(w, assignTemps("\t"))
 		fmt.Fprint(w, observe("\t", "1", "nil"))
 		fmt.Fprint(w, "\treturn i, nil\n")
+	case template.AnnotationMaybeOne:
+		noRows := "pgx.ErrNoRows"
+		if g.style == runtime.StyleQuestion {
+			noRows = "sql.ErrNoRows"
+		}
+		fmt.Fprintf(w, "\trow := q.db.%s(ctx, sqlText, args...)\n", queryRow)
+		fmt.Fprint(w, "\tvar i "+rowName+"\n")
+		fmt.Fprint(w, declTemps("\t"))
+		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n", scanList())
+		// The no-row branch is a successful zero-row execution, not an
+		// error: the exec event reports rows 0 with a nil error.
+		fmt.Fprintf(w, "\t\tif errors.Is(err, %s) {\n%s\t\t\treturn zero, nil\n\t\t}\n",
+			noRows, observe("\t\t\t", "0", "nil"))
+		fmt.Fprintf(w, "%s\t\treturn zero, err\n\t}\n", observe("\t\t", "-1", "err"))
+		fmt.Fprint(w, assignTemps("\t"))
+		fmt.Fprint(w, observe("\t", "1", "nil"))
+		fmt.Fprint(w, "\treturn optional.Some(i), nil\n")
 	case template.AnnotationExecRows:
 		if g.style == runtime.StyleQuestion {
 			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
@@ -1176,9 +1275,6 @@ func (q *Queries) observeReject(ctx context.Context, query string, err error) {
 }
 %s
 %s
-// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
-func Ptr[T any](v T) *T { return &v }
-
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.
 var (
@@ -1277,9 +1373,6 @@ func (q *Queries) observeExecResult(ctx context.Context, query string, key runti
 }
 %s
 %s
-// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
-func Ptr[T any](v T) *T { return &v }
-
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.
 var (

@@ -18,7 +18,7 @@ func NewScanner(profile dialect.LexerProfile) *Scanner {
 	return &Scanner{profile: profile}
 }
 
-var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|many|exec|execrows)\s*$`)
+var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|maybe-one|many|exec|execrows)\s*$`)
 var (
 	paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
 	colHintRe   = regexp.MustCompile(`^--\s*@column\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
@@ -98,6 +98,12 @@ const (
 	// MaxChooseOrdinals: ShapeKey.Choices holds one uint8 ordinal per
 	// @choose block, counting the @default body.
 	MaxChooseOrdinals = 255
+	// MaxParams: a bind plan addresses the params struct with
+	// runtime.Bind.Idx, an int16. This one bounds the bind plan rather
+	// than the shape key, but it is the same kind of limit and the same
+	// consequence — codegen would narrow the index silently and bind
+	// the wrong value.
+	MaxParams = 32767
 )
 
 type fileScan struct {
@@ -227,7 +233,7 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 		default:
 			if !fs.strayReported {
 				fs.errorf(diagnostics.CodeMissingHeader, fs.span(tok.Start, tok.End),
-					"statement without a query header; every query starts with `-- name: QueryName :many` (or :one/:exec/:execrows)")
+					"statement without a query header; every query starts with `-- name: QueryName :many` (or :one/:maybe-one/:exec/:execrows)")
 				fs.strayReported = true
 			}
 			return
@@ -243,7 +249,7 @@ func (fs *fileScan) startQuery(name, ann string, headerTok dialect.Token) {
 	}
 	fs.names[name] = fs.span(headerTok.Start, headerTok.End)
 	annotation := map[string]Annotation{
-		"one": AnnotationOne, "many": AnnotationMany,
+		"one": AnnotationOne, "maybe-one": AnnotationMaybeOne, "many": AnnotationMany,
 		"exec": AnnotationExec, "execrows": AnnotationExecRows,
 	}[ann]
 	fs.qb = &queryBuilder{
@@ -1407,7 +1413,7 @@ func (fs *fileScan) finalize(file *QueryFile, upTo int) {
 	}
 	qb.flushSkeleton(fs, upTo)
 	fs.checkFilterTreeTail(qb.q)
-	fs.checkShapeKeyLimits(qb.q)
+	fs.checkEncodingLimits(qb.q)
 	fs.assignGuardBits(qb.q)
 	file.Queries = append(file.Queries, qb.q)
 	fs.qb = nil
@@ -1497,11 +1503,18 @@ func (fs *fileScan) firstSignificantToken(text string) string {
 	}
 }
 
-// checkShapeKeyLimits rejects constructs whose selection space the
-// shape key cannot encode. Unlike the guard limit it cannot be folded
-// into assignGuardBits: these dimensions are per block, and a query may
-// carry several blocks, each of which should be reported.
-func (fs *fileScan) checkShapeKeyLimits(q *QueryTemplate) {
+// checkEncodingLimits rejects a query the compiler's fixed-width
+// encodings cannot represent: the shape key's selection space, and the
+// bind plan's parameter index. Unlike the guard limit these cannot be
+// folded into assignGuardBits — the construct dimensions are per block,
+// and a query may carry several blocks, each of which should be
+// reported.
+func (fs *fileScan) checkEncodingLimits(q *QueryTemplate) {
+	if n := len(q.ParamOrder); n > MaxParams {
+		fs.errorf(diagnostics.CodeTooManyParams, q.HeaderSpan,
+			"query %s declares %d parameters; at most %d are supported",
+			q.Name, n, MaxParams)
+	}
 	for _, it := range q.Items {
 		switch v := it.(type) {
 		case *OrderBy:

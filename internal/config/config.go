@@ -4,7 +4,6 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,7 @@ import (
 	"slices"
 	"sort"
 
-	"gopkg.in/yaml.v3"
+	"github.com/goccy/go-yaml"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
@@ -150,9 +149,10 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	})
 
 	var cfg Config
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
+	// DisallowUnknownField reproduces yaml.v3's KnownFields(true);
+	// duplicate map keys are rejected by goccy/go-yaml's default
+	// (AllowDuplicateMapKey is the opt-out), matching yaml.v3 too.
+	if err := yaml.UnmarshalWithOptions(raw, &cfg, yaml.DisallowUnknownField()); err != nil {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span, "invalid config: %v", err)}
 	}

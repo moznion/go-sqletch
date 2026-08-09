@@ -11,6 +11,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/moznion/go-optional"
+
 	"github.com/jackc/pgx/v5"
 
 	gen "github.com/moznion/go-sqletch/examples/postgres/gen"
@@ -31,7 +33,7 @@ func main() {
 	})
 
 	users, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: new("active"),
+		Status: optional.Some("active"),
 		Sort:   gen.SearchUsersSortCreatedAtDesc,
 		Limit:  20,
 	})
@@ -40,6 +42,17 @@ func main() {
 	}
 	for _, u := range users {
 		fmt.Printf("%d\t%s\t%s\n", u.ID, u.Email, u.Status)
+	}
+
+	// :maybe-one — "no row" is a normal outcome (None), not an error.
+	found, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "alice@example.com"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if u, err := found.Take(); err == nil {
+		fmt.Printf("found: %s (nickname %q)\n", u.Email, u.Nickname.TakeOr("<none>"))
+	} else {
+		fmt.Println("no such user")
 	}
 
 	// v0.3: typed filters cross the repository boundary as values —

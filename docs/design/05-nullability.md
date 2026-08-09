@@ -74,7 +74,9 @@ the v0.2 projection slot (08).
 ## 4. Output usage
 
 P6 maps `nullable=false` → value field + direct `Scan`; `nullable=true`
-→ pointer field (`*string`, `*time.Time`, …; pgx handles NULL→nil).
+→ `optional.Option[T]` field (go-optional adoption, design 17; the
+scan still targets a `*T` temporary — pgx handles NULL→nil — and
+converts with `optional.FromNillable`).
 The analysis result is recorded in the oracle cache entry
 (`columns[].nullable`) so warm runs skip `Analyze` recomputation only
 if inputs (catalog fp) match — cheap either way, but keeps cache

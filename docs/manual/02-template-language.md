@@ -91,6 +91,7 @@ Result kinds — constant per query, never dynamic:
 | Kind | Generated return | Notes |
 |------|------------------|-------|
 | `:one` | `(Row, error)` | `pgx.ErrNoRows` / `sql.ErrNoRows` when absent |
+| `:maybe-one` | `(optional.Option[Row], error)` | zero or one row; `None` when absent — no error |
 | `:many` | `([]Row, error)` | slice, possibly empty |
 | `:exec` | `error` | no result columns |
 | `:execrows` | `(int64, error)` | affected row count |
@@ -124,7 +125,7 @@ You never declare this — it follows from where the parameter binds:
 | Where the parameter binds | Generated field |
 |---------------------------|-----------------|
 | anywhere outside a guard | **required**, plain type (`Limit int64`) |
-| only inside fragments guarded by *itself* | **optional**, pointer (`Status *string`) — `nil` omits the fragment |
+| only inside fragments guarded by *itself* | **optional**, Option (`Status optional.Option[string]`) — `None` omits the fragment |
 | only inside fragments guarded by *other* parameters | required; the value is simply unused when those fragments are off |
 | only inside `@choose` cases / `@order-by` keys | required; unused when that case/key is not selected |
 | only in a `@when` condition (never in SQL) | required, typed by the literal |
@@ -237,7 +238,7 @@ WHERE u.id = :id
 ```go
 type GetUserProfileParams struct {
     ID     int64
-    Status *string // nil omits the guarded fragment(s)
+    Status optional.Option[string] // None omits the guarded fragment(s)
 }
 
 // without the filter
@@ -246,11 +247,11 @@ row, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 42})
 // with the filter
 row, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{
     ID:     42,
-    Status: gen.Ptr("active"),
+    Status: optional.Some("active"),
 })
 ```
 
-**Composed SQL** — `Status: nil` (shape `g=0`)
+**Composed SQL** — `Status` absent (shape `g=0`)
 
 ```sql
 SELECT u.id, u.email, u.nickname, u.org_id
@@ -261,7 +262,7 @@ WHERE u.id = $1
 ;
 ```
 
-**Composed SQL** — `Status: gen.Ptr("active")` (shape `g=1`)
+**Composed SQL** — `Status: optional.Some("active")` (shape `g=1`)
 
 ```sql
 SELECT u.id, u.email, u.nickname, u.org_id
@@ -318,8 +319,8 @@ LIMIT :limit;
 
 ```go
 type SearchUsersParams struct {
-    OrganizationID *int64  // nil omits the guarded fragment(s)
-    Status         *string // nil omits the guarded fragment(s)
+    OrganizationID optional.Option[int64]  // None omits the guarded fragment(s)
+    Status         optional.Option[string] // None omits the guarded fragment(s)
     Limit          int64
 }
 ```
@@ -383,7 +384,7 @@ RETURNING id, email, nickname, updated_at;
 ```go
 row, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
     ID:    userID,
-    Email: gen.Ptr("new@example.com"), // Nickname stays untouched
+    Email: optional.Some("new@example.com"), // Nickname stays untouched
 })
 ```
 
@@ -544,7 +545,7 @@ LIMIT $1;
 ```
 
 This is also the idiomatic way to express *"filter where the column IS
-NULL"*, which presence pointers cannot say:
+NULL"*, which presence Options cannot say:
 
 ```sql
 @when(status_mode = 'null')

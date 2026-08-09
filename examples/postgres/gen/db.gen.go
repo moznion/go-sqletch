@@ -105,15 +105,13 @@ var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
 	"AllAuditActions":   {Enumerable: 1, Exact: true, Unbounded: false},
 	"CountAuditLogs":    {Enumerable: 1, Exact: true, Unbounded: false},
 	"FilterUsers":       {Enumerable: 1, Exact: true, Unbounded: true},
+	"FindUserByEmail":   {Enumerable: 1, Exact: true, Unbounded: false},
 	"GetUserProfile":    {Enumerable: 2, Exact: true, Unbounded: false},
 	"ListAuditLogs":     {Enumerable: 2, Exact: true, Unbounded: false},
 	"ListUsersSorted":   {Enumerable: 26, Exact: true, Unbounded: false},
 	"SearchUsers":       {Enumerable: 64, Exact: true, Unbounded: false},
 	"UpdateUserProfile": {Enumerable: 4, Exact: true, Unbounded: false},
 }
-
-// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
-func Ptr[T any](v T) *T { return &v }
 
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.

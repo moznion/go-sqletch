@@ -315,6 +315,24 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - The native catalog builder models MySQL >= 8.0.19 COLUMN_TYPE
   rendering (TiDB `InfoSchemaStr` + `TiDBStrictIntegerDisplayWidth`).
 
+## Known decisions: go-optional adoption (doc 17)
+
+- Generated code represents absence with moznion/go-optional's
+  `Option[T]` — optional params (`None` omits; presence = `IsSome()`,
+  bind = `UnwrapAsPtr()`), nullable result columns, and the
+  `:maybe-one` annotation (`(None, nil)` on the driver's no-rows
+  error). NO pointer fallback, no config knob (owner decision
+  2026-08-09); the generated `Ptr` helper is gone.
+- **The driver boundary is deliberately unchanged**: bind `*T` via
+  UnwrapAsPtr, scan via `*T` temporaries + `FromNillable`. Do not
+  switch the generated scan path to Option's `sql.Scanner` — pgx
+  routes unknown Scanners through a lossy `driver.Value` detour and
+  `Option[T]`'s `[]T` shape is ambiguous to pgx's plan reflection —
+  without pinning that behavior in the devdb suite first.
+- config's `Override.Nullable` stays `*bool`: yaml.v3 decodes only
+  via `yaml.Unmarshaler`, and go-optional should not take a yaml.v3
+  dependency for one field.
+
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 
 - `.sqletch/cache/env-<fp>.json` records the server a run actually

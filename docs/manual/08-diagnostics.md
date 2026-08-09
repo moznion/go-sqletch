@@ -27,6 +27,7 @@ codes).
 | SQLETCH010 | A construct exceeds the shape key's encoding: more than 64 guard atoms in one query (the bitmask is 64 bits wide), more than 64 `@order-by` keys in one block, or more than 255 `@choose` cases in one block (the `@default` body counts). These are fixed compiler limits — split the query rather than expecting a knob. |
 | SQLETCH011 | A positional placeholder (`$1`, `?`) in a template. Templates use `:name` parameters; the compiler owns placeholder emission. |
 | SQLETCH012 | A guarded construct inside another guarded body (rule R5). Flatten: multi-param `@if-present(a, b)` expresses conjunction. |
+| SQLETCH013 | More than 32767 parameters in one query. Bind plans index the params struct with an int16; a fixed compiler limit, like SQLETCH010, not a knob. |
 | SQLETCH020 | A `.go` file listed in `queries:` does not parse. Templates are read syntactically, so the file must at least be valid Go syntax (it need not type-check). |
 | SQLETCH021 | `//sqletch:query` on something other than a `const` declaration. A const is what makes the verified SQL the SQL that runs. |
 | SQLETCH022 | A `//sqletch:query` const whose value is not a single raw (backquoted) string literal. Interpreted strings process escapes and concatenations have no contiguous source range, so template spans could not point back at the file. |

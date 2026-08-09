@@ -64,3 +64,9 @@ FROM users AS u
 WHERE u.tenant_id = :tenant_id
 GROUP BY u.status
 ORDER BY u.status;
+
+-- name: FindUserByEmail :maybe-one
+-- @param email: text
+SELECT u.id, u.email, u.nickname
+FROM users AS u
+WHERE u.email = :email;

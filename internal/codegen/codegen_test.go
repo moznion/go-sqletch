@@ -152,10 +152,44 @@ ORDER BY 1;
 `,
 }
 
-// TestComposeConformance is the load-bearing test of the whole design:
-// for every enumerable shape, the runtime composer over the generated
-// fragment table must produce byte-identical SQL to the verification
-// renderer, and identical parameter binding order.
+// Generation must be deterministic even on the internal-error path:
+// these diagnostics carry no span, so nothing downstream can reorder
+// them back into a stable sequence.
+func TestFormatFilesDiagnosticsAreOrdered(t *testing.T) {
+	var first []string
+	for range 8 {
+		files := map[string][]byte{
+			"c.gen.go":  []byte("package p\nfunc ("),
+			"a.gen.go":  []byte("package p\nfunc ("),
+			"b.gen.go":  []byte("package p\nfunc ("),
+			"ok.gen.go": []byte("package p\n"),
+		}
+		diags := formatFiles(files)
+		if len(diags) != 3 {
+			t.Fatalf("diags = %d, want 3: %+v", len(diags), diags)
+		}
+		var got []string
+		for _, d := range diags {
+			got = append(got, d.Message)
+		}
+		if first == nil {
+			first = got
+		}
+		for i := range got {
+			if got[i] != first[i] {
+				t.Fatalf("diagnostic order varies between runs:\n%v\nvs\n%v", got, first)
+			}
+		}
+		if !strings.Contains(got[0], "a.gen.go") || !strings.Contains(got[2], "c.gen.go") {
+			t.Errorf("diagnostics must be ordered by file name: %v", got)
+		}
+		// The valid file is still formatted.
+		if string(files["ok.gen.go"]) != "package p\n" {
+			t.Errorf("ok.gen.go = %q", files["ok.gen.go"])
+		}
+	}
+}
+
 // The scanner rejects oversized constructs and the runtime defends
 // against them; both ends must agree on where the line is, or the
 // compiler accepts a template whose composition then errors — or
@@ -180,6 +214,10 @@ func TestShapeKeyLimitsAgree(t *testing.T) {
 	}
 }
 
+// TestComposeConformance is the load-bearing test of the whole design:
+// for every enumerable shape, the runtime composer over the generated
+// fragment table must produce byte-identical SQL to the verification
+// renderer, and identical parameter binding order.
 func TestComposeConformance(t *testing.T) {
 	conformanceOver(t, postgres.Profile{}, runtime.StyleDollar)
 }
@@ -286,8 +324,10 @@ func TestGenerate_UseCase1(t *testing.T) {
 		`type SearchUsersSort int`,
 		`SearchUsersSortDefault SearchUsersSort = iota`,
 		`SearchUsersSortCreatedAtDesc`,
-		`OrganizationID\s+\*int64`,
-		`Status\s+\*string`,
+		`OrganizationID\s+optional\.Option\[int64\]`,
+		`Status\s+optional\.Option\[string\]`,
+		`arg\.OrganizationID\.IsSome\(\)`,
+		`arg\.OrganizationID\.UnwrapAsPtr\(\), arg\.Status\.UnwrapAsPtr\(\), arg\.EmailPrefix\.UnwrapAsPtr\(\), arg\.Limit`,
 		`Sort\s+SearchUsersSort`,
 		`Limit\s+int64`,
 		`type SearchUsersRow struct`,
@@ -312,6 +352,129 @@ func TestGenerate_UseCase1(t *testing.T) {
 		if string(files[name]) != string(files2[name]) {
 			t.Errorf("%s differs across generations", name)
 		}
+	}
+}
+
+// TestGenerate_NullableOption pins the Option representation of
+// nullable result columns and the pointer-temporary scan path: the
+// driver must keep seeing *T destinations (identical to the pre-Option
+// emission), never Option itself, so no scan behavior rides on
+// Option's sql.Scanner and pgx's driver.Value detour stays unused.
+func TestGenerate_NullableOption(t *testing.T) {
+	q := scanOne(t, useCase1)
+	q.Params["organization_id"].Optional = true
+	q.Params["status"].Optional = true
+	q.Params["email_prefix"].Optional = true
+	files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+		Q:          q,
+		Frags:      BuildFrags(postgres.Profile{}, q),
+		ParamTypes: typesFixture(),
+		Columns:    columnsFixture(),
+		Nullable:   []bool{false, false, true, true},
+	}})
+	if len(diags) != 0 {
+		t.Fatalf("generate diagnostics: %+v", diags)
+	}
+	src := string(files["search_users.sql.gen.go"])
+	for _, want := range []string{
+		`CreatedAt\s+optional\.Option\[time\.Time\]`,
+		`var nul0 \*string`,
+		`var nul1 \*time\.Time`,
+		`rows\.Scan\(&i\.ID, &i\.Email, &nul0, &nul1\)`,
+		`i\.Status = optional\.FromNillable\(nul0\)`,
+		`i\.CreatedAt = optional\.FromNillable\(nul1\)`,
+		`"github.com/moznion/go-optional"`,
+	} {
+		if !regexp.MustCompile(want).MatchString(src) {
+			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
+		}
+	}
+}
+
+const maybeOneTemplate = `-- name: FindUser :maybe-one
+SELECT u.id, u.email, u.nickname FROM users AS u
+WHERE u.id = :id;
+`
+
+// TestGenerate_MaybeOne pins the :maybe-one surface: Option[Row]
+// return, the driver's no-rows sentinel mapped to (None, nil), and a
+// Some-wrapped row on success.
+func TestGenerate_MaybeOne(t *testing.T) {
+	q := scanOne(t, maybeOneTemplate)
+	if q.Annotation != template.AnnotationMaybeOne {
+		t.Fatalf("annotation = %v, want :maybe-one", q.Annotation)
+	}
+	files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+		Q:          q,
+		Frags:      BuildFrags(postgres.Profile{}, q),
+		ParamTypes: map[string]dialect.TypeRef{"id": {OID: 20, Name: "int8"}},
+		Columns: []dialect.ColumnDesc{
+			{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}},
+			{Name: "email", Type: dialect.TypeRef{OID: 25, Name: "text"}},
+			{Name: "nickname", Type: dialect.TypeRef{OID: 25, Name: "text"}},
+		},
+		Nullable: []bool{false, false, true},
+	}})
+	if len(diags) != 0 {
+		t.Fatalf("generate diagnostics: %+v", diags)
+	}
+	src := string(files["find_user.sql.gen.go"])
+	for _, want := range []string{
+		`func \(q \*Queries\) FindUser\(ctx context\.Context, arg FindUserParams\) \(optional\.Option\[FindUserRow\], error\)`,
+		`var zero optional\.Option\[FindUserRow\]`,
+		`q\.db\.QueryRow\(ctx, sqlText, args\.\.\.\)`,
+		`if errors\.Is\(err, pgx\.ErrNoRows\) \{`,
+		`return zero, nil`,
+		`i\.Nickname = optional\.FromNillable\(nul0\)`,
+		`return optional\.Some\(i\), nil`,
+	} {
+		if !regexp.MustCompile(want).MatchString(src) {
+			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
+		}
+	}
+	if !strings.Contains(string(files["querier.gen.go"]),
+		"FindUser(ctx context.Context, arg FindUserParams) (optional.Option[FindUserRow], error)") {
+		t.Errorf("querier.gen.go missing the Option signature:\n%s", files["querier.gen.go"])
+	}
+}
+
+// TestGenerate_MaybeOne_QuestionStyle is the database/sql flavor:
+// sql.ErrNoRows instead of pgx.ErrNoRows, context-suffixed calls.
+func TestGenerate_MaybeOne_QuestionStyle(t *testing.T) {
+	f, ds := template.NewScanner(mysql.Profile{}).ScanFile("t.sql", []byte(maybeOneTemplate))
+	if len(ds) != 0 {
+		t.Fatalf("scan: %+v", ds)
+	}
+	q := f.Queries[0]
+	tm := mysql.TypeMap{}
+	idRef, _ := tm.TypeByName("bigint")
+	textRef, _ := tm.TypeByName("varchar")
+	files, diags := Generate(Options{Package: "gen", Style: runtime.StyleQuestion}, tm, []QueryInput{{
+		Q:          q,
+		Frags:      BuildFrags(mysql.Profile{}, q),
+		ParamTypes: map[string]dialect.TypeRef{"id": idRef},
+		Columns: []dialect.ColumnDesc{
+			{Name: "id", Type: idRef},
+			{Name: "email", Type: textRef},
+			{Name: "nickname", Type: textRef},
+		},
+		Nullable: []bool{false, false, true},
+	}})
+	if len(diags) != 0 {
+		t.Fatalf("generate diagnostics: %+v", diags)
+	}
+	src := string(files["find_user.sql.gen.go"])
+	for _, want := range []string{
+		`q\.db\.QueryRowContext\(ctx, sqlText, args\.\.\.\)`,
+		`if errors\.Is\(err, sql\.ErrNoRows\) \{`,
+		`return optional\.Some\(i\), nil`,
+	} {
+		if !regexp.MustCompile(want).MatchString(src) {
+			t.Errorf("generated code missing pattern %q\n----\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "pgx") {
+		t.Errorf("question-style :maybe-one must not import pgx:\n%s", src)
 	}
 }
 

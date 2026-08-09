@@ -6,18 +6,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type ListAuditLogsParams struct {
 	TenantID int64
-	AfterID  *int64 // nil omits the guarded fragment(s)
+	AfterID  optional.Option[int64] // None omits the guarded fragment(s)
 	Limit    int64
 }
 
 type ListAuditLogsRow struct {
 	ID        int64
-	ActorID   *int64
+	ActorID   optional.Option[int64]
 	Action    string
 	CreatedAt time.Time
 }
@@ -30,11 +31,11 @@ var listAuditLogsFrags = []runtime.Frag{
 
 func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
 	var key runtime.ShapeKey
-	if arg.AfterID != nil {
+	if arg.AfterID.IsSome() {
 		key.Guards |= 1 << 0
 	}
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID, arg.Limit})
+	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.UnwrapAsPtr(), arg.Limit})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs != nil {
@@ -49,10 +50,12 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	var items []ListAuditLogsRow
 	for rows.Next() {
 		var i ListAuditLogsRow
-		if err := rows.Scan(&i.ID, &i.ActorID, &i.Action, &i.CreatedAt); err != nil {
+		var nul0 *int64
+		if err := rows.Scan(&i.ID, &nul0, &i.Action, &i.CreatedAt); err != nil {
 			q.observeExec(ctx, "ListAuditLogs", key, execStart, -1, err)
 			return nil, err
 		}
+		i.ActorID = optional.FromNillable(nul0)
 		items = append(items, i)
 	}
 	q.observeExec(ctx, "ListAuditLogs", key, execStart, int64(len(items)), rows.Err())

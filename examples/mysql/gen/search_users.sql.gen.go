@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
@@ -18,8 +19,8 @@ const (
 )
 
 type SearchUsersParams struct {
-	Status      *string // nil omits the guarded fragment(s)
-	EmailPrefix *string // nil omits the guarded fragment(s)
+	Status      optional.Option[string] // None omits the guarded fragment(s)
+	EmailPrefix optional.Option[string] // None omits the guarded fragment(s)
 	Limit       int64
 	Sort        SearchUsersSort // zero value selects @default
 }
@@ -28,7 +29,7 @@ type SearchUsersRow struct {
 	ID       int64
 	Email    string
 	Status   string
-	Nickname *string
+	Nickname optional.Option[string]
 }
 
 var searchUsersFrags = []runtime.Frag{
@@ -46,10 +47,10 @@ var searchUsersFrags = []runtime.Frag{
 
 func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error) {
 	var key runtime.ShapeKey
-	if arg.Status != nil {
+	if arg.Status.IsSome() {
 		key.Guards |= 1 << 0
 	}
-	if arg.EmailPrefix != nil {
+	if arg.EmailPrefix.IsSome() {
 		key.Guards |= 1 << 1
 	}
 	ord0, err := runtime.ChooseOrdinal(int(arg.Sort), 1, true)
@@ -63,7 +64,7 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 		q.observeReject(ctx, "SearchUsers", err)
 		return nil, err
 	}
-	args := runtime.ResolveArgs(binds, []any{arg.Status, arg.EmailPrefix, arg.Limit}, nil)
+	args := runtime.ResolveArgs(binds, []any{arg.Status.UnwrapAsPtr(), arg.EmailPrefix.UnwrapAsPtr(), arg.Limit}, nil)
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs != nil {
@@ -78,10 +79,12 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	var items []SearchUsersRow
 	for rows.Next() {
 		var i SearchUsersRow
-		if err := rows.Scan(&i.ID, &i.Email, &i.Status, &i.Nickname); err != nil {
+		var nul0 *string
+		if err := rows.Scan(&i.ID, &i.Email, &i.Status, &nul0); err != nil {
 			q.observeExec(ctx, "SearchUsers", key, execStart, -1, err)
 			return nil, err
 		}
+		i.Nickname = optional.FromNillable(nul0)
 		items = append(items, i)
 	}
 	q.observeExec(ctx, "SearchUsers", key, execStart, int64(len(items)), rows.Err())

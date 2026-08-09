@@ -65,6 +65,19 @@ func TestLoad_UnknownKey(t *testing.T) {
 	}
 }
 
+// TestLoad_DuplicateKey pins the strict-decode property the yaml.v3 →
+// goccy/go-yaml migration relies on: duplicate map keys are rejected
+// by goccy's default (AllowDuplicateMapKey is the opt-out we must
+// never pass), matching yaml.v3's behavior.
+func TestLoad_DuplicateKey(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, dir, "sqletch.yaml", validYAML+"version: 1\n")
+	_, diags := Load(path)
+	if len(diags) == 0 || diags[0].Code != diagnostics.CodeConfigParse {
+		t.Fatalf("want SQLETCH300 for duplicate key, got %+v", diags)
+	}
+}
+
 func TestLoad_Validation(t *testing.T) {
 	tests := []struct {
 		name string

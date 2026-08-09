@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/moznion/go-optional"
+
 	_ "github.com/ncruces/go-sqlite3/driver"
 
 	gen "github.com/moznion/go-sqletch/examples/sqlite/gen"
@@ -58,7 +60,7 @@ func main() {
 
 	fmt.Println("active, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: new("active"),
+		Status: optional.Some("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})
@@ -66,6 +68,17 @@ func main() {
 	for _, u := range active {
 		fmt.Printf("  %d %s\n", u.ID, u.Email)
 	}
+
+	// :maybe-one — "no row" is a normal outcome (None), not an error.
+	fmt.Println("maybe-one lookup:")
+	hit, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "alice@example.com"})
+	must(err)
+	miss, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "nobody@example.com"})
+	must(err)
+	if u, err := hit.Take(); err == nil {
+		fmt.Printf("  hit: %s (nickname %q)\n", u.Email, u.Nickname.TakeOr("<none>"))
+	}
+	fmt.Printf("  miss is none: %v\n", miss.IsNone())
 
 	fmt.Println("in-list (active, banned):")
 	in, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
