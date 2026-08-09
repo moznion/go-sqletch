@@ -74,7 +74,7 @@ func acquireMySQL(ctx context.Context, cfg Config) (*gomysqlclient.Conn, string,
 		stopContainer()
 	}
 
-	if cfg.ServerVersion != "" {
+	if cfg.wantVersion() {
 		r, err := conn.Execute("SELECT VERSION()")
 		if err != nil {
 			closeAll()
@@ -82,9 +82,9 @@ func acquireMySQL(ctx context.Context, cfg Config) (*gomysqlclient.Conn, string,
 		}
 		actual, _ := r.GetString(0, 0)
 		r.Close()
-		if !sameMajor(cfg.ServerVersion, actual) {
+		if err := cfg.recordVersion(actual, "MySQL", false); err != nil {
 			closeAll()
-			return nil, "", func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual, Server: "MySQL"}
+			return nil, "", func() {}, err
 		}
 	}
 

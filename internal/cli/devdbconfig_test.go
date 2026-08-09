@@ -75,7 +75,7 @@ func TestRun_SQLiteRelativeDSNIsConfigRelative(t *testing.T) {
 	if diagnostics.HasErrors(diags) {
 		t.Fatalf("config: %v", diags)
 	}
-	res, err := Run(context.Background(), cfg, ModeCheck)
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRun_VersionPinMismatchIsDiagnostic(t *testing.T) {
 	if diagnostics.HasErrors(diags) {
 		t.Fatalf("config: %v", diags)
 	}
-	res, err := Run(context.Background(), cfg, ModeCheck)
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatalf("a version pin mismatch must not be an environment error: %v", err)
 	}

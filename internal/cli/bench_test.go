@@ -58,7 +58,7 @@ func BenchmarkRunGenerate(b *testing.B) {
 	cfg := benchWorkspace(b)
 	b.ReportAllocs()
 	for b.Loop() {
-		res, err := Run(context.Background(), cfg, ModeGenerate)
+		res, err := Run(context.Background(), cfg, ModeGenerate, RunOptions{})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func BenchmarkRunCheck(b *testing.B) {
 	cfg := benchWorkspace(b)
 	b.ReportAllocs()
 	for b.Loop() {
-		res, err := Run(context.Background(), cfg, ModeCheck)
+		res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 		if err != nil {
 			b.Fatal(err)
 		}

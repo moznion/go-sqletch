@@ -27,6 +27,43 @@ type Config struct {
 	// SchemaSQL is executed in order after connecting (plain SQL —
 	// schema files are read by the caller).
 	SchemaSQL []string
+	// Detected, when non-nil, receives what Acquire learned by
+	// connecting — facts no caller can compute offline. It is filled
+	// in before the schema is applied; on an error return its contents
+	// are undefined. Callers that do not care leave it nil, and then
+	// the extra round trip is skipped unless the version pin needs it.
+	Detected *Detected
+}
+
+// Detected is the connected server's own account of itself, reported
+// back to callers that asked for it via Config.Detected.
+type Detected struct {
+	// ServerVersion is the raw string the engine reported, e.g.
+	// "16.4 (Debian 16.4-1.pgdg120+1)", "8.0.36-log", "3.50.4".
+	ServerVersion string
+}
+
+// wantVersion reports whether Acquire must ask the server for its
+// version: to validate the pin, to answer Detected, or both.
+func (c Config) wantVersion() bool { return c.ServerVersion != "" || c.Detected != nil }
+
+// recordVersion hands the reported version to the caller's sink and
+// validates the pin. A nil Detected means "not interested".
+func (c Config) recordVersion(actual, server string, prefixMatch bool) error {
+	if c.Detected != nil {
+		c.Detected.ServerVersion = actual
+	}
+	if c.ServerVersion == "" {
+		return nil
+	}
+	ok := sameMajor(c.ServerVersion, actual)
+	if prefixMatch {
+		ok = versionPrefixMatch(c.ServerVersion, actual)
+	}
+	if !ok {
+		return &VersionMismatchError{Pinned: c.ServerVersion, Actual: actual, Server: server}
+	}
+	return nil
 }
 
 // VersionMismatchError signals that the connected server does not
@@ -98,15 +135,15 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 		stopContainer()
 	}
 
-	if cfg.ServerVersion != "" {
+	if cfg.wantVersion() {
 		var actual string
 		if err := conn.QueryRow(ctx, "SHOW server_version").Scan(&actual); err != nil {
 			closeAll()
 			return nil, func() {}, err
 		}
-		if !sameMajor(cfg.ServerVersion, actual) {
+		if err := cfg.recordVersion(actual, "PostgreSQL", false); err != nil {
 			closeAll()
-			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual, Server: "PostgreSQL"}
+			return nil, func() {}, err
 		}
 	}
 

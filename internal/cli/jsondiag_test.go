@@ -146,7 +146,7 @@ func TestCheck_JSONDiagnostics(t *testing.T) {
 	}
 
 	var out, errW bytes.Buffer
-	code := Check(context.Background(), configPath, false, true, &out, &errW)
+	code := Check(context.Background(), configPath, false, true, RunOptions{}, &out, &errW)
 	if code != ExitDiagnostics {
 		t.Fatalf("exit %d, want %d\nstderr: %s", code, ExitDiagnostics, errW.String())
 	}
@@ -165,7 +165,7 @@ func TestCheck_JSONDiagnostics(t *testing.T) {
 	// The same run without the flag must NOT be JSON — proves the flag is
 	// actually threaded through rather than the format being unconditional.
 	errW.Reset()
-	if code := Check(context.Background(), configPath, false, false, &out, &errW); code != ExitDiagnostics {
+	if code := Check(context.Background(), configPath, false, false, RunOptions{}, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("text mode exit %d", code)
 	}
 	if json.Valid([]byte(strings.SplitN(errW.String(), "\n", 2)[0])) {
@@ -183,7 +183,7 @@ func TestCheck_JSONConfigDiagnostics(t *testing.T) {
 	}
 
 	var out, errW bytes.Buffer
-	if code := Check(context.Background(), configPath, false, true, &out, &errW); code != ExitDiagnostics {
+	if code := Check(context.Background(), configPath, false, true, RunOptions{}, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("exit %d, want %d\n%s", code, ExitDiagnostics, errW.String())
 	}
 	got := decodeJSONLines(t, errW.String())
@@ -206,7 +206,7 @@ func TestGenerate_JSONDiagnostics(t *testing.T) {
 	}
 
 	var out, errW bytes.Buffer
-	if code := Generate(context.Background(), configPath, true, &out, &errW); code != ExitDiagnostics {
+	if code := Generate(context.Background(), configPath, true, RunOptions{}, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("exit %d, want %d\n%s", code, ExitDiagnostics, errW.String())
 	}
 	got := decodeJSONLines(t, errW.String())
@@ -225,7 +225,7 @@ func TestCheck_VersionPinMismatchExitCodeAndJSON(t *testing.T) {
 	cfgPath := writeSQLiteProject(t, dir, "1.0", "dev.sqlite3")
 
 	var out, errW bytes.Buffer
-	code := Check(context.Background(), cfgPath, false, false, &out, &errW)
+	code := Check(context.Background(), cfgPath, false, false, RunOptions{}, &out, &errW)
 	if code != ExitDiagnostics {
 		t.Fatalf("exit %d, want %d (a bad pin is a user mistake, not an environment failure)\n%s",
 			code, ExitDiagnostics, errW.String())
@@ -235,7 +235,7 @@ func TestCheck_VersionPinMismatchExitCodeAndJSON(t *testing.T) {
 	}
 
 	errW.Reset()
-	if code := Check(context.Background(), cfgPath, false, true, &out, &errW); code != ExitDiagnostics {
+	if code := Check(context.Background(), cfgPath, false, true, RunOptions{}, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("json mode exit %d", code)
 	}
 	got := decodeJSONLines(t, errW.String())

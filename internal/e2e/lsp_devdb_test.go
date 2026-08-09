@@ -107,7 +107,7 @@ cache:
 
 	// 1. Cold run against the real server: fills the cache and produces
 	//    the reference diagnostics.
-	res, err := cli.Run(ctx, writeConfig(dsn), cli.ModeCheck)
+	res, err := cli.Run(ctx, writeConfig(dsn), cli.ModeCheck, cli.RunOptions{})
 	if err != nil {
 		t.Fatalf("cold run: %v", err)
 	}

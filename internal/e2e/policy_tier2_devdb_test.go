@@ -89,7 +89,7 @@ func TestSQLitePolicyWeaveCLI(t *testing.T) {
 	configPath := filepath.Join(dir, "sqletch.yaml")
 
 	var out, errW bytes.Buffer
-	if code := cli.Generate(ctx, configPath, false, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	assertWovenGen(t, dir)
@@ -97,7 +97,7 @@ func TestSQLitePolicyWeaveCLI(t *testing.T) {
 	// Warm offline: the committed cache holds the woven renderings.
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, &out, &errW); code != cli.ExitOK {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("warm check: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline") {
@@ -126,14 +126,14 @@ func TestMySQLPolicyWeaveCLI(t *testing.T) {
 	configPath := filepath.Join(dir, "sqletch.yaml")
 
 	var out, errW bytes.Buffer
-	if code := cli.Generate(ctx, configPath, false, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	assertWovenGen(t, dir)
 
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, &out, &errW); code != cli.ExitOK {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("warm check: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 }

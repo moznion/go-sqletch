@@ -12,6 +12,11 @@ JSON lines on stderr).
 | `sqletch lsp` | The language server over stdio ([editors](09-editors.md)). Strictly offline. |
 | `sqletch version` | Prints the version. |
 
+`generate` and `check` also take `--allow-server-drift`: accept a
+committed cache generated against a different server version than the
+one this run connects to, downgrading SQLETCH203 to a warning. See
+[server environment drift](05-config.md#server-environment-drift).
+
 ## Exit codes
 
 | Code | Meaning |

@@ -75,6 +75,7 @@ Layout (path from config, default `.sqletch/cache/`, committed to VCS):
 .sqletch/cache/
   catalog-<fp>.json        one per schema fingerprint
   oracle/<qh>.json         one per rendering
+  env-<fp>.json            §3.1: generation-environment record (not a key)
 ```
 
 **Schema fingerprint** `fp = sha256(dialect ‖ server_version ‖
@@ -100,6 +101,60 @@ the current values; mismatch = treated as miss, entry rewritten.
 Canonical JSON (sorted keys, LF, trailing newline) for clean diffs;
 `generate` prunes entries whose `qh` no longer corresponds to any
 rendering (keeps the committed dir from accreting garbage).
+
+### 3.1 Generation-environment record (`env-<fp>.json`)
+
+The fingerprint pins the *pinned* `server_version` (a major, e.g.
+`"16"`), so two servers that satisfy the same pin — 16.4 and 16.9 —
+produce entries the cache cannot tell apart. The sidecar records what
+a run actually connected to, so a later run can:
+
+```json
+{
+  "format": 1, "schema_fp": "…",
+  "dialect": "postgres", "oracle_backend": "server",
+  "server_version": "16.4",
+  "server_version_raw": "16.4 (Debian 16.4-1.pgdg120+1)"
+}
+```
+
+**It is not a cache key, and must never become one.** The fingerprint
+has to stay offline-computable (spec requirement) and the version of a
+server we have not contacted cannot enter it; putting it in would also
+mean every patch bump invalidates the committed cache, destroying the
+offline-CI property the cache exists for. It lives outside
+`catalog-<fp>.json` and `oracle/<qh>.json` for a second reason: those
+files are pinned byte-identical across oracle backends by
+`internal/corpus` (design 15 §7.2), and a backend that contacts no
+server cannot reproduce a connection-derived byte.
+
+Rules:
+
+- **Compared value = the leading dotted-numeric run** of what the
+  server reported (`cache.NumericVersionPrefix`). PostgreSQL spells
+  16.4 as `16.4` on Alpine and `16.4 (Debian …)` on Debian, MySQL
+  appends `-log`; comparing raw strings would report a base-image
+  change as drift. The raw string is recorded so the diagnostic can
+  name the builds.
+- **Checked only where a server is contacted** — inside
+  `cli`'s `acquireOracle`, before the first miss is filled, so a
+  refusal leaves the committed tree untouched. A warm offline `check`
+  never gets there and never looks; `check --exhaustive` always
+  connects and is therefore the drift-detection lane for CI.
+  `explain --analyze` writes no entries and passes no sink.
+- **Disagreement = SQLETCH203**, error by default,
+  `--allow-server-drift` (a flag, never a config key) downgrades it to
+  a warning and adopts the connected server.
+- **Silence is the default for anything less than a confirmed
+  disagreement**: no record (a cache committed before this file
+  existed, or a first generate) means adopt. `oracle_backend` is
+  recorded for forensics but never compared — server and native are
+  required to produce identical bytes, so a backend difference is
+  either a no-op or a sqletch bug for the corpus gates to catch.
+- Accepting drift produces a cache no single environment produced
+  (old entries from the old server, new ones from the new). Only the
+  flag can create that state; per-entry provenance would be needed to
+  distinguish it, and is deliberately not implemented.
 
 **Catalog model** (consumed by rules/R3, R2 star expansion, P5):
 
