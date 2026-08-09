@@ -295,10 +295,14 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			return nil, err
 		}
 		for _, cq := range queries {
-			keys, truncated := shape.EnumerateExpand(cq.q, 4096, drv.expandIn)
+			keys, truncated := shape.EnumerateExpand(cq.q, cfg.Verification.MaxShapes, drv.expandIn)
 			if truncated {
 				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeTooManyGuards,
-					cq.q.HeaderSpan, "%s exceeds the exhaustive-check cap of 4096 shapes", cq.q.Name))
+					cq.q.HeaderSpan, "%s exceeds the exhaustive-check cap of %d shapes",
+					cq.q.Name, cfg.Verification.MaxShapes).
+					WithHint("raise verification.max_shapes in %s to give this query the budget it needs; "+
+						"the cap exists so one query cannot stall the check, not to bound what may be verified",
+						cfg.Path))
 				continue
 			}
 			for _, k := range keys {

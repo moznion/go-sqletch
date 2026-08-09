@@ -18,18 +18,19 @@ import (
 )
 
 type Config struct {
-	Version       int        `yaml:"version"`
-	Dialect       string     `yaml:"dialect"`
-	ServerVersion string     `yaml:"server_version"`
-	Database      Database   `yaml:"database"`
-	Schema        Schema     `yaml:"schema"`
-	Queries       []string   `yaml:"queries"`
-	Output        Output     `yaml:"output"`
-	Cache         Cache      `yaml:"cache"`
-	Overrides     []Override `yaml:"overrides"`
-	Expansion     Expansion  `yaml:"static_expansion"`
-	TreeCaps      TreeCaps   `yaml:"filter_tree_caps"`
-	Policies      []Policy   `yaml:"policies"`
+	Version       int          `yaml:"version"`
+	Dialect       string       `yaml:"dialect"`
+	ServerVersion string       `yaml:"server_version"`
+	Database      Database     `yaml:"database"`
+	Schema        Schema       `yaml:"schema"`
+	Queries       []string     `yaml:"queries"`
+	Output        Output       `yaml:"output"`
+	Cache         Cache        `yaml:"cache"`
+	Overrides     []Override   `yaml:"overrides"`
+	Expansion     Expansion    `yaml:"static_expansion"`
+	Verification  Verification `yaml:"verification"`
+	TreeCaps      TreeCaps     `yaml:"filter_tree_caps"`
+	Policies      []Policy     `yaml:"policies"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.
@@ -84,6 +85,18 @@ type Expansion struct {
 	Queries   []string `yaml:"queries"`
 	MaxShapes int      `yaml:"max_shapes"`
 }
+
+// Verification bounds the work `check --exhaustive` will do. It is a
+// config key rather than a flag because it decides whether a CI gate
+// passes: a project's verification budget must be the same on every
+// machine that runs the check, not a property of who typed the command.
+type Verification struct {
+	MaxShapes int `yaml:"max_shapes"`
+}
+
+// DefaultVerificationMaxShapes is the shape budget `check --exhaustive`
+// gets when the config says nothing.
+const DefaultVerificationMaxShapes = 4096
 
 // TreeCaps bounds @filter-tree values at runtime; the values are baked
 // into generated code.
@@ -192,6 +205,12 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	if cfg.Expansion.MaxShapes == 0 {
 		cfg.Expansion.MaxShapes = 256
+	}
+	if cfg.Verification.MaxShapes == 0 {
+		cfg.Verification.MaxShapes = DefaultVerificationMaxShapes
+	}
+	if cfg.Verification.MaxShapes < 1 {
+		invalid("verification.max_shapes must be positive")
 	}
 	if cfg.TreeCaps.MaxNodes == 0 {
 		cfg.TreeCaps.MaxNodes = 32
