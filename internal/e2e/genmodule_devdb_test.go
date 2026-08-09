@@ -31,6 +31,12 @@ WHERE u.id = :id
 ;
 `
 
+const findUserByEmail = `-- name: FindUserByEmail :maybe-one
+SELECT u.id, u.email, u.nickname
+FROM users AS u
+WHERE u.email = :email;
+`
+
 // TestGeneratedModuleEndToEnd is the full-loop E2E: run the complete
 // pipeline (scan → rules → renderings → oracle → nullability →
 // codegen), materialize the generated package as a standalone Go
@@ -62,9 +68,10 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Full pipeline for the corpus + the :one nullable-columns query.
+	// Full pipeline for the corpus + the :one/:maybe-one nullable-
+	// columns queries.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], corpus["in_list"], getUserProfile} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], corpus["in_list"], getUserProfile, findUserByEmail} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -133,8 +140,13 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 	if pgxVer == nil {
 		t.Fatal("pgx version not found in parent go.mod")
 	}
+	optVer := regexp.MustCompile(`github\.com/moznion/go-optional (v[0-9A-Za-z.\-+]+)`).FindStringSubmatch(string(parentMod))
+	if optVer == nil {
+		t.Fatal("go-optional version not found in parent go.mod")
+	}
 	goMod := "module sqletchgen\n\ngo 1.24\n\nrequire (\n" +
 		"\tgithub.com/jackc/pgx/v5 " + pgxVer[1] + "\n" +
+		"\tgithub.com/moznion/go-optional " + optVer[1] + "\n" +
 		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
 		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
@@ -178,6 +190,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/moznion/go-optional"
 
 	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
@@ -225,7 +239,7 @@ func main() {
 	expect(len(all) == 3, "all users")
 
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: gen.Ptr("active"),
+		Status: optional.Some("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  100,
 	})
@@ -233,7 +247,7 @@ func main() {
 	expect(len(active) == 2 && active[0].Email == "alice@example.com", "active users sorted by email")
 
 	org, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		OrganizationID: gen.Ptr(int64(77)),
+		OrganizationID: optional.Some(int64(77)),
 		Limit:          100,
 	})
 	die(err)
@@ -242,33 +256,44 @@ func main() {
 	// NULL-heavy scan through the generated :one function.
 	bob, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 2})
 	die(err)
-	expect(bob.Nickname == nil && bob.OrgID == nil, "bob's NULLs scan into nil pointers")
+	expect(bob.Nickname.IsNone() && bob.OrgID.IsNone(), "bob's NULLs scan into None")
 	alice, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 1})
 	die(err)
-	expect(alice.Nickname != nil && *alice.Nickname == "al", "alice's nickname")
+	expect(alice.Nickname.TakeOr("") == "al", "alice's nickname")
 
 	_, err = q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 999})
 	expect(errors.Is(err, pgx.ErrNoRows), "missing row yields pgx.ErrNoRows")
 
+	// :maybe-one — no row is None, never an error; a hit is Some with
+	// NULL columns still scanning into None fields.
+	hitOpt, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "bob@example.com"})
+	die(err)
+	hit, err := hitOpt.Take()
+	die(err)
+	expect(hit.ID == 2 && hit.Nickname.IsNone(), "maybe-one hit with NULL nickname")
+	missOpt, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "zoe@example.com"})
+	die(err)
+	expect(missOpt.IsNone(), "maybe-one miss is None, not an error")
+
 	// PATCH semantics: update only the provided field; others untouched.
 	upd, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: gen.Ptr("allie"),
+		Nickname: optional.Some("allie"),
 	})
 	die(err)
-	expect(upd.Nickname != nil && *upd.Nickname == "allie", "nickname updated")
+	expect(upd.Nickname.TakeOr("") == "allie", "nickname updated")
 	expect(upd.Email == "alice@example.com", "email untouched by partial update")
-	expect(upd.Bio == nil, "bio untouched (still NULL)")
+	expect(upd.Bio.IsNone(), "bio untouched (still NULL)")
 
 	upd2, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		NewEmail: gen.Ptr("alice2@example.com"),
-		Bio:      gen.Ptr("hello"),
+		NewEmail: optional.Some("alice2@example.com"),
+		Bio:      optional.Some("hello"),
 	})
 	die(err)
 	expect(upd2.Email == "alice2@example.com", "email updated")
-	expect(upd2.Nickname != nil && *upd2.Nickname == "allie", "nickname survives the second patch")
-	expect(upd2.Bio != nil && *upd2.Bio == "hello", "bio updated")
+	expect(upd2.Nickname.TakeOr("") == "allie", "nickname survives the second patch")
+	expect(upd2.Bio.TakeOr("") == "hello", "bio updated")
 
 	// Minimal shape: no fields provided — the anchor keeps it valid.
 	upd3, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{ID: 1})
@@ -283,15 +308,15 @@ func main() {
 		TenantID: 1,
 	})
 	die(err)
-	expect(created.Nickname == nil && created.Bio == nil, "omitted optional columns default to NULL")
+	expect(created.Nickname.IsNone() && created.Bio.IsNone(), "omitted optional columns default to NULL")
 	created2, err := q.CreateUser(ctx, gen.CreateUserParams{
 		Email:    "erin@example.com",
 		Status:   "active",
 		TenantID: 1,
-		Nickname: gen.Ptr("er"),
+		Nickname: optional.Some("er"),
 	})
 	die(err)
-	expect(created2.Nickname != nil && *created2.Nickname == "er" && created2.Bio == nil,
+	expect(created2.Nickname.TakeOr("") == "er" && created2.Bio.IsNone(),
 		"provided pair inserts, unprovided stays NULL")
 
 	// @choose in a projection slot: the aggregation expression swaps
@@ -317,7 +342,7 @@ func main() {
 	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: false})
 	die(err)
 	expect(len(act) == 1 && act[0].Actions == 2, "@when guard drops the NULL-actor row")
-	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: gen.Ptr(int64(99))})
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: optional.Some(int64(99))})
 	die(err)
 	expect(len(act) == 0, "HAVING conjunct filters the group out")
 
@@ -391,7 +416,7 @@ func main() {
 	inGuarded, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
 		TenantID: 1,
 		Statuses: []string{"active", "banned"},
-		MinID:    gen.Ptr(int64(3)),
+		MinID:    optional.Some(int64(3)),
 		Limit:    100,
 	})
 	die(err)
@@ -403,12 +428,12 @@ func main() {
 	expect(len(page1) == 2, "first page")
 	page2, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{
 		TenantID: 1,
-		AfterID:  gen.Ptr(page1[len(page1)-1].ID),
+		AfterID:  optional.Some(page1[len(page1)-1].ID),
 		Limit:    2,
 	})
 	die(err)
 	expect(len(page2) == 1, "second page")
-	expect(page1[1].ActorID == nil || page2[0].ActorID == nil, "NULL actor scans somewhere")
+	expect(page1[1].ActorID.IsNone() || page2[0].ActorID.IsNone(), "NULL actor scans somewhere")
 
 	expect(shapes >= 7, "OnQuery hook observed the calls")
 	fmt.Println("E2E-OK")

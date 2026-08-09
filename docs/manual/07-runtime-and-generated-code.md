@@ -20,11 +20,17 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
   sqlc code share connections and transactions.
 - `Querier` is the all-queries interface for mocking.
 - Params structs: required parameters are plain fields; `@if-present`
-  parameters are pointers (`gen.Ptr(v)` helper; `nil` omits);
-  `@choose` is an enum; `@order-by` a key-constant slice; `@in` a
-  slice; `@filter-tree` a `*runtime.Tree`.
+  parameters are [go-optional](https://github.com/moznion/go-optional)
+  `Option[T]` fields (`optional.Some(v)` provides; the zero value
+  `None` omits); `@choose` is an enum; `@order-by` a key-constant
+  slice; `@in` a slice; `@filter-tree` a `*runtime.Tree`.
 - Row structs: one field per result column; nullable columns are
-  pointers (see nullability below).
+  `optional.Option[T]` fields (see nullability below). The scan path
+  still hands the driver plain `*T` destinations and converts with
+  `optional.FromNillable`, so driver type support is unchanged.
+- `:maybe-one` returns `(optional.Option[Row], error)`: the driver's
+  no-rows error becomes `(None, nil)` — absence is a value, not an
+  error.
 - Errors before any SQL is sent: zero value of a required `@choose`
   (`runtime.ErrChooseRequired`), invalid `@order-by` selection
   (`runtime.ErrOrderKey`), `nil` required tree
@@ -53,7 +59,8 @@ With `static_expansion`, step 2 is a map lookup into precomposed SQL
 
 ## Nullability
 
-A row field is a pointer when the column can be NULL in **any** shape.
+A row field is an `optional.Option[T]` when the column can be NULL in
+**any** shape.
 The analysis reads catalog NOT NULL, understands outer-join
 null-extension, and deliberately **never narrows based on optional
 fragments** — a guarded `INNER JOIN` does not make the FK non-null,

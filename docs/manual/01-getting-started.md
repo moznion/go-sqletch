@@ -70,12 +70,14 @@ database, then generates:
 
 ```go
 users, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: gen.Ptr("active"), // nil omits the fragment
+    Status: optional.Some("active"), // None omits the fragment
     Limit:  50,
 })
 ```
 
-Optional parameters are pointers; `nil` removes their fragments. The
+Optional parameters are
+[go-optional](https://github.com/moznion/go-optional) `Option[T]`
+values; `None` (the zero value) removes their fragments. The
 SQL sent for each combination is byte-for-byte one of the shapes that
 were verified at compile time — values only ever travel as bind
 parameters.

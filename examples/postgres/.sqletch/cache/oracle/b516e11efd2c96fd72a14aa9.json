@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "rendered_sql": "\nSELECT u.id, u.email, u.nickname, u.org_id\nFROM users AS u\nWHERE u.id = $1\n\n\nAND (u.status = $2)\n;\n\n",
+  "params": [
+    {
+      "oid": 20,
+      "name": "int8"
+    },
+    {
+      "oid": 25,
+      "name": "text"
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16387,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "oid": 25,
+      "type_name": "text",
+      "src_rel": 16387,
+      "src_att": 2,
+      "nullable": false
+    },
+    {
+      "name": "nickname",
+      "oid": 25,
+      "type_name": "text",
+      "src_rel": 16387,
+      "src_att": 8,
+      "nullable": false
+    },
+    {
+      "name": "org_id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16387,
+      "src_att": 7,
+      "nullable": false
+    }
+  ]
+}

@@ -53,9 +53,6 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 	}
 }
 
-// Ptr is a convenience for presence parameters: Ptr("x") yields *string.
-func Ptr[T any](v T) *T { return &v }
-
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.
 var (

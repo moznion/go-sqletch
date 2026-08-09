@@ -5,6 +5,7 @@ package gen
 import (
 	"context"
 
+	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
@@ -13,6 +14,7 @@ type Querier interface {
 	AllAuditActions(ctx context.Context, arg AllAuditActionsParams) ([]AllAuditActionsRow, error)
 	CountAuditLogs(ctx context.Context, tenantID TenantID, arg CountAuditLogsParams) (CountAuditLogsRow, error)
 	FilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error)
+	FindUserByEmail(ctx context.Context, arg FindUserByEmailParams) (optional.Option[FindUserByEmailRow], error)
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	ListUsersSorted(ctx context.Context, arg ListUsersSortedParams) ([]ListUsersSortedRow, error)

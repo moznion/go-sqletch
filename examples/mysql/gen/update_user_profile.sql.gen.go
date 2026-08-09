@@ -5,12 +5,13 @@ package gen
 import (
 	"context"
 
+	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type UpdateUserProfileParams struct {
-	NewEmail *string // nil omits the guarded fragment(s)
-	Nickname *string // nil omits the guarded fragment(s)
+	NewEmail optional.Option[string] // None omits the guarded fragment(s)
+	Nickname optional.Option[string] // None omits the guarded fragment(s)
 	ID       int64
 }
 
@@ -19,22 +20,22 @@ var updateUserProfileFrags = []runtime.Frag{
 	{Kind: runtime.Guarded, GuardMask: 0x1, Sep: runtime.SepComma, Text: "email = :new_email", ParamSpans: []runtime.Span{{Start: 8, End: 18}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Skel, Text: "\n"},
 	{Kind: runtime.Guarded, GuardMask: 0x2, Sep: runtime.SepComma, Text: "nickname = :nickname", ParamSpans: []runtime.Span{{Start: 11, End: 20}}, ParamIdx: []int16{1}},
-	{Kind: runtime.Skel, Text: "\nWHERE id = :id;\n", ParamSpans: []runtime.Span{{Start: 12, End: 15}}, ParamIdx: []int16{2}},
+	{Kind: runtime.Skel, Text: "\nWHERE id = :id;\n\n", ParamSpans: []runtime.Span{{Start: 12, End: 15}}, ParamIdx: []int16{2}},
 }
 
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (int64, error) {
 	var key runtime.ShapeKey
-	if arg.NewEmail != nil {
+	if arg.NewEmail.IsSome() {
 		key.Guards |= 1 << 0
 	}
-	if arg.Nickname != nil {
+	if arg.Nickname.IsSome() {
 		key.Guards |= 1 << 1
 	}
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UpdateUserProfile", updateUserProfileFrags, key)
 	if err != nil {
 		return 0, err
 	}
-	args := runtime.ResolveArgs(binds, []any{arg.NewEmail, arg.Nickname, arg.ID}, nil)
+	args := runtime.ResolveArgs(binds, []any{arg.NewEmail.UnwrapAsPtr(), arg.Nickname.UnwrapAsPtr(), arg.ID}, nil)
 	q.hook(key, sqlText)
 	res, err := q.db.ExecContext(ctx, sqlText, args...)
 	if err != nil {

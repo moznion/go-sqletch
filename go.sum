@@ -100,6 +100,8 @@ github.com/moby/sys/userns v0.1.0 h1:tVLXkFOxVu9A64/yh59slHVv9ahO9UIev4JZusOLG/g
 github.com/moby/sys/userns v0.1.0/go.mod h1:IHUYgu/kao6N8YZlp9Cf444ySSvCmDlmzUcYfDHOl28=
 github.com/moby/term v0.5.2 h1:6qk3FJAFDs6i/q3W/pQ97SX192qKfZgGjCQqfCJkgzQ=
 github.com/moby/term v0.5.2/go.mod h1:d3djjFCrjnB+fl8NJux+EJzu0msscUP+f8it8hPkFLc=
+github.com/moznion/go-optional v0.13.0 h1:0vFY5oa1lZ+6/bStvhGhwqQoO0mJBlgHgK/bilSvbaY=
+github.com/moznion/go-optional v0.13.0/go.mod h1:dF1w8zPjco8sOCCLzk+/1HLSLKI4iKdSLdJu0PYhWwg=
 github.com/ncruces/go-sqlite3 v0.35.2 h1:YOoumI7tkxMIm1MBrkucRb1qtvAPEh8RrZtv6U+2aLs=
 github.com/ncruces/go-sqlite3 v0.35.2/go.mod h1:lVlozMCF6VGdI1FOgl0pBfMviw6DIh/QIMKQyjmg2ac=
 github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 h1:td8kMW1bWwzc7NnlzPjQV4GbDNLkje8htGBfbZRaSh8=

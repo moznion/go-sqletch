@@ -11,6 +11,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/moznion/go-optional"
+
 	_ "github.com/go-sql-driver/mysql"
 
 	gen "github.com/moznion/go-sqletch/examples/mysql/gen"
@@ -50,7 +52,7 @@ func main() {
 
 	fmt.Println("active users, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: new("active"),
+		Status: optional.Some("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})
@@ -98,10 +100,21 @@ func main() {
 	must(err)
 	fmt.Printf("  Unscoped(): %d users\n", len(unscoped))
 
+	// :maybe-one — "no row" is a normal outcome (None), not an error.
+	fmt.Println("maybe-one lookup:")
+	hit, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "alice@example.com"})
+	must(err)
+	miss, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "nobody@example.com"})
+	must(err)
+	if u, err := hit.Take(); err == nil {
+		fmt.Printf("  hit: %s (nickname %q)\n", u.Email, u.Nickname.TakeOr("<none>"))
+	}
+	fmt.Printf("  miss is none: %v\n", miss.IsNone())
+
 	fmt.Println("PATCH update (nickname only):")
 	n, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: new("allie"),
+		Nickname: optional.Some("allie"),
 	})
 	must(err)
 	fmt.Printf("  %d row(s) updated\n", n)

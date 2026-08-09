@@ -5,40 +5,45 @@ package gen
 import (
 	"context"
 
+	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type GetUserProfileParams struct {
 	ID     int64
-	Status *string // nil omits the guarded fragment(s)
+	Status optional.Option[string] // None omits the guarded fragment(s)
 }
 
 type GetUserProfileRow struct {
 	ID       int64
 	Email    string
-	Nickname *string
-	OrgID    *int64
+	Nickname optional.Option[string]
+	OrgID    optional.Option[int64]
 }
 
 var getUserProfileFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: "\nSELECT u.id, u.email, u.nickname, u.org_id\nFROM users AS u\nWHERE u.id = :id\n\n", ParamSpans: []runtime.Span{{Start: 73, End: 76}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Guarded, GuardMask: 0x1, Sep: runtime.SepAnd, Text: "u.status = :status", ParamSpans: []runtime.Span{{Start: 11, End: 18}}, ParamIdx: []int16{1}},
-	{Kind: runtime.Skel, Text: "\n;\n"},
+	{Kind: runtime.Skel, Text: "\n;\n\n"},
 }
 
 func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error) {
 	var zero GetUserProfileRow
 	var key runtime.ShapeKey
-	if arg.Status != nil {
+	if arg.Status.IsSome() {
 		key.Guards |= 1 << 0
 	}
 	sqlText, argIdx := q.cache.Get("GetUserProfile", getUserProfileFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status})
+	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status.UnwrapAsPtr()})
 	q.hook(key, sqlText)
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i GetUserProfileRow
-	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.OrgID); err != nil {
+	var nul0 *string
+	var nul1 *int64
+	if err := row.Scan(&i.ID, &i.Email, &nul0, &nul1); err != nil {
 		return zero, err
 	}
+	i.Nickname = optional.FromNillable(nul0)
+	i.OrgID = optional.FromNillable(nul1)
 	return i, nil
 }

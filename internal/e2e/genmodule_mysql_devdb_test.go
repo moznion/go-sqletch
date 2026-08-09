@@ -43,6 +43,7 @@ func TestMySQLCLIAndGeneratedModule(t *testing.T) {
 		queriesSrc.WriteString(mysqlCorpus[name])
 		queriesSrc.WriteString("\n")
 	}
+	queriesSrc.WriteString(mysqlFindUserByEmail)
 	writeFile(t, dir, "db/schema.sql", mysqlSchemaSQL)
 	writeFile(t, dir, "queries/users.sql", queriesSrc.String())
 	writeConfig := func(dsn string) {
@@ -122,8 +123,13 @@ cache:
 	if drvVer == nil {
 		t.Fatal("go-sql-driver version not found in parent go.mod")
 	}
+	optVer := regexp.MustCompile(`github\.com/moznion/go-optional (v[0-9A-Za-z.\-+]+)`).FindStringSubmatch(string(parentMod))
+	if optVer == nil {
+		t.Fatal("go-optional version not found in parent go.mod")
+	}
 	goMod := "module sqletchgen\n\ngo 1.24\n\nrequire (\n" +
 		"\tgithub.com/go-sql-driver/mysql " + drvVer[1] + "\n" +
+		"\tgithub.com/moznion/go-optional " + optVer[1] + "\n" +
 		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
 		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
@@ -156,6 +162,13 @@ cache:
 	}
 }
 
+const mysqlFindUserByEmail = `-- name: FindUserByEmail :maybe-one
+-- @param email: varchar(255)
+SELECT u.id, u.email, u.nickname
+FROM users AS u
+WHERE u.email = :email;
+`
+
 const mysqlE2EMain = `package main
 
 import (
@@ -166,6 +179,8 @@ import (
 	"os"
 
 	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/moznion/go-optional"
 
 	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
@@ -217,7 +232,7 @@ func main() {
 	expect(len(all) == 3, "all users")
 
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: gen.Ptr("active"),
+		Status: optional.Some("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  100,
 	})
@@ -225,7 +240,7 @@ func main() {
 	expect(len(active) == 2 && active[0].Email == "alice@example.com", "active users sorted by email")
 
 	org, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		OrganizationID: gen.Ptr(int64(77)),
+		OrganizationID: optional.Some(int64(77)),
 		Limit:          100,
 	})
 	die(err)
@@ -256,16 +271,27 @@ func main() {
 	inGuarded, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
 		TenantID: 1,
 		Statuses: []string{"active", "banned"},
-		MinID:    gen.Ptr(int64(2)),
+		MinID:    optional.Some(int64(2)),
 		Limit:    100,
 	})
 	die(err)
 	expect(len(inGuarded) == 2 && inGuarded[0].ID == 2, "@in composes with a guarded conjunct")
 
+	// :maybe-one — no row is None, never an error; a hit is Some with
+	// NULL columns still scanning into None fields.
+	hitOpt, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "bob@example.com"})
+	die(err)
+	hit, err := hitOpt.Take()
+	die(err)
+	expect(hit.ID == 2 && hit.Nickname.IsNone(), "maybe-one hit with NULL nickname")
+	missOpt, err := q.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "zoe@example.com"})
+	die(err)
+	expect(missOpt.IsNone(), "maybe-one miss is None, not an error")
+
 	// PATCH semantics through :execrows; verify via a direct query.
 	n, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: gen.Ptr("allie"),
+		Nickname: optional.Some("allie"),
 	})
 	die(err)
 	expect(n == 1, "one row patched")
@@ -295,7 +321,7 @@ func main() {
 	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: false})
 	die(err)
 	expect(len(act) == 1 && act[0].Actions == 2, "@when guard drops the NULL-actor row")
-	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: gen.Ptr(int64(99))})
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: optional.Some(int64(99))})
 	die(err)
 	expect(len(act) == 0, "HAVING conjunct filters the group out")
 

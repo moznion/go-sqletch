@@ -12,6 +12,10 @@ type Annotation int
 const (
 	AnnotationInvalid Annotation = iota
 	AnnotationOne
+	// AnnotationMaybeOne is :one with "no row" as a normal outcome:
+	// the generated method returns Option[Row] and maps the driver's
+	// no-rows error to None instead of surfacing it.
+	AnnotationMaybeOne
 	AnnotationMany
 	AnnotationExec
 	AnnotationExecRows
@@ -21,6 +25,8 @@ func (a Annotation) String() string {
 	switch a {
 	case AnnotationOne:
 		return ":one"
+	case AnnotationMaybeOne:
+		return ":maybe-one"
 	case AnnotationMany:
 		return ":many"
 	case AnnotationExec:

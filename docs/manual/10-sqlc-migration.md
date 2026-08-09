@@ -59,10 +59,12 @@ sees the `OR IS NULL` de-optimization.
   string splicing escape hatch, by design: if it composes at runtime,
   it was verified at compile time. When a query's dynamism doesn't
   fit, write two queries and pick in Go.
-- **Nullable columns are pointers** (no `sql.Null*` / pgtype
-  wrappers). Nullability comes from catalog analysis with
-  conservative treatment of optional joins; use `overrides` for
-  application-level invariants.
+- **Nullable columns are
+  [go-optional](https://github.com/moznion/go-optional) `Option[T]`
+  fields** (no pointers, no `sql.Null*` / pgtype wrappers).
+  Nullability comes from catalog analysis with conservative treatment
+  of optional joins; use `overrides` for application-level
+  invariants.
 
 ## Migration checklist
 
