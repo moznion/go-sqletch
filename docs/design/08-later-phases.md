@@ -89,6 +89,22 @@ runtime's nil/`Unscoped` composition. One block per query remains.
   (preorder, ordinals + arity) as cache key — full-encoding compare on
   LRU hit; caps (nodes/depth) checked before composition
   (`ErrTreeTooLarge`).
+  The cap check (`Tree.checkCaps`) must run before **anything** walks
+  the tree, including the encoder that builds the cache key: the tree
+  is caller-built from request data, and every other traversal recurses
+  without a depth bound of its own, so an unchecked deep tree is a
+  fatal stack overflow rather than an error. `checkCaps` is the one
+  traversal that is safe on an arbitrary tree — its counters trip
+  within `MaxNodes` nodes and `MaxDepth` frames. `Tree.Encode` cannot
+  self-defend: it does not receive the caps, and a built-in bound would
+  collapse the encoding of legitimate trees wherever `filter_tree_caps`
+  was raised, which is a cache-key collision.
+  It also bounds total predicate arguments at `MaxTreeArgs` (32767),
+  independently of the configured caps, because tree bind indices are
+  int16 and the composer accumulates one per argument. This is checked
+  on the value rather than on `filter_tree_caps.max_nodes`: predicates
+  may take no parameters at all, so no node count implies an argument
+  count, and a config bound would reject working setups.
 - required mode: `@filter-tree!(param)` — zero-value tree returns
   `ErrFilterRequired` before composition; codegen emits an explicit
   `<Query>Unscoped()` constructor (renders `TRUE`) as the sole opt-out
@@ -145,6 +161,13 @@ Mechanical extensions of existing paths (conjunct machinery; the
 - Expanding dialects: arity in shape key; placeholder-run synthesis is
   a new P2-vocabulary connective (`IN (?, ?, …)`); empty list →
   literal `FALSE`. Compose-conformance test extended over arities.
+  Arity is bounded by `MaxInArity` (32767, `ErrShapeKeyLimit`) because
+  `Bind.Elem` — the 1-based element index of the bind plan — is an
+  int16. The bound is enforced during composition, not by the scanner:
+  the arity is caller data, not a property of the template. Widening
+  `Bind` was considered and rejected: engines cap placeholders below
+  this anyway (SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` is 32766),
+  so the extra word per bind would buy an arity no engine accepts.
 
 ### Embedded PostgreSQL oracle backend
 

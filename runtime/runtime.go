@@ -482,6 +482,12 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps T
 				}
 				continue
 			}
+			if n > MaxInArity {
+				*bp = co.b[:0]
+				composeBufs.Put(bp)
+				return "", nil, fmt.Errorf("%w: @in list of %d elements exceeds %d",
+					ErrShapeKeyLimit, n, MaxInArity)
+			}
 			co.b = append(co.b, "IN ("...)
 			for e := int32(1); e <= n; e++ {
 				if e > 1 {
@@ -546,6 +552,14 @@ const (
 	// MaxChooseOrdinals: ShapeKey.Choices holds one uint8 per @choose
 	// block, counting the @default body.
 	MaxChooseOrdinals = 255
+	// MaxInArity bounds an @in list on expanding dialects. Bind.Elem is
+	// an int16 holding a 1-based element index, so past this the index
+	// wraps: negative reads as "bind the value whole", and far enough
+	// round it lands on a different element. Unlike the limits above
+	// this one is on CALLER data, not the template, so it is enforced
+	// during composition. Engines cap placeholders well below it
+	// anyway (SQLite's default is 32766).
+	MaxInArity = 32767
 )
 
 // ErrShapeKeyLimit reports a construct too large for the shape key's
@@ -754,6 +768,13 @@ func (c *ComposedCache) GetTree(queryName string, frags []Frag, key ShapeKey, tr
 
 // GetTreeStyle is GetTree with an explicit placeholder style.
 func (c *ComposedCache) GetTreeStyle(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (string, []Bind, error) {
+	// Before Encode, which walks the tree with no depth bound of its
+	// own: the caps must bound the work, not just the outcome. A tree
+	// past them would otherwise be encoded in full — and deep enough,
+	// overflow the stack — on its way to being rejected by compose.
+	if err := tree.checkCaps(caps); err != nil {
+		return "", nil, err
+	}
 	key.Trees = []string{tree.Encode()}
 	return c.get(style, queryName, frags, key, tree, caps)
 }

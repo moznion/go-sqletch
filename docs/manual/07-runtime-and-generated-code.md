@@ -28,8 +28,13 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
 - Errors before any SQL is sent: zero value of a required `@choose`
   (`runtime.ErrChooseRequired`), invalid `@order-by` selection
   (`runtime.ErrOrderKey`), `nil` required tree
-  (`runtime.ErrFilterRequired`), oversized tree
-  (`runtime.ErrTreeTooLarge`).
+  (`runtime.ErrFilterRequired`), oversized tree or one past
+  `runtime.MaxTreeArgs` predicate arguments (`runtime.ErrTreeTooLarge`),
+  and an `@in` list longer than `runtime.MaxInArity` on the expanding
+  dialects (`runtime.ErrShapeKeyLimit`). The last two bound values the
+  *caller* supplies, so they are composition-time errors rather than
+  compile-time refusals; engines cap placeholders below `MaxInArity`
+  anyway (SQLite's default is 32766).
 
 ## What happens on a call
 
