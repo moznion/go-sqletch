@@ -37,6 +37,55 @@ Classify every relation in the maximal tree:
   reasoning about guarded INNER joins implying non-nullness (that was
   review counterexample F1(b); it breaks per-shape soundness).
 
+## 2a. Provenance trust (soundness delta, 2026-08)
+
+Rule 2 below narrows from `SrcRel` — the engine's report of which
+base table a result column came from. The original implementation
+trusted that report unconditionally and cross-referenced it against a
+*name-based* reading of the FROM list; the deterministic adversarial
+suite (`TestNullabilitySoundnessAdversarial` and its MySQL/SQLite
+variants) proved four NULL-into-value counterexamples in that gap:
+
+- PostgreSQL's `resorigtbl` (and SQLite's column-origin API) resolve
+  THROUGH derived tables and CTEs to base-table OIDs the FROM list
+  never mentions — a null-extended derived table narrowed as if its
+  base table were joined directly.
+- A schema-qualified join (`LEFT JOIN aux.orgs`) lost its qualifier in
+  `RelRef` and marked the *wrong* same-named table as null-extended.
+- `GROUP BY ROLLUP/CUBE/GROUPING SETS` nulls grouping columns in
+  super-aggregate rows regardless of catalog NOT NULL.
+- SQLite attributes compound-select (UNION) output to the first
+  branch's table.
+
+SrcRel narrowing is therefore gated on **provenance trust**:
+
+- **Presence**: the source OID must be accounted for by a skeleton
+  FROM relation, resolved schema-aware (`RelRef.Schema` +
+  `Catalog.LookupQualified`; an explicit qualifier never falls back to
+  another schema). An unaccounted OID fails SAFE to nullable — this
+  also covers FROM constructs the frontend does not model
+  (e.g. an unrecognized range item simply never becomes present).
+- **Kill-switches** (`Tree.HasOpaqueProvenance`,
+  `Tree.HasGroupingSets`): a derived table in FROM, a CTE, a set
+  operation, or a grouping set disables SrcRel narrowing for the
+  whole statement — presence alone cannot save the dual-instance case
+  (the same table joined directly *and* wrapped in a null-extended
+  derived table). On MySQL/SQLite a database-qualified table
+  reference is also opaque: their wire attribution is name-based and
+  database-blind. INSERT is exempt on PostgreSQL (RETURNING columns
+  are attributed to the target relation only); sublinks are not
+  FROM-reachable and stay transparent.
+
+Views need no special case under this rule: PostgreSQL and MySQL
+report the *view's own* identity (whose catalog rows carry the
+engine's per-view nullability), and SQLite resolves through to a base
+table that then fails the presence check.
+
+The index-based expression whitelist (rule 3) is likewise gated on
+exact alignment: any star target item, or a length mismatch between
+target items and described columns, disables it — a `count(*)` target
+must never vouch for a differently-indexed column.
+
 ## 3. Column decision
 
 Per result column, in order:
@@ -44,8 +93,8 @@ Per result column, in order:
 1. Config override (`nullable: true/false` per query.column) wins.
 2. `Desc.Columns[i].SourceRel` set (direct column reference — pgx
    gives TableOID/AttrNumber): look up `Catalog` column.
-   - column `NotNull` **and** its relation is not nullable-side (§2)
-     → non-nullable.
+   - column `NotNull` **and** its relation is present and trusted
+     (§2a) **and** not nullable-side (§2) → non-nullable.
    - else nullable.
 3. Expression columns (no source ref): **nullable**, except a small
    total-function whitelist evaluated on the maximal tree's target
@@ -93,6 +142,13 @@ entries self-describing for `explain`.
   template, execute representative shapes against seeded data
   engineered to produce NULLs wherever possible; scanning into the
   generated structs must never fail with a NULL-into-value error.
+- Deterministic adversarial soundness suite
+  (`internal/e2e/nullability_soundness_devdb_test.go`, one per
+  dialect): each case pairs a template with fixed seed data that
+  forces NULL into a suspect column; a NULL observed in a
+  claimed-non-nullable column fails the test. The §2a
+  counterexamples live here as permanent regressions; extend this
+  suite first when touching the analyzer.
 - Acceptance: Use Case 1 row struct fields match the spec sketch
   (all non-pointer — `users` columns NOT NULL in the example schema);
   a doctored schema with nullable `status` flips exactly that field to

@@ -238,8 +238,12 @@ func relFromQTN(q *rsql.QualifiedTableName, join dialect.JoinType, nullable bool
 	if q.Alias != nil {
 		alias = q.Alias.Name
 	}
+	schema := ""
+	if q.Schema != nil {
+		schema = q.Schema.Name
+	}
 	return dialect.RelRef{
-		Alias: alias, Table: q.Name.Name, Loc: q.Name.NamePos.Offset,
+		Alias: alias, Table: q.Name.Name, Schema: schema, Loc: q.Name.NamePos.Offset,
 		Join: join, NullableSide: nullable,
 	}
 }
@@ -285,6 +289,45 @@ func collectSource(src rsql.Source, join dialect.JoinType, nullable bool, out *[
 		*out = append(*out, dialect.RelRef{Loc: -1, Join: join, NullableSide: nullable})
 	}
 }
+
+// HasOpaqueProvenance reports FROM-reachable derived tables, a WITH
+// clause, or a compound select — constructs SQLite's column-origin
+// attribution (sqlite3_column_table_name) can resolve through via
+// query flattening, which Relations() cannot model.
+func (t *tree) HasOpaqueProvenance() bool {
+	s := t.sel()
+	if s == nil {
+		return false
+	}
+	if s.WithClause != nil || s.Compound != nil {
+		return true
+	}
+	return s.Source != nil && opaqueSource(s.Source)
+}
+
+func opaqueSource(src rsql.Source) bool {
+	switch v := src.(type) {
+	case *rsql.JoinClause:
+		return opaqueSource(v.X) || opaqueSource(v.Y)
+	case *rsql.ParenSource:
+		if _, ok := v.X.(*rsql.SelectStatement); ok {
+			return true
+		}
+		return opaqueSource(v.X)
+	case *rsql.SelectStatement:
+		return true
+	case *rsql.QualifiedTableName:
+		// Column-origin attribution carries no database qualifier;
+		// an explicitly qualified reference (attached databases)
+		// would be attributed to a same-named main-database table.
+		return v.Schema != nil
+	}
+	return false
+}
+
+// HasGroupingSets is always false: SQLite has no ROLLUP / CUBE /
+// GROUPING SETS.
+func (t *tree) HasGroupingSets() bool { return false }
 
 // ---- deep table refs -------------------------------------------------------
 

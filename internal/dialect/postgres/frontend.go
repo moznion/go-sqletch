@@ -262,7 +262,8 @@ func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType, nullable bool)
 		alias = rv.Alias.Aliasname
 	}
 	return dialect.RelRef{
-		Alias: alias, Table: rv.Relname, Loc: int(rv.Location),
+		Alias: alias, Table: rv.Relname, Schema: rv.Schemaname,
+		Loc:  int(rv.Location),
 		Join: join, NullableSide: nullable,
 	}
 }
@@ -321,7 +322,74 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, o
 			alias = rf.Alias.Aliasname
 		}
 		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join, NullableSide: nullable})
+	case node.GetRangeTableSample() != nil:
+		// TABLESAMPLE wraps a plain relation; its rows are genuine
+		// table rows, so the relation participates normally.
+		if r := node.GetRangeTableSample().Relation; r != nil {
+			collectFromItem(r, join, nullable, out)
+		}
 	}
+}
+
+// HasOpaqueProvenance reports FROM-reachable constructs the wire
+// protocol resolves column origins through (resorigtbl propagates
+// through subquery and CTE levels): derived tables anywhere in the
+// FROM tree, a WITH clause, or a set operation. INSERT is exempt —
+// RETURNING columns are attributed to the target relation only.
+func (t *tree) HasOpaqueProvenance() bool {
+	n := t.stmt()
+	switch {
+	case n == nil:
+		return false
+	case n.GetSelectStmt() != nil:
+		s := n.GetSelectStmt()
+		return s.Op != pgquery.SetOperation_SETOP_NONE || s.WithClause != nil ||
+			anyOpaqueFromItem(s.FromClause)
+	case n.GetUpdateStmt() != nil:
+		u := n.GetUpdateStmt()
+		return u.WithClause != nil || anyOpaqueFromItem(u.FromClause)
+	case n.GetDeleteStmt() != nil:
+		d := n.GetDeleteStmt()
+		return d.WithClause != nil || anyOpaqueFromItem(d.UsingClause)
+	}
+	return false
+}
+
+func anyOpaqueFromItem(items []*pgquery.Node) bool {
+	for _, it := range items {
+		if opaqueFromItem(it) {
+			return true
+		}
+	}
+	return false
+}
+
+func opaqueFromItem(node *pgquery.Node) bool {
+	switch {
+	case node == nil:
+		return false
+	case node.GetRangeSubselect() != nil:
+		return true
+	case node.GetJoinExpr() != nil:
+		je := node.GetJoinExpr()
+		return opaqueFromItem(je.Larg) || opaqueFromItem(je.Rarg)
+	case node.GetRangeTableSample() != nil:
+		return opaqueFromItem(node.GetRangeTableSample().Relation)
+	}
+	return false
+}
+
+func (t *tree) HasGroupingSets() bool {
+	sel := t.sel()
+	if sel == nil {
+		return false
+	}
+	for _, g := range sel.GroupClause {
+		if g.GetGroupingSet() != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // DeepTables walks the whole statement (protobuf reflection) and

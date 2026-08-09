@@ -247,3 +247,39 @@ func TestProbes(t *testing.T) {
 		t.Error("row-splitting insert value accepted")
 	}
 }
+
+func TestHasOpaqueProvenance(t *testing.T) {
+	opaque := []string{
+		"SELECT s.a FROM t1 LEFT JOIN (SELECT a FROM t2) AS s ON s.a = t1.a",
+		"SELECT s.a FROM (SELECT a FROM t2) AS s",
+		"WITH s AS (SELECT a FROM t2) SELECT s.a FROM s",
+		"SELECT a FROM t1 UNION ALL SELECT b FROM t2",
+		// Column-origin attribution carries no database qualifier:
+		// attached-database references must not be trusted.
+		"SELECT t1.a FROM aux.t1",
+	}
+	for _, sql := range opaque {
+		if !parse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = false, want true", sql)
+		}
+	}
+	transparent := []string{
+		"SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a",
+		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) AS s)",
+	}
+	for _, sql := range transparent {
+		if parse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = true, want false", sql)
+		}
+	}
+	if parse(t, "SELECT a FROM t").HasGroupingSets() {
+		t.Error("SQLite has no grouping sets; must always be false")
+	}
+}
+
+func TestRelations_SchemaQualifier(t *testing.T) {
+	rels := parse(t, "SELECT t1.a FROM aux.t1").Relations()
+	if len(rels) != 1 || rels[0].Table != "t1" || rels[0].Schema != "aux" {
+		t.Fatalf("relations = %+v, want schema-qualified t1", rels)
+	}
+}
