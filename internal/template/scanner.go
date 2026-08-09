@@ -18,7 +18,7 @@ func NewScanner(profile dialect.LexerProfile) *Scanner {
 	return &Scanner{profile: profile}
 }
 
-var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|many|exec|execrows)\s*$`)
+var headerRe = regexp.MustCompile(`^--\s*name:\s*([A-Za-z][A-Za-z0-9_]*)\s+:(one|maybe-one|many|exec|execrows)\s*$`)
 var (
 	paramHintRe = regexp.MustCompile(`^--\s*@param\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
 	colHintRe   = regexp.MustCompile(`^--\s*@column\s+([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$`)
@@ -233,7 +233,7 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 		default:
 			if !fs.strayReported {
 				fs.errorf(diagnostics.CodeMissingHeader, fs.span(tok.Start, tok.End),
-					"statement without a query header; every query starts with `-- name: QueryName :many` (or :one/:exec/:execrows)")
+					"statement without a query header; every query starts with `-- name: QueryName :many` (or :one/:maybe-one/:exec/:execrows)")
 				fs.strayReported = true
 			}
 			return
@@ -249,7 +249,7 @@ func (fs *fileScan) startQuery(name, ann string, headerTok dialect.Token) {
 	}
 	fs.names[name] = fs.span(headerTok.Start, headerTok.End)
 	annotation := map[string]Annotation{
-		"one": AnnotationOne, "many": AnnotationMany,
+		"one": AnnotationOne, "maybe-one": AnnotationMaybeOne, "many": AnnotationMany,
 		"exec": AnnotationExec, "execrows": AnnotationExecRows,
 	}[ann]
 	fs.qb = &queryBuilder{

@@ -229,6 +229,17 @@ DELETE FROM t WHERE TRUE
 	}
 }
 
+func TestScan_MaybeOneAnnotation(t *testing.T) {
+	f := scanClean(t, "-- name: FindUser :maybe-one\nSELECT u.id FROM users AS u WHERE u.id = :id;\n")
+	q := f.Queries[0]
+	if q.Annotation != AnnotationMaybeOne {
+		t.Fatalf("annotation = %v, want %v", q.Annotation, AnnotationMaybeOne)
+	}
+	if got := q.Annotation.String(); got != ":maybe-one" {
+		t.Fatalf("String() = %q, want %q", got, ":maybe-one")
+	}
+}
+
 // TestScan_Reconstruction: item raw spans are contiguous and reproduce
 // the source (design 01 §9 invariant).
 func TestScan_Reconstruction(t *testing.T) {

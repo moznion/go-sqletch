@@ -60,7 +60,7 @@ const (
     // …
 )
 
-type SearchUsersParams struct { /* per R9: pointers for optional */ }
+type SearchUsersParams struct { /* per R9: optional.Option[T] for optional (design 17) */ }
 type SearchUsersRow struct    { /* per P5 nullability */ }
 
 // fragment table: compile-time constants, never mutated

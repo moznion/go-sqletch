@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "schema_fp": "00bee77d27865758e214d6e882463851e47b530e6dd382de757c8ed01bdc0ccc",
+  "rendered_sql": "\n-- @param new_email: varchar(255)\n-- @param nickname: varchar(64)\n-- @param id: bigint\nUPDATE users\nSET\n    tenant_id = tenant_id\n\n, email = ?\n\n, nickname = ?\nWHERE id = ?;\n\n",
+  "params": [
+    {
+      "oid": 0,
+      "name": ""
+    },
+    {
+      "oid": 0,
+      "name": ""
+    },
+    {
+      "oid": 0,
+      "name": ""
+    }
+  ],
+  "columns": null
+}

@@ -98,3 +98,8 @@ WHERE u.id = :id
   AND u.status = :status
 @endif
 ;
+
+-- name: FindUserByEmail :maybe-one
+SELECT u.id, u.email, u.nickname
+FROM users AS u
+WHERE u.email = :email;

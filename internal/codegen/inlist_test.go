@@ -180,10 +180,11 @@ func TestGenerate_QuestionStyle(t *testing.T) {
 	src := string(files["users_in_statuses.sql.gen.go"])
 	for _, want := range []string{
 		`Statuses\s+\[\]string`,
-		`MinID\s+\*int64`,
+		`MinID\s+optional\.Option\[int64\]`,
+		`arg\.MinID\.IsSome\(\)`,
 		`key\.Arities = \[\]int32\{int32\(len\(arg\.Statuses\)\)\}`,
 		`q\.cache\.GetBindsStyle\(runtime\.StyleQuestion, "UsersInStatuses", usersInStatusesFrags, key\)`,
-		`runtime\.ResolveArgs\(binds, \[\]any\{arg\.TenantID, arg\.Statuses, arg\.MinID, arg\.Limit\}, nil\)`,
+		`runtime\.ResolveArgs\(binds, \[\]any\{arg\.TenantID, arg\.Statuses, arg\.MinID\.UnwrapAsPtr\(\), arg\.Limit\}, nil\)`,
 		`\{Kind: runtime\.InList, Text: "IN \(SELECT NULL FROM DUAL WHERE FALSE\)", ParamIdx: \[\]int16\{1\}\}`,
 		`q\.db\.QueryContext\(ctx, sqlText, args\.\.\.\)`,
 	} {

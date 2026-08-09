@@ -70,3 +70,9 @@ SET
   , nickname = :nickname
 @endif
 WHERE id = :id;
+
+-- name: FindUserByEmail :maybe-one
+-- @param email: varchar(255)
+SELECT u.id, u.email, u.nickname
+FROM users AS u
+WHERE u.email = :email;

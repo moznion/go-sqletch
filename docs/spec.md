@@ -378,15 +378,18 @@ scanner's per-dialect lexer profile handles strings, comments, and the
 
 sqlc conventions apply and are constant per query (annotations are
 never dynamic): `:one` (exactly one row; `sql.ErrNoRows` when absent),
-`:many` (slice), `:exec` (no result), `:execrows` (affected count).
+`:maybe-one` (zero or one row; the method returns
+`optional.Option[Row]` and maps the driver's no-rows error to `None` —
+absence is a value, not an error), `:many` (slice), `:exec` (no
+result), `:execrows` (affected count).
 
 ## Constructs
 
 ### `@if-present(param, …)` … `@endif`
 
 Includes the enclosed fragment iff **all** listed parameters are
-provided at runtime. Presence is expressed in Go by non-nil pointer
-fields (see Generated API Conventions).
+provided at runtime. Presence is expressed in Go by `Some` values of
+`optional.Option[T]` fields (see Generated API Conventions).
 
 Allowed slots:
 
@@ -403,7 +406,7 @@ Multiple blocks may share the same guard parameters; they switch on and
 off together. Guards do not nest — a fragment needing two conditions
 uses a multi-parameter guard: `@if-present(a, b)`.
 
-Note: presence pointers mean `nil` = "omit the fragment". They cannot
+Note: presence Options mean `None` = "omit the fragment". They cannot
 express "filter where the column IS NULL" (SQL `NULL` as a *value* of
 an optional filter). That case is `@when`'s job. See Design Boundary.
 
@@ -686,10 +689,11 @@ name is a compile diagnostic.
 -   **R9 — Parameter discipline.**
     -   A parameter is **optional** iff every one of its bind
         appearances lies in fragments whose guard sets include it; it
-        becomes a pointer field (`nil` = absent).
-    -   A parameter with any unguarded appearance is **required**
-        (non-pointer). Listing a required parameter as an `@if-present`
-        guard is a compile error (the guard would be vacuously true).
+        becomes an `optional.Option[T]` field (`None` = absent).
+    -   A parameter with any unguarded appearance is **required** (a
+        plain value field). Listing a required parameter as an
+        `@if-present` guard is a compile error (the guard would be
+        vacuously true).
     -   A parameter appearing only inside fragments guarded by *other*
         parameters is required; its value is simply unused when those
         fragments are inactive.
@@ -859,12 +863,12 @@ const (
 )
 
 type SearchUsersParams struct {
-    OrganizationID *int64          // nil = omit the join
-    Status         *string         // nil = omit the predicate
-    EmailPrefix    *string
-    CreatedAfter   *time.Time
-    Sort           SearchUsersSort // zero value = @default
-    Limit          int64           // LIMIT params describe as int8
+    OrganizationID optional.Option[int64]  // None = omit the join
+    Status         optional.Option[string] // None = omit the predicate
+    EmailPrefix    optional.Option[string]
+    CreatedAfter   optional.Option[time.Time]
+    Sort           SearchUsersSort         // zero value = @default
+    Limit          int64                   // LIMIT params describe as int8
 }
 
 type SearchUsersRow struct {
@@ -877,12 +881,11 @@ type SearchUsersRow struct {
 func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
 ```
 
-Call site (`ptr` is the one-line generic helper
-`func Ptr[T any](v T) *T`, generated into the output package):
+Call site (`optional` is `github.com/moznion/go-optional`):
 
 ``` go
 rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: Ptr("active"),
+    Status: optional.Some("active"),
     Sort:   gen.SearchUsersSortCreatedAtDesc,
     Limit:  50,
 })
@@ -920,7 +923,7 @@ RETURNING id, email, nickname, bio, updated_at;
 ``` go
 row, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
     ID:    userID,
-    Email: Ptr("new@example.com"), // nickname and bio remain untouched
+    Email: optional.Some("new@example.com"), // nickname and bio remain untouched
 })
 ```
 
@@ -982,7 +985,7 @@ page1, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: t, Limit: 100
 // next page
 page2, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{
     TenantID: t,
-    AfterID:  Ptr(page1[len(page1)-1].ID),
+    AfterID:  optional.Some(page1[len(page1)-1].ID),
     Limit:    100,
 })
 ```
@@ -1280,9 +1283,9 @@ zero without changing the verification model.
 
 Per query, emit:
 
--   one params struct (optional params as pointers, `@choose` params as
-    generated enum types, `@filter-tree` params as typed tree values
-    with per-predicate constructors),
+-   one params struct (optional params as `optional.Option[T]` fields,
+    `@choose` params as generated enum types, `@filter-tree` params as
+    typed tree values with per-predicate constructors),
 -   one row struct,
 -   one public function,
 -   precompiled fragment tables and a deterministic composition routine
@@ -1312,7 +1315,12 @@ codebase and one transaction:
     exposing the composed SQL text for logging and tracing — "what SQL
     did this call actually run" is observable at runtime, not only via
     `sqletch explain`.
--   A generated `Ptr[T any](v T) *T` helper for presence parameters.
+-   Absence is uniformly `github.com/moznion/go-optional`'s
+    `Option[T]`: optional (presence) parameters, nullable result
+    columns, and the `:maybe-one` result all use it — never bare
+    pointers. The generated code depends on go-optional; the scan path
+    still hands the driver plain `*T` destinations and converts with
+    `optional.FromNillable`, so driver behavior is unchanged.
 -   Designed to run under `//go:generate sqletch generate`.
 
 ------------------------------------------------------------------------
@@ -1477,9 +1485,9 @@ database/sql, a builder) alongside sqletch in the same repository:
     two queries. Constant result shape is what makes one typed row
     struct per query possible; two shapes are two queries. The split
     also keeps each query independently plannable and auditable.
--   **NULL-as-value filters** — presence pointers reserve `nil` for
+-   **NULL-as-value filters** — presence Options reserve `None` for
     "absent"; "filter where column IS NULL" is expressed with `@when`,
-    not by overloading the pointer.
+    not by overloading the Option.
 -   **Caller-supplied SQL fragments** — a use-case layer passing WHERE
     snippets as strings into a repository is rejected on principle:
     runtime SQL text is unverifiable. The supported form is a typed

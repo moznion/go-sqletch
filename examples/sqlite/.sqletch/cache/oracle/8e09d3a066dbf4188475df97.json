@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "schema_fp": "a662b82ee1b8313dbbd5c6526dd148583cc95aa74f20dfd8ea82fc8405d1a46e",
+  "rendered_sql": "\n-- @param email: text\nSELECT u.id, u.email, u.nickname\nFROM users AS u\nWHERE u.email = ?;\n",
+  "params": [
+    {
+      "oid": 0,
+      "name": ""
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 1,
+      "type_name": "integer",
+      "src_rel": 1,
+      "src_att": 1,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "oid": 3,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 2,
+      "nullable": false
+    },
+    {
+      "name": "nickname",
+      "oid": 3,
+      "type_name": "text",
+      "src_rel": 1,
+      "src_att": 5,
+      "nullable": false
+    }
+  ]
+}
