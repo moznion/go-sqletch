@@ -112,6 +112,7 @@ const (
 	CodeConfigInvalid   Code = "SQLETCH301" // sqletch.yaml field validation
 	CodeExpansionLarge  Code = "SQLETCH302" // static expansion exceeds max_shapes
 	CodePolicyInvalid   Code = "SQLETCH303" // a policy declaration is malformed
+	CodeShapeCapReached Code = "SQLETCH304" // explain stopped enumerating at --max-shapes
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
 )

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 func writeProject(t *testing.T) (dir, configPath string) {
@@ -53,7 +55,7 @@ output:
 func TestExplainEnumerate_Offline(t *testing.T) {
 	_, configPath := writeProject(t)
 	var out, errW bytes.Buffer
-	code := Explain(context.Background(), configPath, nil, true, false, &out, &errW)
+	code := Explain(context.Background(), configPath, nil, ExplainOptions{Enumerate: true}, &out, &errW)
 	if code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, errW.String())
 	}
@@ -67,16 +69,74 @@ func TestExplainEnumerate_Offline(t *testing.T) {
 			t.Errorf("enumerate output missing %q:\n%s", want, got)
 		}
 	}
+	if errW.Len() != 0 {
+		t.Errorf("an untruncated enumeration must say nothing on stderr:\n%s", errW.String())
+	}
 }
 
 func TestExplainEnumerate_FilterAndMiss(t *testing.T) {
 	_, configPath := writeProject(t)
 	var out, errW bytes.Buffer
-	if code := Explain(context.Background(), configPath, []string{"FindT"}, true, false, &out, &errW); code != ExitOK {
+	if code := Explain(context.Background(), configPath, []string{"FindT"}, ExplainOptions{Enumerate: true}, &out, &errW); code != ExitOK {
 		t.Fatalf("exit %d\n%s", code, errW.String())
 	}
-	if code := Explain(context.Background(), configPath, []string{"Nope"}, true, false, &out, &errW); code != ExitDiagnostics {
+	if code := Explain(context.Background(), configPath, []string{"Nope"}, ExplainOptions{Enumerate: true}, &out, &errW); code != ExitDiagnostics {
 		t.Fatalf("unknown query must exit %d, got %d", ExitDiagnostics, code)
+	}
+}
+
+// Truncating `explain --enumerate` is a WARNING on stderr, not an SQL
+// comment mixed into the shape stream on stdout: the exit code stays 0
+// because plain enumeration is an inspection command that never claimed
+// completeness, but the notice must not pollute `explain > shapes.sql`.
+func TestExplainEnumerate_CapWarnsOnStderr(t *testing.T) {
+	_, configPath := writeProject(t)
+	var out, errW bytes.Buffer
+	code := Explain(context.Background(), configPath, nil,
+		ExplainOptions{Enumerate: true, MaxShapes: 2}, &out, &errW)
+	if code != ExitOK {
+		t.Fatalf("enumerate truncation must stay exit %d, got %d\n%s", ExitOK, code, errW.String())
+	}
+	if n := strings.Count(out.String(), "-- FindT shape "); n != 2 {
+		t.Errorf("shapes printed = %d, want 2 (the cap):\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "truncated") || strings.Contains(out.String(), "SQLETCH") {
+		t.Errorf("stdout must carry only shape SQL, no cap notice:\n%s", out.String())
+	}
+	for _, want := range []string{"warning", string(diagnostics.CodeShapeCapReached), "FindT", "--max-shapes"} {
+		if !strings.Contains(errW.String(), want) {
+			t.Errorf("cap warning missing %q:\n%s", want, errW.String())
+		}
+	}
+}
+
+// Raising the cap past the reachable shape count clears the warning.
+func TestExplainEnumerate_MaxShapesRaisesCap(t *testing.T) {
+	_, configPath := writeProject(t)
+	var out, errW bytes.Buffer
+	code := Explain(context.Background(), configPath, nil,
+		ExplainOptions{Enumerate: true, MaxShapes: 100}, &out, &errW)
+	if code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, errW.String())
+	}
+	if n := strings.Count(out.String(), "-- FindT shape "); n != 4 {
+		t.Errorf("shapes printed = %d, want all 4:\n%s", n, out.String())
+	}
+	if errW.Len() != 0 {
+		t.Errorf("a cap that is never reached must not warn:\n%s", errW.String())
+	}
+}
+
+func TestExplain_NegativeMaxShapesRejected(t *testing.T) {
+	_, configPath := writeProject(t)
+	var out, errW bytes.Buffer
+	code := Explain(context.Background(), configPath, nil,
+		ExplainOptions{Enumerate: true, MaxShapes: -1}, &out, &errW)
+	if code != ExitEnvironment {
+		t.Fatalf("negative --max-shapes must exit %d, got %d\n%s", ExitEnvironment, code, errW.String())
+	}
+	if !strings.Contains(errW.String(), "--max-shapes") {
+		t.Errorf("rejection must name the flag:\n%s", errW.String())
 	}
 }
 

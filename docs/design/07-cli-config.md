@@ -74,6 +74,23 @@ column types with nullability, maximal SQL. No DB, no recompilation.
 (`--enumerate` and `--analyze` are v0.2/v0.3 flags; the command
 structure reserves them.)
 
+Both enumerating modes are capped — `--enumerate` at 4096 shapes,
+`--analyze` at 64 (it plans each shape against the DB) — and
+`--max-shapes N` overrides either. Hitting a cap is **SQLETCH304, on
+stderr through the diagnostic channel**, never an SQL comment on
+stdout: stdout is the shape stream, and `explain > shapes.sql` must
+stay clean.
+
+The severity splits by what the mode claims. `--enumerate` is
+inspection — it offered to print shapes, so a cap is a *warning* and
+the exit code stays 0. `--analyze` reads as planner coverage over the
+shape space, so a cap is an *error* (exit 1): `shape.Enumerate` walks
+guard bitmasks in ascending order, so truncation does not yield a
+smaller sample but a biased one — the high guard bits are never planned
+at all, and "every shape plans acceptably" was never established. Other
+queries are still analyzed before the command exits, so one oversized
+query does not hide the rest.
+
 Exit codes: 0 ok, 1 diagnostics reported, 2 environment failure
 (config unreadable, DB unreachable, cache write failure). CI can
 distinguish "your SQL is wrong" from "infra flaked". A `server_version`

@@ -74,17 +74,22 @@ func main() {
 	root.AddCommand(check)
 
 	var enumerate, analyze bool
+	var maxShapes int
 	explain := &cobra.Command{
 		Use:   "explain [query...]",
 		Short: "show guards, cases, types, and shape counts per query",
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(cli.Explain(context.Background(), configPath, args, enumerate, analyze, os.Stdout, os.Stderr))
+			opts := cli.ExplainOptions{Enumerate: enumerate, Analyze: analyze, MaxShapes: maxShapes}
+			os.Exit(cli.Explain(context.Background(), configPath, args, opts, os.Stdout, os.Stderr))
 		},
 	}
 	explain.Flags().BoolVar(&enumerate, "enumerate", false,
 		"print every reachable SQL shape (no database needed)")
 	explain.Flags().BoolVar(&analyze, "analyze", false,
 		"EXPLAIN every reachable shape on the dev DB and print the plans")
+	explain.Flags().IntVar(&maxShapes, "max-shapes", 0,
+		"cap shape enumeration for --enumerate/--analyze (0 = the mode's default); "+
+			"--enumerate warns when it stops at the cap, --analyze fails")
 	root.AddCommand(explain)
 
 	var fmtCheck bool

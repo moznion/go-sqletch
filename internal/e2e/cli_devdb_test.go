@@ -13,6 +13,7 @@ import (
 
 	"github.com/moznion/go-sqletch/internal/cli"
 	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
 // TestCLIColdWarmRoundTrip is the DX flagship (design 04/07): a cold
@@ -149,12 +150,30 @@ static_expansion:
 	// 6b. explain --analyze prints a plan per shape via the dev DB.
 	writeConfig(dsn)
 	var out2, err2 bytes.Buffer
-	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, false, true, &out2, &err2); code != cli.ExitOK {
+	analyze := cli.ExplainOptions{Analyze: true}
+	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, analyze, &out2, &err2); code != cli.ExitOK {
 		t.Fatalf("explain --analyze: exit %d\n%s", code, err2.String())
 	}
 	if strings.Count(out2.String(), "-- SearchUsers shape ") != 8 ||
 		!strings.Contains(out2.String(), "Seq Scan") {
 		t.Errorf("analyze output unexpected:\n%s", out2.String())
+	}
+
+	// 6c. Truncated analysis FAILS: the plans printed cover only the low
+	// guard bits, so no claim about the shape space survives. The plans
+	// it did produce are still printed.
+	var out2c, err2c bytes.Buffer
+	capped := cli.ExplainOptions{Analyze: true, MaxShapes: 3}
+	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, capped, &out2c, &err2c); code != cli.ExitDiagnostics {
+		t.Fatalf("truncated --analyze: exit %d, want %d\n%s", code, cli.ExitDiagnostics, err2c.String())
+	}
+	if n := strings.Count(out2c.String(), "-- SearchUsers shape "); n != 3 {
+		t.Errorf("truncated --analyze printed %d plans, want 3:\n%s", n, out2c.String())
+	}
+	if !strings.Contains(err2c.String(), string(diagnostics.CodeShapeCapReached)) ||
+		!strings.Contains(err2c.String(), "--max-shapes") {
+		t.Errorf("truncated --analyze must report %s with a hint:\n%s",
+			diagnostics.CodeShapeCapReached, err2c.String())
 	}
 
 	// 7. A user mistake yields diagnostics (exit 1), not an env error.
