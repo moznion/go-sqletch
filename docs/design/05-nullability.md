@@ -121,6 +121,44 @@ Per result column, in order:
    easy "optimization" to slip in: the analyzer receives only the
    skeleton tree view, not fragment bodies.)
 
+## 3a. Sound precision extensions (2026-08)
+
+Three narrowings beyond §3, each with its per-shape argument and its
+escape hatches pinned by the adversarial suite:
+
+1. **Total expressions** (`TargetItem.Total`, per-dialect classifier):
+   non-NULL literals, `EXISTS`, `IS [NOT] NULL` / boolean tests,
+   non-null value functions (`current_schema` excluded — NULL under an
+   empty search_path), casts of total expressions (MySQL excluded —
+   its CAST yields NULL on conversion failure), and `coalesce` with at
+   least one total argument. Data-INDEPENDENT forms only: a column
+   argument never makes an expression total, so `coalesce(a, b)` over
+   two nullable columns stays nullable (the §3 doc's
+   "coalesce with a non-nullable column argument" variant remains
+   deliberately unimplemented — it would need the instance resolution
+   below plus argument-position analysis for marginal gain).
+2. **Strict aggregates under GROUP BY**: `sum`/`min`/`max`/`avg` over
+   a single bare-column argument are non-null when (a) the statement
+   has a GROUP BY (every output row's group is non-empty) with no
+   grouping sets (the `()` set aggregates a possibly-empty input),
+   (b) there is no FILTER clause (empties a group's aggregated input)
+   and no OVER clause, and (c) the argument resolves — alias-first,
+   unique-candidate for bare names — to a non-null-extended skeleton
+   relation's NOT NULL column. Resolution is name-based over the parse
+   tree, so it needs `trustSrc` (a CTE shadowing a table name would
+   otherwise resolve to the wrong catalog entry).
+3. **Skeleton `IS NOT NULL` narrowing** (the §3.4 deferral, now
+   implemented): a depth-0 statement-level WHERE conjunct of the
+   exact form `col IS NOT NULL` narrows the filtered column past
+   null-extension AND catalog nullability — WHERE runs after joins.
+   Guard rails: the conjunct must be SKELETON text (covered by no
+   rendering fragment: `@if-present`/`@when`/`@choose`/filter-tree
+   and woven-policy emissions are all fragments — F1a stays
+   nullable); `trustSrc` must hold; and the filtered table must have
+   exactly ONE skeleton instance, because the described column's
+   (SrcRel, SrcAtt) cannot tell `u1.org_id` from `u2.org_id` in a
+   self join.
+
 `@choose` in ORDER BY (v0.1's only choose slot) cannot affect result
 columns; the per-case nullable-most union becomes real work only with
 the v0.2 projection slot (08).

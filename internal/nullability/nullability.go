@@ -28,6 +28,20 @@ var funcWhitelist = map[string]bool{
 	"now":   true,
 }
 
+// strictAggs are aggregates that return non-NULL whenever their
+// argument is non-NULL on every input row AND every output row's
+// group is non-empty — i.e. under a statement-level GROUP BY without
+// grouping sets. Without GROUP BY the empty input yields one NULL
+// row; with grouping sets the () set aggregates a possibly-empty
+// input. FILTER clauses empty a group's aggregated input and OVER
+// changes the semantics entirely — TargetItem.AggArg is nil for both.
+var strictAggs = map[string]bool{
+	"sum": true,
+	"min": true,
+	"max": true,
+	"avg": true,
+}
+
 // Analyze returns nullable-ness per result column of desc.Columns.
 //
 // The discipline, mechanically:
@@ -95,6 +109,7 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	// a skeleton instance of the same table must not inherit a guarded
 	// instance's properties.
 	present := map[uint32]*presence{}
+	res := &instanceResolver{}
 	if cat != nil {
 		for _, rel := range maxTree.Relations() {
 			if isGuarded(maxR, rel.Loc) || rel.Table == "" {
@@ -112,6 +127,28 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 			if rel.NullableSide {
 				p.nullExtended = true
 			}
+			res.add(rel, t)
+		}
+	}
+
+	// Skeleton `col IS NOT NULL` conjuncts narrow the filtered column
+	// past null-extension and catalog nullability: WHERE runs after
+	// the joins, and a skeleton conjunct is present in every shape
+	// (guarded-predicate narrowing stays forbidden — F1a). The
+	// (SrcRel, SrcAtt) key cannot tell two instances of the same
+	// table apart, so narrowing additionally requires the table to
+	// have exactly ONE skeleton instance.
+	filtered := map[srcKey]bool{}
+	if trustSrc && cat != nil {
+		for _, cr := range maxTree.NotNullConjuncts() {
+			if !inSkeleton(maxR, cr.Loc) {
+				continue
+			}
+			inst, c, ok := res.resolve(cr.Fields)
+			if !ok || res.instances[inst.table.OID] != 1 {
+				continue
+			}
+			filtered[srcKey{rel: inst.table.OID, att: c.Att}] = true
 		}
 	}
 
@@ -126,6 +163,11 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 		}
 	}
 
+	// Strict aggregates narrow only when every output row's group is
+	// non-empty: a statement-level GROUP BY with no grouping sets
+	// (trustSrc already excludes the latter).
+	groupedAggs := trustSrc && maxTree.HasGroupBy()
+
 	out := make([]Verdict, len(desc.Columns))
 	for i, col := range desc.Columns {
 		if v, ok := overrides[col.Name]; ok {
@@ -135,14 +177,30 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 		// Direct column reference: catalog NOT NULL, provided the
 		// source relation is trusted, present, and not null-extended.
 		if col.SrcRel != 0 && cat != nil {
-			out[i] = srcVerdict(col, cat, trustSrc, untrusted, present)
+			out[i] = srcVerdict(col, cat, trustSrc, untrusted, present, filtered)
 			continue
 		}
-		// Expression column: nullable unless whitelisted total function.
-		if aligned && funcWhitelist[targets[i].FuncName] {
-			out[i] = Verdict{Nullable: false,
-				Reason: "total function " + targets[i].FuncName + "()"}
-			continue
+		// Expression column: nullable unless provably total.
+		if aligned {
+			ti := targets[i]
+			switch {
+			case funcWhitelist[ti.FuncName]:
+				out[i] = Verdict{Nullable: false,
+					Reason: "total function " + ti.FuncName + "()"}
+				continue
+			case ti.Total:
+				out[i] = Verdict{Nullable: false,
+					Reason: "total expression (literal/EXISTS/null test/total coalesce)"}
+				continue
+			case groupedAggs && strictAggs[ti.FuncName] && ti.AggArg != nil:
+				if inst, c, ok := res.resolve(ti.AggArg); ok &&
+					!inst.NullableSide && c.NotNull {
+					out[i] = Verdict{Nullable: false,
+						Reason: ti.FuncName + "(" + inst.table.Name + "." + c.Name +
+							") over a non-null column with GROUP BY"}
+					continue
+				}
+			}
 		}
 		out[i] = Verdict{Nullable: true,
 			Reason: "expression column without a totality proof"}
@@ -150,10 +208,74 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	return out
 }
 
+// srcKey identifies a described column's source: the engine's
+// (relation OID, attribute) attribution.
+type srcKey struct {
+	rel uint32
+	att int16
+}
+
+// instance is one named, non-guarded skeleton FROM relation resolved
+// against the catalog.
+type instance struct {
+	dialect.RelRef
+	table *cache.Table
+}
+
+// instanceResolver answers "which skeleton relation instance and
+// catalog column does this (possibly qualified) column path name?" —
+// alias-first for qualified paths, unique-candidate for bare names.
+type instanceResolver struct {
+	rels      []instance
+	instances map[uint32]int // catalog OID -> skeleton instance count
+}
+
+func (r *instanceResolver) add(rel dialect.RelRef, t *cache.Table) {
+	r.rels = append(r.rels, instance{RelRef: rel, table: t})
+	if r.instances == nil {
+		r.instances = map[uint32]int{}
+	}
+	r.instances[t.OID]++
+}
+
+func (r *instanceResolver) resolve(fields []string) (instance, *cache.Column, bool) {
+	switch len(fields) {
+	case 1:
+		var found instance
+		var col *cache.Column
+		n := 0
+		for _, inst := range r.rels {
+			if c := inst.table.Col(fields[0]); c != nil {
+				found, col = inst, c
+				n++
+			}
+		}
+		if n == 1 {
+			return found, col, true
+		}
+	case 2:
+		for _, inst := range r.rels {
+			name := inst.Alias
+			if name == "" {
+				name = inst.Table
+			}
+			if name != fields[0] {
+				continue
+			}
+			if c := inst.table.Col(fields[1]); c != nil {
+				return inst, c, true
+			}
+			return instance{}, nil, false
+		}
+	}
+	return instance{}, nil, false
+}
+
 // srcVerdict decides a source-attributed column under the provenance
 // discipline, spelling out which gate stopped the narrowing.
 func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
-	trustSrc bool, untrusted string, present map[uint32]*presence) Verdict {
+	trustSrc bool, untrusted string, present map[uint32]*presence,
+	filtered map[srcKey]bool) Verdict {
 
 	if !trustSrc {
 		return Verdict{Nullable: true, Reason: untrusted}
@@ -172,6 +294,12 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 		return Verdict{Nullable: true, Reason: "source column unknown to the catalog"}
 	}
 	qual := t.Name + "." + c.Name
+	// A skeleton IS NOT NULL conjunct runs after the joins: it beats
+	// both null-extension and catalog nullability.
+	if filtered[srcKey{rel: col.SrcRel, att: col.SrcAtt}] {
+		return Verdict{Nullable: false,
+			Reason: qual + " is filtered by an unconditional IS NOT NULL"}
+	}
 	if p.nullExtended {
 		return Verdict{Nullable: true,
 			Reason: qual + " is null-extended by an outer join"}
@@ -180,6 +308,23 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 		return Verdict{Nullable: true, Reason: qual + " is nullable in the catalog"}
 	}
 	return Verdict{Nullable: false, Reason: qual + " is NOT NULL in the catalog"}
+}
+
+// inSkeleton reports whether a rendered offset lies in skeleton text:
+// covered by NO fragment. Fragments carry every conditional emission
+// (@if-present, @when, @choose cases, @filter-tree, woven policies) —
+// only bare skeleton bytes are outside all of them, and only those
+// are present in every shape.
+func inSkeleton(maxR ast.Rendering, loc int) bool {
+	if loc < 0 {
+		return false
+	}
+	for _, fr := range maxR.Frags {
+		if loc >= fr.Start && loc < fr.End {
+			return false
+		}
+	}
+	return true
 }
 
 // presence is one accounted-for source OID: seen in the skeleton FROM

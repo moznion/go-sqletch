@@ -133,6 +133,53 @@ ORDER BY v NULLS LAST;
 `,
 		note: "empirical: does the wire protocol attribute UNION output to the first branch's members.id (NOT NULL)?",
 	},
+	// ---- precision-pack edges (design 05 §3a): each case is the
+	// escape hatch of a narrowing rule; if the rule ever over-reaches,
+	// the execution oracle catches the NULL. ----
+	{
+		name: "aggregate_without_group_by",
+		src: `-- name: EmptySum :many
+SELECT sum(m.id) AS s FROM members AS m WHERE m.id > 1000000;
+`,
+		note: "no GROUP BY: the empty input yields one NULL row — sum must stay nullable",
+	},
+	{
+		name: "aggregate_with_filter_clause",
+		src: `-- name: FilteredSum :many
+SELECT m.email, sum(m.id) FILTER (WHERE m.id > 1000000) AS s
+FROM members AS m GROUP BY m.email;
+`,
+		note: "FILTER empties every group's aggregated input — sum must stay nullable",
+	},
+	{
+		name: "is_not_null_on_self_join_instance",
+		src: `-- name: SelfJoinFilter :many
+SELECT m2.org_id FROM members AS m1
+JOIN members AS m2 ON m2.id = m1.id + 1
+WHERE m1.org_id IS NOT NULL
+ORDER BY m2.id;
+`,
+		note: "IS NOT NULL filters instance m1; the projected m2.org_id shares (SrcRel, SrcAtt) and can still be NULL",
+	},
+	{
+		name: "is_not_null_narrows_left_join",
+		src: `-- name: FilteredJoin :many
+SELECT m.email, o.name AS org_name
+FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+WHERE o.name IS NOT NULL
+ORDER BY m.id;
+`,
+		note: "positive: the skeleton IS NOT NULL narrows org_name past the null-extension — execution must agree",
+	},
+	{
+		name: "grouped_strict_aggregate",
+		src: `-- name: GroupedSum :many
+SELECT m.email, sum(m.id) AS s, max(m.org_id) AS mo
+FROM members AS m GROUP BY m.email
+ORDER BY m.email;
+`,
+		note: "positive: sum over NOT NULL id narrows under GROUP BY; max(org_id) has a nullable argument and must not",
+	},
 }
 
 func TestNullabilitySoundnessAdversarial(t *testing.T) {

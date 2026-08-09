@@ -501,10 +501,125 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 					item.FuncName = strings.ToLower(s.Sval)
 				}
 			}
+			item.AggArg = aggArg(fc)
 		}
+		item.Total = totalNode(rt.Val)
 		out = append(out, item)
 	}
 	return out
+}
+
+// aggArg extracts the single bare-column argument of a plain call —
+// no FILTER, no OVER, exactly one ColumnRef argument.
+func aggArg(fc *pgquery.FuncCall) []string {
+	if fc.AggFilter != nil || fc.Over != nil || fc.AggStar || len(fc.Args) != 1 {
+		return nil
+	}
+	cr := fc.Args[0].GetColumnRef()
+	if cr == nil {
+		return nil
+	}
+	var fields []string
+	for _, f := range cr.Fields {
+		s := f.GetString_()
+		if s == nil {
+			return nil // a star or other non-ident field
+		}
+		fields = append(fields, s.Sval)
+	}
+	return fields
+}
+
+// totalNode reports a data-independent never-NULL expression. Column
+// references are deliberately not total — their nullability is the
+// analyzer's catalog problem, not a syntactic fact.
+func totalNode(node *pgquery.Node) bool {
+	switch {
+	case node == nil:
+		return false
+	case node.GetAConst() != nil:
+		return !node.GetAConst().Isnull
+	case node.GetSubLink() != nil:
+		return node.GetSubLink().SubLinkType == pgquery.SubLinkType_EXISTS_SUBLINK
+	case node.GetNullTest() != nil, node.GetBooleanTest() != nil:
+		return true // IS [NOT] NULL / IS [NOT] TRUE… always yield a boolean
+	case node.GetSqlvalueFunction() != nil:
+		// current_schema is NULL with an empty search_path; every
+		// other value function is total.
+		return node.GetSqlvalueFunction().Op != pgquery.SQLValueFunctionOp_SVFOP_CURRENT_SCHEMA
+	case node.GetTypeCast() != nil:
+		return totalNode(node.GetTypeCast().Arg)
+	case node.GetCoalesceExpr() != nil:
+		for _, arg := range node.GetCoalesceExpr().Args {
+			if totalNode(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func (t *tree) HasGroupBy() bool {
+	sel := t.sel()
+	return sel != nil && len(sel.GroupClause) > 0
+}
+
+// NotNullConjuncts finds depth-0 WHERE conjuncts of the exact form
+// `col IS NOT NULL`.
+func (t *tree) NotNullConjuncts() []dialect.ColRef {
+	var where *pgquery.Node
+	n := t.stmt()
+	switch {
+	case n == nil:
+		return nil
+	case n.GetSelectStmt() != nil:
+		where = n.GetSelectStmt().WhereClause
+	case n.GetUpdateStmt() != nil:
+		where = n.GetUpdateStmt().WhereClause
+	case n.GetDeleteStmt() != nil:
+		where = n.GetDeleteStmt().WhereClause
+	}
+	var nodes []*pgquery.Node
+	flattenConjunctNodes(where, &nodes)
+	var out []dialect.ColRef
+	for _, c := range nodes {
+		nt := c.GetNullTest()
+		if nt == nil || nt.Nulltesttype != pgquery.NullTestType_IS_NOT_NULL {
+			continue
+		}
+		cr := nt.Arg.GetColumnRef()
+		if cr == nil {
+			continue
+		}
+		ref := dialect.ColRef{Loc: int(nt.Location)}
+		ok := true
+		for _, f := range cr.Fields {
+			s := f.GetString_()
+			if s == nil {
+				ok = false
+				break
+			}
+			ref.Fields = append(ref.Fields, s.Sval)
+		}
+		if ok && len(ref.Fields) > 0 {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func flattenConjunctNodes(node *pgquery.Node, out *[]*pgquery.Node) {
+	if node == nil {
+		return
+	}
+	if be := node.GetBoolExpr(); be != nil && be.Boolop == pgquery.BoolExprType_AND_EXPR {
+		for _, arg := range be.Args {
+			flattenConjunctNodes(arg, out)
+		}
+		return
+	}
+	*out = append(*out, node)
 }
 
 func (t *tree) TopConjunctLocs() []int {
