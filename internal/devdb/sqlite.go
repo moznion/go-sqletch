@@ -40,15 +40,15 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 		removeDir()
 	}
 
-	if cfg.ServerVersion != "" {
+	if cfg.wantVersion() {
 		actual, err := querySQLiteVersion(conn)
 		if err != nil {
 			closeAll()
 			return nil, func() {}, err
 		}
-		if !versionPrefixMatch(cfg.ServerVersion, actual) {
+		if err := cfg.recordVersion(actual, "SQLite", true); err != nil {
 			closeAll()
-			return nil, func() {}, &VersionMismatchError{Pinned: cfg.ServerVersion, Actual: actual, Server: "SQLite"}
+			return nil, func() {}, err
 		}
 	}
 

@@ -76,7 +76,10 @@ policies:                      # cross-query policies (see the policies chapter)
   database. The sibling directories are derived output that an offline
   `generate` rewrites from that cache (`.sqletch/explain/`, consumed by
   `sqletch explain`; `.sqletch/expanded/`, the static-expansion audit
-  surface), so they belong in `.gitignore`.
+  surface), so they belong in `.gitignore`. Alongside the catalog and
+  the oracle entries, the cache directory holds one `env-<fp>.json`
+  per fingerprint recording the server a run actually connected to —
+  see [environment drift](#server-environment-drift) below.
 - **`queries`** globs may list `.sql` template files, `.go` files
   holding `//sqletch:query` consts, or both; the input form follows the
   extension (see [the template language](02-template-language.md)).
@@ -97,3 +100,35 @@ policies:                      # cross-query policies (see the policies chapter)
   [Cross-query policies](12-policies.md). Malformed declarations are
   SQLETCH303. A config using `policies:` is rejected by pre-policy
   sqletch binaries (strict decoding) — the desired failure direction.
+
+## Server environment drift
+
+`server_version` pins a *major*, so 16.4 and 16.9 both satisfy
+`"16"` — and the committed cache cannot tell entries typed by one
+from entries typed by the other. Every run that contacts a server
+therefore records what it connected to in `env-<fp>.json`, beside the
+cache it produced, and refuses to extend a cache that came from a
+different server:
+
+```console
+$ sqletch check --exhaustive
+sqletch.yaml:1:1: error[SQLETCH203]: the committed oracle cache was generated against server version 16.4 (16.4 (Debian 16.4-1.pgdg120+1)) but this run connected to 16.9
+help: regenerate the whole cache against one server (delete .sqletch/cache and re-run), or pass --allow-server-drift to accept a cache built from both
+```
+
+Notes:
+
+- **The comparison is the numeric version only.** `16.4` on Alpine and
+  `16.4 (Debian …)` are the same server as far as this check is
+  concerned; changing base images is not drift.
+- **Only runs that connect can see it.** A warm `check` is offline by
+  design and stays that way. `generate` on a cache miss and
+  `check --exhaustive` always connect — if you want a CI lane that
+  catches drift, that is the one to run against a database.
+- **`--allow-server-drift`** (on `generate` and `check`) downgrades it
+  to a warning and adopts the connected server. The result is a cache
+  no single environment produced; that is why it is a flag you type,
+  not a setting you can leave on.
+- **Caches committed before this existed have no record**, so the next
+  connecting run simply adopts its server. Deleting the file is always
+  safe and means the same thing.

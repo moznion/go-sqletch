@@ -73,7 +73,7 @@ func TestRun_NativeMySQLColdGenerate(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeNativeMySQLProject(t, dir, nativeCLISchema, nativeCLIQuery)
 
-	res, err := Run(context.Background(), cfg, ModeGenerate)
+	res, err := Run(context.Background(), cfg, ModeGenerate, RunOptions{})
 	if err != nil {
 		t.Fatalf("cold native generate must not need an environment: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestRun_NativeMySQLColdGenerate(t *testing.T) {
 		t.Fatalf("generated module missing: %v", err)
 	}
 
-	warm, err := Run(context.Background(), cfg, ModeCheck)
+	warm, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestRun_NativeRefusalIsSQLETCH214(t *testing.T) {
 SELECT count(*) FROM users;
 `
 	cfg := writeNativeMySQLProject(t, dir, nativeCLISchema, query)
-	res, err := Run(context.Background(), cfg, ModeCheck)
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestRun_NativeDDLRefusalIsSQLETCH215(t *testing.T) {
 	dir := t.TempDir()
 	schema := nativeCLISchema + "ALTER TABLE users ADD COLUMN bio TEXT;\n"
 	cfg := writeNativeMySQLProject(t, dir, schema, nativeCLIQuery)
-	res, err := Run(context.Background(), cfg, ModeCheck)
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestRun_NativeDDLRefusalIsSQLETCH215(t *testing.T) {
 func TestRun_NativeExhaustiveSaysWhatItProves(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeNativeMySQLProject(t, dir, nativeCLISchema, nativeCLIQuery)
-	res, err := Run(context.Background(), cfg, ModeCheckExhaustive)
+	res, err := Run(context.Background(), cfg, ModeCheckExhaustive, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ output:
 	if len(diags) > 0 {
 		t.Fatalf("config: %+v", diags)
 	}
-	res, err := Run(context.Background(), cfg, ModeGenerate)
+	res, err := Run(context.Background(), cfg, ModeGenerate, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestRun_ColumnHintConflictIsSQLETCH216(t *testing.T) {
 SELECT u.email FROM users AS u WHERE u.id = :id;
 `
 	cfg := writeNativeMySQLProject(t, dir, nativeCLISchema, query)
-	res, err := Run(context.Background(), cfg, ModeCheck)
+	res, err := Run(context.Background(), cfg, ModeCheck, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

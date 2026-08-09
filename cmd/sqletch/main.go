@@ -42,24 +42,35 @@ func main() {
 	root.PersistentFlags().StringVar(&configPath, "config", "sqletch.yaml", "path to sqletch.yaml")
 	root.PersistentFlags().BoolVar(&jsonFormat, "json", false, "emit diagnostics as JSON lines")
 
-	root.AddCommand(&cobra.Command{
+	// The escape hatch is a flag, never a config key: accepting a cache
+	// built from two servers must stay visible on the command line (and
+	// in CI logs), not be disarmed once and forgotten.
+	const driftFlagUsage = "accept a committed cache generated against a different server version (SQLETCH203 becomes a warning)"
+
+	var generateDrift bool
+	generate := &cobra.Command{
 		Use:   "generate",
 		Short: "compile templates, run type extraction, emit Go",
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(cli.Generate(context.Background(), configPath, jsonFormat, os.Stdout, os.Stderr))
+			opts := cli.RunOptions{AllowServerDrift: generateDrift}
+			os.Exit(cli.Generate(context.Background(), configPath, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
-	})
+	}
+	generate.Flags().BoolVar(&generateDrift, "allow-server-drift", false, driftFlagUsage)
+	root.AddCommand(generate)
 
-	var exhaustive bool
+	var exhaustive, checkDrift bool
 	check := &cobra.Command{
 		Use:   "check",
 		Short: "verify only (offline on cache hit)",
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(cli.Check(context.Background(), configPath, exhaustive, jsonFormat, os.Stdout, os.Stderr))
+			opts := cli.RunOptions{AllowServerDrift: checkDrift}
+			os.Exit(cli.Check(context.Background(), configPath, exhaustive, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
 	}
 	check.Flags().BoolVar(&exhaustive, "exhaustive", false,
 		"prepare and EXPLAIN every enumerable shape (needs the dev DB)")
+	check.Flags().BoolVar(&checkDrift, "allow-server-drift", false, driftFlagUsage)
 	root.AddCommand(check)
 
 	var enumerate, analyze bool

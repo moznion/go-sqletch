@@ -315,6 +315,28 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - The native catalog builder models MySQL >= 8.0.19 COLUMN_TYPE
   rendering (TiDB `InfoSchemaStr` + `TiDBStrictIntegerDisplayWidth`).
 
+## Server environment drift (SQLETCH203, doc 04 §3.1)
+
+- `.sqletch/cache/env-<fp>.json` records the server a run actually
+  connected to. It is a SIDECAR, never a key: the fingerprint must
+  stay offline-computable, and catalog/oracle bytes are pinned
+  byte-identical across oracle backends by the corpus gates — nothing
+  connection-derived may enter either. Do not "simplify" it into the
+  catalog.
+- Compared value = leading dotted-numeric run
+  (`cache.NumericVersionPrefix`): `16.4` and `16.4 (Debian …)` are the
+  same server; a base-image change must not read as drift.
+- Checked inside `cli.acquireOracle` BEFORE the first miss is filled,
+  so a refusal leaves the committed tree untouched. Warm offline runs
+  never get there (by design); `check --exhaustive` always connects
+  and is the CI drift lane. `explain --analyze` passes no sink.
+- `oracle_backend` is recorded but NEVER compared — server and native
+  must produce identical bytes, so a backend difference is a corpus-
+  gate bug, not a user-facing failure.
+- Escape hatch is `--allow-server-drift` (flag, deliberately not a
+  config key): warning + adopt. Absent record = adopt silently, so
+  pre-existing committed caches keep working.
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

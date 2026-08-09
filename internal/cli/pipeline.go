@@ -67,6 +67,19 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 	return d, true
 }
 
+// RunOptions carries the per-invocation switches that are not
+// sqletch.yaml's business — things a user opts into for one command,
+// which must stay visible on the command line rather than being
+// permanently (and invisibly) disarmed in config.
+type RunOptions struct {
+	// AllowServerDrift accepts a committed cache whose recorded
+	// generation environment disagrees with the connected server,
+	// downgrading SQLETCH203 to a warning and adopting the connected
+	// server in the record. The result is a cache no single
+	// environment produced — deliberate, and never the default.
+	AllowServerDrift bool
+}
+
 type compiledQuery struct {
 	q          *template.QueryTemplate // woven: every phase past scanChecks reads this
 	woven      []policy.WovenPolicy    // policy coverage (enforcement, explain)
@@ -78,7 +91,7 @@ type compiledQuery struct {
 
 // Run executes the pipeline. Diagnostics are user mistakes; the error
 // return is environmental (unreadable files, DB unreachable).
-func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
+func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*Result, error) {
 	res := &Result{Sources: map[string][]byte{}}
 	drv := driverFor(cfg)
 	profile := drv.profile
@@ -173,11 +186,26 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if oracle != nil {
 			return oracle, nil
 		}
-		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq)
+		var det devdb.Detected
+		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq, &det)
 		if err != nil {
 			return nil, err
 		}
 		oracleCleanup = cleanup
+		// Connecting is the only moment the committed cache's
+		// generation environment can be checked at all (a warm offline
+		// run never gets here — design 04 §3.1). Do it before a single
+		// miss is filled, so a refused drift leaves the tree untouched.
+		recorded, _ := store.LoadEnv(fp)
+		if d, drifted := serverDriftDiag(cfg, recorded, det.ServerVersion, opts.AllowServerDrift); drifted {
+			res.Diags = append(res.Diags, d)
+			if d.Severity == diagnostics.Error {
+				return nil, errServerDrift
+			}
+		}
+		if err := store.SaveEnv(envRecord(cfg, fp, det.ServerVersion)); err != nil {
+			return nil, err
+		}
 		oracle = o
 		return oracle, nil
 	}
@@ -196,6 +224,9 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
+		}
+		if errors.Is(err, errServerDrift) {
+			return res, nil // SQLETCH203 is already in res.Diags
 		}
 		if err != nil {
 			return nil, err
@@ -256,6 +287,9 @@ func Run(ctx context.Context, cfg config.Config, mode Mode) (*Result, error) {
 		if d, ok := nativeDDLDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
+		}
+		if errors.Is(err, errServerDrift) {
+			return res, nil // SQLETCH203 is already in res.Diags
 		}
 		if err != nil {
 			return nil, err

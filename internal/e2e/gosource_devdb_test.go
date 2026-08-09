@@ -62,7 +62,7 @@ cache:
 
 	for _, dir := range []string{sqlDir, goDir} {
 		var out, errW bytes.Buffer
-		if code := cli.Generate(ctx, filepath.Join(dir, "sqletch.yaml"), false, &out, &errW); code != cli.ExitOK {
+		if code := cli.Generate(ctx, filepath.Join(dir, "sqletch.yaml"), false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 			t.Fatalf("generate in %s: exit %d\n%s%s", dir, code, out.String(), errW.String())
 		}
 		if !strings.Contains(out.String(), "offline: no") {
@@ -79,7 +79,7 @@ cache:
 		strings.Replace(readFile(t, goDir, "sqletch.yaml"),
 			filepath.Join(goDir, "dev.sqlite3"), "/nonexistent-sqletch-dir/nope.sqlite3", 1))
 	var out, errW bytes.Buffer
-	if code := cli.Check(ctx, filepath.Join(goDir, "sqletch.yaml"), false, false, &out, &errW); code != cli.ExitOK {
+	if code := cli.Check(ctx, filepath.Join(goDir, "sqletch.yaml"), false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("warm offline check: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline: yes") {

@@ -63,6 +63,7 @@ codes).
 | SQLETCH200 | The connected server's version does not match the pinned `server_version`. Fix the pin or the DSN. |
 | SQLETCH201 | The database cannot determine a parameter's type. Add an explicit cast (`:param::text`) — the hint shows where. |
 | SQLETCH202 | Prepare/describe failed: the database rejected a verified rendering (unknown column/table, type mismatch, …). The span maps the database's error position back into the template. |
+| SQLETCH203 | The committed cache was generated against a different server version than the one now connected. Only runs that contact a server can see this (a cache miss, `generate`, or `check --exhaustive`); a warm offline `check` stays offline. Regenerate the cache against one server, or pass `--allow-server-drift` to accept the mix (the record is then rewritten and the diagnostic downgraded to a warning). |
 | SQLETCH210 | Two renderings disagree on the result columns (name, order, or type). Usually a `@choose` case changing the projection's types. |
 | SQLETCH211 | Renderings disagree on one parameter's type (the same `:param` used in incompatible positions). |
 | SQLETCH212 | *(warning)* An optional `INSERT` column is `NOT NULL` without a default: omitting it fails at runtime. |

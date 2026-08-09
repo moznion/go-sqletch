@@ -100,6 +100,14 @@ Two consequences:
 Entries store their full keys and compare them on read; hashes are an
 index, never an identity.
 
+The cache also records the server each fingerprint's entries were
+generated against (`env-<fp>.json`). That record is **not** a key: it
+never affects hits or misses, and deleting it only costs the next
+connecting run its ability to notice that the entries came from
+somewhere else (SQLETCH203 — see
+[the config chapter](05-config.md#server-environment-drift)). Caches
+committed before the record existed keep working unchanged.
+
 ## What is not promised
 
 - Message text of diagnostics, and the layout of human-readable CLI

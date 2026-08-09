@@ -63,9 +63,9 @@ static_expansion:
 		var code int
 		switch mode {
 		case "generate":
-			code = cli.Generate(ctx, configPath, false, &out, &errW)
+			code = cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW)
 		case "check":
-			code = cli.Check(ctx, configPath, exhaustive, false, &out, &errW)
+			code = cli.Check(ctx, configPath, exhaustive, false, cli.RunOptions{}, &out, &errW)
 		}
 		return code, out.String(), errW.String()
 	}

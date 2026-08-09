@@ -25,26 +25,26 @@ const (
 )
 
 // Generate implements `sqletch generate`.
-func Generate(ctx context.Context, configPath string, jsonFormat bool, out, errW io.Writer) int {
-	return runPipeline(ctx, configPath, ModeGenerate, jsonFormat, out, errW)
+func Generate(ctx context.Context, configPath string, jsonFormat bool, opts RunOptions, out, errW io.Writer) int {
+	return runPipeline(ctx, configPath, ModeGenerate, jsonFormat, opts, out, errW)
 }
 
 // Check implements `sqletch check [--exhaustive]`.
-func Check(ctx context.Context, configPath string, exhaustive, jsonFormat bool, out, errW io.Writer) int {
+func Check(ctx context.Context, configPath string, exhaustive, jsonFormat bool, opts RunOptions, out, errW io.Writer) int {
 	mode := ModeCheck
 	if exhaustive {
 		mode = ModeCheckExhaustive
 	}
-	return runPipeline(ctx, configPath, mode, jsonFormat, out, errW)
+	return runPipeline(ctx, configPath, mode, jsonFormat, opts, out, errW)
 }
 
-func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat bool, out, errW io.Writer) int {
+func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat bool, opts RunOptions, out, errW io.Writer) int {
 	cfg, diags := config.Load(configPath)
 	if len(diags) > 0 {
 		printBare(errW, diags, jsonFormat)
 		return ExitDiagnostics
 	}
-	res, err := Run(ctx, cfg, mode)
+	res, err := Run(ctx, cfg, mode, opts)
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
 		return ExitEnvironment
@@ -251,7 +251,10 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		}
 		schema = append(schema, cache.SchemaFile{Path: p, Content: content})
 	}
-	o, cleanup, err := drv.acquire(ctx, cfg, schema)
+	// No drift sink: explain --analyze reads plans and writes no cache
+	// entries, so there is nothing for a mismatched server to
+	// contaminate (SQLETCH203 belongs to the paths that write).
+	o, cleanup, err := drv.acquire(ctx, cfg, schema, nil)
 	if d, ok := versionPinDiag(cfg, err); ok {
 		// Same user mistake, same code, whichever command hits it.
 		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
