@@ -160,6 +160,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
@@ -182,6 +183,26 @@ func expect(cond bool, msg string) {
 		os.Exit(1)
 	}
 }
+
+// obs records doc-17 observer events (see the pgx fixture for the
+// full rationale); this fixture has two deliberate rejects.
+type obs struct {
+	composeHits, composeMisses, execs, rejects int
+}
+
+func (o *obs) ObserveCompose(query string, key sqletchruntime.ShapeKey, hit bool) {
+	if hit {
+		o.composeHits++
+	} else {
+		o.composeMisses++
+	}
+}
+
+func (o *obs) ObserveExec(_ context.Context, _, _ string, _ time.Duration, _ int64, _ error) {
+	o.execs++
+}
+
+func (o *obs) ObserveReject(_ context.Context, _ string, _ error) { o.rejects++ }
 
 func main() {
 	ctx := context.Background()
@@ -208,6 +229,8 @@ func main() {
 	q := gen.New(db)
 	shapes := 0
 	q.OnQuery(func(key, sql string) { shapes++ })
+	ob := &obs{}
+	q.SetObserver(ob)
 
 	all, err := q.SearchUsers(ctx, gen.SearchUsersParams{Limit: 100})
 	die(err)
@@ -331,6 +354,20 @@ func main() {
 	expect(len(either) == 2, "banned OR alice*")
 
 	expect(shapes >= 8, "OnQuery hook observed the calls")
+
+	// Doc-17 observability on the expanding dialect: every cache
+	// access pairs with one exec, the two deliberate misuses are
+	// rejects, and @in makes the query's shape space unbounded.
+	expect(ob.execs > 5 && ob.execs == ob.composeHits+ob.composeMisses,
+		"one exec event per cache access")
+	expect(ob.rejects == 2, "the two deliberate misuses are rejects")
+	stats := q.Cache().Stats()
+	expect(stats.Hits+stats.Misses == uint64(ob.composeHits+ob.composeMisses),
+		"cache stats agree with observer events")
+	expect(gen.ShapeSpace["UsersInStatuses"].Unbounded,
+		"@in arity marks the query unbounded on an expanding dialect")
+	expect(gen.ShapeSpace["FilterUsers"].Unbounded, "@filter-tree marks its query unbounded")
+
 	fmt.Println("E2E-OK")
 }
 `
