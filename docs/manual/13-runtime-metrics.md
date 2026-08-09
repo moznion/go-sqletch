@@ -4,7 +4,7 @@ Generated executors can report what they do in production: how well
 the composed-SQL cache performs, which query shapes traffic actually
 exercises, how long calls take, and what gets refused before any SQL
 is sent. The design (and its settled decisions) is
-[design doc 17](../design/17-runtime-metrics.md).
+[design doc 18](../design/18-runtime-metrics.md).
 
 Two layers exist so the core stays dependency-free:
 
@@ -151,4 +151,4 @@ fixed size) if it grows without bound.
 - **`ObserveExec` receives the key's canonical encoding** (a string),
   not a `runtime.ShapeKey` — the structured key is available on
   `ObserveCompose`. This asymmetry keeps unobserved generated calls
-  free of heap allocation; see doc 17 §4.
+  free of heap allocation; see doc 18 §4.

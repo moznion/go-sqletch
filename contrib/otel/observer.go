@@ -1,5 +1,5 @@
 // Package otelsqletch exports sqletch runtime metrics through the
-// OpenTelemetry metrics API (design doc 17 §6).
+// OpenTelemetry metrics API (design doc 18 §6).
 //
 // It lives in its own module so the OpenTelemetry dependency graph
 // never touches the core runtime package or consumers who skip it:
@@ -9,7 +9,7 @@
 // OTel Prometheus exporter's job, attached to the MeterProvider given
 // to [New].
 //
-// Cardinality policy (doc 17 §7): the shape key never becomes a
+// Cardinality policy (doc 18 §7): the shape key never becomes a
 // per-event metric label — its tree and arity segments are
 // caller-controlled and unbounded. Per-event series are labeled by
 // query name (a generated, bounded set), instance, and small closed
@@ -61,7 +61,7 @@ func WithTopShapes(n int) Option { return func(c *config) { c.topN = n } }
 // distinct-shape tracking behind sqletch.shapes.used (default 4096,
 // matching the verification budget's default). At the bound the set
 // stops growing and the series' `saturated` attribute flips true: the
-// count becomes a floor, loudly, never silently (doc 17 D5).
+// count becomes a floor, loudly, never silently (doc 18 D5).
 func WithUsedShapeBound(n int) Option { return func(c *config) { c.usedBound = n } }
 
 // Metrics owns the instruments. Create one per MeterProvider and
@@ -261,7 +261,7 @@ func (b *Binding) ObserveCompose(query string, key runtime.ShapeKey, hit bool) {
 	}
 	b.m.composeCalls.Add(context.Background(), 1, opt)
 
-	// Exact distinct tracking, bounded (doc 17 D5). The encoding is
+	// Exact distinct tracking, bounded (doc 18 D5). The encoding is
 	// built here, adapter-side: the core hands over its retained key
 	// for free and stays free of unbounded state.
 	enc := key.String()
@@ -284,7 +284,7 @@ func (b *Binding) ObserveCompose(query string, key runtime.ShapeKey, hit bool) {
 }
 
 // ObserveExec implements [runtime.Observer]. The shape key encoding is
-// deliberately NOT a label (doc 17 §7); it reaches traces via
+// deliberately NOT a label (doc 18 §7); it reaches traces via
 // [TraceObserver].
 func (b *Binding) ObserveExec(ctx context.Context, query, _ string, d time.Duration, rows int64, err error) {
 	qa := b.queryAttrs(query)

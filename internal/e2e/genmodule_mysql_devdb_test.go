@@ -202,7 +202,7 @@ func expect(cond bool, msg string) {
 	}
 }
 
-// obs records doc-17 observer events (see the pgx fixture for the
+// obs records doc-18 observer events (see the pgx fixture for the
 // full rationale); this fixture has two deliberate rejects.
 type obs struct {
 	composeHits, composeMisses, execs, rejects int

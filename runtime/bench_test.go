@@ -251,7 +251,7 @@ func BenchmarkGeneratedCallParallel(b *testing.B) {
 // BenchmarkGeneratedCallParallelObserved is BenchmarkGeneratedCallParallel
 // with metrics enabled: the delta is the price of observability — the
 // per-entry hit counter's exclusive cache-line store plus the observer
-// call — paid only once SetObserver/Stats has been used (doc 17 D4).
+// call — paid only once SetObserver/Stats has been used (doc 18 D4).
 func BenchmarkGeneratedCallParallelObserved(b *testing.B) {
 	frags := benchFrags()
 	cache := NewComposedCache(256)

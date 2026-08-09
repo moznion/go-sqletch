@@ -39,7 +39,7 @@ func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
 // SetObserver installs a runtime observer receiving compose, exec,
 // and reject events for every query on this Queries value and any
-// WithTx derivative (design doc 17). Install it before serving
+// WithTx derivative (design doc 18). Install it before serving
 // traffic; Cache() exposes the same cache for scrape-time Stats and
 // TopShapes.
 func (q *Queries) SetObserver(o runtime.Observer) {
@@ -107,7 +107,7 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 }
 
 // ShapeSpace describes each query's reachable shape space, computed
-// at generate time (design doc 17): the enumerable dimensions' shape
+// at generate time (design doc 18): the enumerable dimensions' shape
 // count, whether that count is exact (large @order-by permutation
 // spaces saturate at MaxUint64), and whether unbounded dimensions
 // exist (@filter-tree structure; @in arity on expanding dialects) —

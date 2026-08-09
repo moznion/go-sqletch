@@ -12,7 +12,7 @@ import (
 
 // TraceObserver decorates another observer with span attributes on
 // the ambient trace span: full-cardinality shape data belongs on
-// traces, never on metric labels (doc 17 §7). Compose events carry no
+// traces, never on metric labels (doc 18 §7). Compose events carry no
 // context (the cache API takes none) and pass through untouched — the
 // exec event repeats the full key, so the span loses nothing.
 //

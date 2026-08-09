@@ -22,7 +22,7 @@
 //
 //     The observability surface — [Observer], [CacheStats],
 //     [ShapeUse], [ShapeSpaceInfo] and the corresponding
-//     [ComposedCache] methods (design doc 17) — is USER API too.
+//     [ComposedCache] methods (design doc 18) — is USER API too.
 //
 //   - The GENERATED-CODE CONTRACT — [Frag], [ShapeKey], [Bind],
 //     [Compose] and friends, [ComposedCache], [Expanded]. These are

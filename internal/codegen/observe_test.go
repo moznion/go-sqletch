@@ -11,7 +11,7 @@ import (
 	"github.com/moznion/go-sqletch/runtime"
 )
 
-// TestGenerate_ObserverSites pins the doc-17 observation sites in the
+// TestGenerate_ObserverSites pins the doc-18 observation sites in the
 // generated code: the db-file surface (SetObserver, Cache, the
 // helpers), the reject site on a validation branch, the guarded exec
 // clock, and the exec event on every annotation path.

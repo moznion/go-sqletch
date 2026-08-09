@@ -1,4 +1,4 @@
-# sqletch Design — 17: Runtime metrics for generated executors
+# sqletch Design — 18: Runtime metrics for generated executors
 
 **Status: ACCEPTED — decisions D1–D8 settled 2026-08-09 (all
 recommendations adopted).** This document designs an observability

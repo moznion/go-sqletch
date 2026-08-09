@@ -7,7 +7,7 @@ import (
 )
 
 // Observer receives runtime events from the composed-SQL cache and
-// from generated code (design doc 17). Implementations must be safe
+// from generated code (design doc 18). Implementations must be safe
 // for concurrent use and must return quickly — events fire on the
 // query path. A nil observer costs one predictable branch per event
 // site; format-specific export (OpenTelemetry, Prometheus) belongs in

@@ -212,7 +212,7 @@ func expect(cond bool, msg string) {
 	}
 }
 
-// obs records doc-17 observer events; the assertions at the end pin
+// obs records doc-18 observer events; the assertions at the end pin
 // the 1:1 relationship this fixture has between cache accesses and
 // executions, and the reject count of its deliberate misuses.
 type obs struct {
