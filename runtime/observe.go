@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"sort"
 	"time"
 )
@@ -21,7 +22,8 @@ type Observer interface {
 	ObserveCompose(query string, key ShapeKey, hit bool)
 
 	// ObserveExec fires from generated code after a database call
-	// completes: the call's duration, its row count (rows returned for
+	// completes: the call's context (for trace correlation and metric
+	// exemplars), its duration, its row count (rows returned for
 	// queries, rows affected for execs; -1 when the count was unknown
 	// — a driver error or an aborted scan), and the driver error if
 	// any. It receives the shape key as its canonical encoding, not a
@@ -30,14 +32,15 @@ type Observer interface {
 	// key's slices on every call, observed or not — the encoding is
 	// built inside the observer guard instead, so only observed calls
 	// pay for it. (ObserveCompose can pass the cache's retained key
-	// for free, which is why the two differ.)
-	ObserveExec(query, shapeKey string, d time.Duration, rows int64, err error)
+	// for free, which is why the two differ. ObserveCompose carries no
+	// context because the cache API takes none.)
+	ObserveExec(ctx context.Context, query, shapeKey string, d time.Duration, rows int64, err error)
 
 	// ObserveReject fires from generated code when a call is refused
 	// before any SQL is sent: [ErrChooseRequired], [ErrOrderKey],
 	// [ErrFilterRequired], [ErrTreeTooLarge], [ErrTreePredicate],
 	// [ErrShapeKeyLimit]. Classify with errors.Is, never by message.
-	ObserveReject(query string, err error)
+	ObserveReject(ctx context.Context, query string, err error)
 }
 
 // SetObserver installs an observer receiving one ObserveCompose per

@@ -32,7 +32,7 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
-		q.observeExec("AllAuditActions", key, execStart, -1, err)
+		q.observeExec(ctx, "AllAuditActions", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -40,11 +40,11 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	for rows.Next() {
 		var i AllAuditActionsRow
 		if err := rows.Scan(&i.Action, &i.Occurrences); err != nil {
-			q.observeExec("AllAuditActions", key, execStart, -1, err)
+			q.observeExec(ctx, "AllAuditActions", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	q.observeExec("AllAuditActions", key, execStart, int64(len(items)), rows.Err())
+	q.observeExec(ctx, "AllAuditActions", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

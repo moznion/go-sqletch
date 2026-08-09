@@ -49,9 +49,9 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i UpdateUserProfileRow
 	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.UpdatedAt); err != nil {
-		q.observeExec("UpdateUserProfile", key, execStart, -1, err)
+		q.observeExec(ctx, "UpdateUserProfile", key, execStart, -1, err)
 		return zero, err
 	}
-	q.observeExec("UpdateUserProfile", key, execStart, 1, nil)
+	q.observeExec(ctx, "UpdateUserProfile", key, execStart, 1, nil)
 	return i, nil
 }

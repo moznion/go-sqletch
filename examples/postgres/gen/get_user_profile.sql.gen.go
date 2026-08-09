@@ -43,9 +43,9 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i GetUserProfileRow
 	if err := row.Scan(&i.ID, &i.Email, &i.Nickname, &i.OrgID); err != nil {
-		q.observeExec("GetUserProfile", key, execStart, -1, err)
+		q.observeExec(ctx, "GetUserProfile", key, execStart, -1, err)
 		return zero, err
 	}
-	q.observeExec("GetUserProfile", key, execStart, 1, nil)
+	q.observeExec(ctx, "GetUserProfile", key, execStart, 1, nil)
 	return i, nil
 }

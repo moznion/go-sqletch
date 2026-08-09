@@ -26,7 +26,7 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	var key runtime.ShapeKey
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "CountByStatus", countByStatusFrags, key)
 	if err != nil {
-		q.observeReject("CountByStatus", err)
+		q.observeReject(ctx, "CountByStatus", err)
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.TenantID}, nil)
@@ -37,7 +37,7 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
-		q.observeExec("CountByStatus", key, execStart, -1, err)
+		q.observeExec(ctx, "CountByStatus", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -45,11 +45,11 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	for rows.Next() {
 		var i CountByStatusRow
 		if err := rows.Scan(&i.Status, &i.N); err != nil {
-			q.observeExec("CountByStatus", key, execStart, -1, err)
+			q.observeExec(ctx, "CountByStatus", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	q.observeExec("CountByStatus", key, execStart, int64(len(items)), rows.Err())
+	q.observeExec(ctx, "CountByStatus", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

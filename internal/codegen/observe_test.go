@@ -40,8 +40,8 @@ func TestGenerate_ObserverSites(t *testing.T) {
 		"func (q *Queries) SetObserver(o runtime.Observer)",
 		"q.cache.SetObserver(o)",
 		"func (q *Queries) Cache() *runtime.ComposedCache",
-		"func (q *Queries) observeExec(query string, key runtime.ShapeKey, start time.Time, rows int64, err error)",
-		"func (q *Queries) observeReject(query string, err error)",
+		"func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error)",
+		"func (q *Queries) observeReject(ctx context.Context, query string, err error)",
 		"obs: q.obs", // WithTx carries the observer
 	} {
 		if !strings.Contains(db, want) {
@@ -52,13 +52,13 @@ func TestGenerate_ObserverSites(t *testing.T) {
 	src := string(files["search_users.sql.gen.go"])
 	for _, want := range []string{
 		// ChooseOrdinal's failure is a reject, reported before return.
-		"q.observeReject(\"SearchUsers\", err)",
+		"q.observeReject(ctx, \"SearchUsers\", err)",
 		// The exec clock runs only for observed calls.
 		"var execStart time.Time\n\tif q.obs != nil {\n\t\texecStart = time.Now()\n\t}",
 		// :many reports the scanned row count and the terminal error.
-		"q.observeExec(\"SearchUsers\", key, execStart, int64(len(items)), rows.Err())",
+		"q.observeExec(ctx, \"SearchUsers\", key, execStart, int64(len(items)), rows.Err())",
 		// Failure paths report rows -1 with the driver error.
-		"q.observeExec(\"SearchUsers\", key, execStart, -1, err)",
+		"q.observeExec(ctx, \"SearchUsers\", key, execStart, -1, err)",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("query file missing %q\n----\n%s", want, src)
@@ -91,8 +91,8 @@ t.tenant_id = :scope_tenant_id
 
 	src := string(files["pick.sql.gen.go"])
 	for _, want := range []string{
-		"q.observeReject(\"Pick\", runtime.ErrFilterRequired)",
-		"q.observeExecTree(\"Pick\", key, scope, execStart, int64(len(items)), rows.Err())",
+		"q.observeReject(ctx, \"Pick\", runtime.ErrFilterRequired)",
+		"q.observeExecTree(ctx, \"Pick\", key, scope, execStart, int64(len(items)), rows.Err())",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("query file missing %q\n----\n%s", want, src)

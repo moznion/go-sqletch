@@ -60,21 +60,21 @@ func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 
 // observeExec encodes the key only when an observer is installed: an
 // unobserved call must not pay for the canonical encoding.
-func (q *Queries) observeExec(query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
 	if q.obs != nil {
-		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 
-func (q *Queries) observeReject(query string, err error) {
+func (q *Queries) observeReject(ctx context.Context, query string, err error) {
 	if q.obs != nil {
-		q.obs.ObserveReject(query, err)
+		q.obs.ObserveReject(ctx, query, err)
 	}
 }
 
 // observeExecResult consults RowsAffected only when an observer is
 // installed: some drivers make it a round-trip.
-func (q *Queries) observeExecResult(query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
+func (q *Queries) observeExecResult(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
 	if q.obs == nil {
 		return
 	}
@@ -82,7 +82,7 @@ func (q *Queries) observeExecResult(query string, key runtime.ShapeKey, start ti
 	if err != nil {
 		n = -1
 	}
-	q.obs.ObserveExec(query, key.String(), time.Since(start), n, nil)
+	q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), n, nil)
 }
 
 // hookTree is hook for a @filter-tree query. The tree's key segment is
@@ -99,10 +99,10 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 // key segment is folded in here, under the observer guard, so an
 // unobserved call never encodes its tree a second time (the same
 // trade hookTree makes).
-func (q *Queries) observeExecTree(query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
+func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
 	if q.obs != nil {
 		key.Trees = []string{t.Encode()}
-		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 

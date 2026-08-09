@@ -830,7 +830,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			ords = append(ords, ord)
 			fmt.Fprintf(w, "\t%s, err := runtime.ChooseOrdinal(int(arg.%s), %d, %v)\n",
 				ord, GoName(cm.c.Param), cm.numNamed, cm.c.Default != nil)
-			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(%q, err)\n\t\t%s\n\t}\n",
+			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
 				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
 		}
 		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
@@ -843,7 +843,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			seqs = append(seqs, seq)
 			fmt.Fprintf(w, "\t%s, err := runtime.OrderSeq(arg.%s, %d)\n",
 				seq, GoName(om.o.Param), len(om.o.Keys))
-			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(%q, err)\n\t\t%s\n\t}\n",
+			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
 				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
 		}
 		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
@@ -888,7 +888,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		if filter.Required {
 			// The argument's type keeps `nil` from compiling; this
 			// refuses the one zero that still can, `runtime.Tree{}`.
-			fmt.Fprintf(w, "\tif %s.IsZero() {\n\t\tq.observeReject(%q, runtime.ErrFilterRequired)\n\t\t%s\n\t}\n",
+			fmt.Fprintf(w, "\tif %s.IsZero() {\n\t\tq.observeReject(ctx, %q, runtime.ErrFilterRequired)\n\t\t%s\n\t}\n",
 				treeField, q.Name, errRet("runtime.ErrFilterRequired"))
 		}
 		// The tree's `;t=` key segment is NOT derived here: the cache
@@ -901,17 +901,17 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		}
 		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.%s(%s%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
 			method, styleArg, q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(%q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
 			strings.Join(vals, ", "), treeField)
 	case g.in.ExpandedShapes != nil:
 		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(%q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
 	case g.style == runtime.StyleQuestion:
 		// The binds path covers slice-element expansion (@in).
 		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, %q, %s, key)\n", q.Name, fragsVar)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(%q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, nil)\n", strings.Join(vals, ", "))
 	default:
 		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
@@ -955,10 +955,10 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	// hookTree, and the test that pins it).
 	observe := func(indent, rows, errExpr string) string {
 		if filter != nil {
-			return fmt.Sprintf("%sq.observeExecTree(%q, key, %s, execStart, %s, %s)\n",
+			return fmt.Sprintf("%sq.observeExecTree(ctx, %q, key, %s, execStart, %s, %s)\n",
 				indent, q.Name, filterField, rows, errExpr)
 		}
-		return fmt.Sprintf("%sq.observeExec(%q, key, execStart, %s, %s)\n", indent, q.Name, rows, errExpr)
+		return fmt.Sprintf("%sq.observeExec(ctx, %q, key, execStart, %s, %s)\n", indent, q.Name, rows, errExpr)
 	}
 	switch q.Annotation {
 	case template.AnnotationMany:
@@ -1001,7 +1001,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			// helper consults it only when an observer is installed.
 			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
 			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
-			fmt.Fprintf(w, "\tq.observeExecResult(%q, key, execStart, res)\n", q.Name)
+			fmt.Fprintf(w, "\tq.observeExecResult(ctx, %q, key, execStart, res)\n", q.Name)
 		} else {
 			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
 			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
@@ -1031,10 +1031,10 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 // key segment is folded in here, under the observer guard, so an
 // unobserved call never encodes its tree a second time (the same
 // trade hookTree makes).
-func (q *Queries) observeExecTree(query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
+func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
 	if q.obs != nil {
 		key.Trees = []string{t.Encode()}
-		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 `
@@ -1163,15 +1163,15 @@ func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 
 // observeExec encodes the key only when an observer is installed: an
 // unobserved call must not pay for the canonical encoding.
-func (q *Queries) observeExec(query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
 	if q.obs != nil {
-		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 
-func (q *Queries) observeReject(query string, err error) {
+func (q *Queries) observeReject(ctx context.Context, query string, err error) {
 	if q.obs != nil {
-		q.obs.ObserveReject(query, err)
+		q.obs.ObserveReject(ctx, query, err)
 	}
 }
 %s
@@ -1251,21 +1251,21 @@ func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 
 // observeExec encodes the key only when an observer is installed: an
 // unobserved call must not pay for the canonical encoding.
-func (q *Queries) observeExec(query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
 	if q.obs != nil {
-		q.obs.ObserveExec(query, key.String(), time.Since(start), rows, err)
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 
-func (q *Queries) observeReject(query string, err error) {
+func (q *Queries) observeReject(ctx context.Context, query string, err error) {
 	if q.obs != nil {
-		q.obs.ObserveReject(query, err)
+		q.obs.ObserveReject(ctx, query, err)
 	}
 }
 
 // observeExecResult consults RowsAffected only when an observer is
 // installed: some drivers make it a round-trip.
-func (q *Queries) observeExecResult(query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
+func (q *Queries) observeExecResult(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
 	if q.obs == nil {
 		return
 	}
@@ -1273,7 +1273,7 @@ func (q *Queries) observeExecResult(query string, key runtime.ShapeKey, start ti
 	if err != nil {
 		n = -1
 	}
-	q.obs.ObserveExec(query, key.String(), time.Since(start), n, nil)
+	q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), n, nil)
 }
 %s
 %s

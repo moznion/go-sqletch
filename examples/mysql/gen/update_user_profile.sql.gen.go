@@ -33,7 +33,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	}
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UpdateUserProfile", updateUserProfileFrags, key)
 	if err != nil {
-		q.observeReject("UpdateUserProfile", err)
+		q.observeReject(ctx, "UpdateUserProfile", err)
 		return 0, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.NewEmail, arg.Nickname, arg.ID}, nil)
@@ -44,14 +44,14 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	}
 	res, err := q.db.ExecContext(ctx, sqlText, args...)
 	if err != nil {
-		q.observeExec("UpdateUserProfile", key, execStart, -1, err)
+		q.observeExec(ctx, "UpdateUserProfile", key, execStart, -1, err)
 		return 0, err
 	}
 	n, rerr := res.RowsAffected()
 	if rerr != nil {
-		q.observeExec("UpdateUserProfile", key, execStart, -1, rerr)
+		q.observeExec(ctx, "UpdateUserProfile", key, execStart, -1, rerr)
 		return 0, rerr
 	}
-	q.observeExec("UpdateUserProfile", key, execStart, n, nil)
+	q.observeExec(ctx, "UpdateUserProfile", key, execStart, n, nil)
 	return n, nil
 }

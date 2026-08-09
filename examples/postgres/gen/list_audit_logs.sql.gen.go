@@ -42,7 +42,7 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
-		q.observeExec("ListAuditLogs", key, execStart, -1, err)
+		q.observeExec(ctx, "ListAuditLogs", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -50,11 +50,11 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	for rows.Next() {
 		var i ListAuditLogsRow
 		if err := rows.Scan(&i.ID, &i.ActorID, &i.Action, &i.CreatedAt); err != nil {
-			q.observeExec("ListAuditLogs", key, execStart, -1, err)
+			q.observeExec(ctx, "ListAuditLogs", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	q.observeExec("ListAuditLogs", key, execStart, int64(len(items)), rows.Err())
+	q.observeExec(ctx, "ListAuditLogs", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

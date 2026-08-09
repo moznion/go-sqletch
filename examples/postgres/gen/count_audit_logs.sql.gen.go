@@ -36,9 +36,9 @@ func (q *Queries) CountAuditLogs(ctx context.Context, tenantID TenantID, arg Cou
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i CountAuditLogsRow
 	if err := row.Scan(&i.Total); err != nil {
-		q.observeExec("CountAuditLogs", key, execStart, -1, err)
+		q.observeExec(ctx, "CountAuditLogs", key, execStart, -1, err)
 		return zero, err
 	}
-	q.observeExec("CountAuditLogs", key, execStart, 1, nil)
+	q.observeExec(ctx, "CountAuditLogs", key, execStart, 1, nil)
 	return i, nil
 }
