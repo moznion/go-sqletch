@@ -533,7 +533,8 @@ Specification details:
     future work (its main use case, a required scope tree alongside an
     optional criteria tree, is largely covered by policy weaving).
 -   Statement/text caches key on the canonical tree encoding (hash as
-    index, full encoding compared on hit) and are LRU-bounded.
+    index, full encoding compared on hit) and are capacity-bounded
+    with approximate-LRU (second-chance) eviction.
 
 ### `@order-by(param)` / `@key(name)` … `@end` — multi-key sorting
 
@@ -1342,15 +1343,20 @@ Properties:
     fragments plus P2's fixed connectives are emitted; user values
     travel exclusively through bind parameters.
 -   **Plan-cache friendly**: composed SQL text is cached per shape key
-    (LRU-bounded, keys compared in full on hit). The set of shapes an
-    application actually uses is typically tiny.
+    (capacity-bounded, keys compared in full on hit). The set of shapes
+    an application actually uses is typically tiny.
 -   **No runtime parsing**: composition is table-driven concatenation,
     O(fragments).
 
 ## Statement caching
 
 The composed SQL string is cached per shape key in a per-`Queries`
-LRU, and statements execute unnamed/ad-hoc. That is safe under
+bounded cache, and statements execute unnamed/ad-hoc. Eviction
+approximates LRU (second chance) rather than ordering exactly: cache
+hits take no lock, so recency is recorded per entry instead of by
+reordering shared state. The capacity bound is exact either way, and
+the cache is a memoization of a pure function — eviction order can
+never change which SQL a shape yields. That is safe under
 transaction-pooling proxies (PgBouncer transaction mode, RDS Proxy),
 where server-side prepared statements are unreliable. Opting into
 server-side prepared statements — by delegating to the driver's own

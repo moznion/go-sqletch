@@ -51,13 +51,12 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	if scope.IsZero() {
 		return nil, runtime.ErrFilterRequired
 	}
-	key.Trees = []string{scope.Encode()}
 	sqlText, binds, err := q.cache.GetTreeStyle(runtime.StyleQuestion, "FilterUsers", filterUsersFrags, key, scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
 	if err != nil {
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
-	q.hook(key.String(), sqlText)
+	q.hookTree(key, scope, sqlText)
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err

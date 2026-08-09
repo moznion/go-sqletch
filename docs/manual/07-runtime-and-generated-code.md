@@ -35,8 +35,9 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
 
 1. Guard bits, choose ordinals, order sequences, and `@in` arities are
    computed from the params struct → a **shape key**.
-2. The composed SQL for that key comes from an in-process LRU
-   (per-`Queries` value, 256 entries, full-key compared) or is
+2. The composed SQL for that key comes from an in-process bounded
+   cache (per-`Queries` value, 256 entries, full-key compared,
+   lock-free on hit, approximate-LRU eviction) or is
    composed by concatenating the pre-verified constant fragments —
    byte-identical to what the compiler verified, pinned by a
    conformance test.
