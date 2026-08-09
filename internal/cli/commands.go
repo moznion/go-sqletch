@@ -75,21 +75,34 @@ func runPipeline(ctx context.Context, configPath string, mode Mode, jsonFormat b
 	return ExitOK
 }
 
+// ExplainOptions carries the `sqletch explain` flags.
+type ExplainOptions struct {
+	Enumerate bool // print every reachable shape's SQL (offline)
+	Analyze   bool // EXPLAIN every reachable shape on the dev DB
+	// MaxShapes caps shape enumeration for Enumerate/Analyze; 0 takes
+	// the mode's default (enumerateCap / analyzeCap).
+	MaxShapes int
+}
+
 // Explain implements `sqletch explain [query…]` from the data written
 // at generate time — no database, no recompilation. With enumerate,
 // it prints every reachable shape's SQL instead (scan + render only,
 // still no database).
-func Explain(ctx context.Context, configPath string, queryNames []string, enumerate, analyze bool, out, errW io.Writer) int {
+func Explain(ctx context.Context, configPath string, queryNames []string, opts ExplainOptions, out, errW io.Writer) int {
+	if opts.MaxShapes < 0 {
+		fmt.Fprintf(errW, "sqletch: --max-shapes must be a positive shape count (got %d)\n", opts.MaxShapes)
+		return ExitEnvironment
+	}
 	cfg, diags := config.Load(configPath)
 	if len(diags) > 0 {
 		printBare(errW, diags, false)
 		return ExitDiagnostics
 	}
-	if analyze {
-		return explainAnalyze(ctx, cfg, queryNames, out, errW)
+	if opts.Analyze {
+		return explainAnalyze(ctx, cfg, queryNames, shapeCap(opts.MaxShapes, analyzeCap), out, errW)
 	}
-	if enumerate {
-		return explainEnumerate(cfg, queryNames, out, errW)
+	if opts.Enumerate {
+		return explainEnumerate(cfg, queryNames, shapeCap(opts.MaxShapes, enumerateCap), out, errW)
 	}
 	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
 	entries, err := os.ReadDir(dir)
@@ -175,7 +188,36 @@ func printBare(w io.Writer, diags []diagnostics.Diagnostic, jsonFormat bool) {
 
 const enumerateCap = 4096
 
-func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Writer) int {
+// shapeCap resolves the --max-shapes flag against a mode's default.
+func shapeCap(flag, dflt int) int {
+	if flag > 0 {
+		return flag
+	}
+	return dflt
+}
+
+// shapeCapDiag reports an enumeration that stopped at the cap.
+//
+// The severity is the caller's, and the split is deliberate: plain
+// `explain` is an inspection command that never claimed to show
+// everything, so it warns; `--analyze` claims planner coverage over the
+// shape space, so truncation there is a failure. What makes it a
+// failure rather than a smaller sample is that the enumeration walk
+// stops at the lexicographically first N guard combinations — the
+// later guard bits are never planned at all, so the shapes a user sees
+// are systematically biased, not representative.
+func shapeCapDiag(q *template.QueryTemplate, capN int, sev diagnostics.Severity, verb string) diagnostics.Diagnostic {
+	mk := diagnostics.Errorf
+	if sev == diagnostics.Warning {
+		mk = diagnostics.Warnf
+	}
+	return mk(diagnostics.CodeShapeCapReached, q.HeaderSpan,
+		"%s reaches more than %d shapes; %s stopped at the cap", q.Name, capN, verb).
+		WithHint("raise it with --max-shapes N; shapes are enumerated in guard-bitmask order, " +
+			"so the ones left out are the later guard combinations, not a random sample")
+}
+
+func explainEnumerate(cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
 	drv := driverFor(cfg)
 	profile := drv.profile
 	paths, err := cfg.ExpandGlobs(cfg.Queries)
@@ -189,6 +231,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 	}
 	scanner := template.NewScanner(profile)
 	printed := 0
+	capped := &Result{Sources: map[string][]byte{}}
 	for _, p := range paths {
 		src, err := os.ReadFile(p)
 		if err != nil {
@@ -200,11 +243,12 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 			printBare(errW, diags, false)
 			return ExitDiagnostics
 		}
+		capped.Sources[p] = src
 		for _, q := range file.Queries {
 			if len(want) > 0 && !want[q.Name] {
 				continue
 			}
-			keys, truncated := shape.EnumerateExpand(q, enumerateCap, drv.expandIn)
+			keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
 			for _, k := range keys {
 				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
@@ -214,7 +258,10 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 				fmt.Fprintf(out, "-- %s shape %s\n%s\n\n", q.Name, k, strings.TrimSpace(r.SQL))
 			}
 			if truncated {
-				fmt.Fprintf(out, "-- %s: enumeration truncated at %d shapes\n\n", q.Name, enumerateCap)
+				// Warning, and on stderr: stdout is the shape SQL
+				// stream, which `explain > shapes.sql` must keep clean.
+				capped.Diags = append(capped.Diags,
+					shapeCapDiag(q, capN, diagnostics.Warning, "enumeration"))
 			}
 			printed++
 		}
@@ -223,6 +270,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, out, errW io.Write
 		fmt.Fprintf(errW, "sqletch: no matching queries\n")
 		return ExitDiagnostics
 	}
+	PrintDiags(errW, capped, false)
 	return ExitOK
 }
 
@@ -230,7 +278,7 @@ const analyzeCap = 64
 
 // explainAnalyze runs EXPLAIN (GENERIC_PLAN) for every enumerable
 // shape against the dev database and prints the plans.
-func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, out, errW io.Writer) int {
+func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
 	drv := driverFor(cfg)
 	profile := drv.profile
 	schemaPaths, err := cfg.ExpandGlobs(cfg.Schema.Files)
@@ -282,6 +330,7 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 	}
 	scanner := template.NewScanner(profile)
 	printed := 0
+	capped := &Result{Sources: map[string][]byte{}}
 	for _, p := range paths {
 		src, err := os.ReadFile(p)
 		if err != nil {
@@ -293,11 +342,12 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 			printBare(errW, diags, false)
 			return ExitDiagnostics
 		}
+		capped.Sources[p] = src
 		for _, q := range file.Queries {
 			if len(want) > 0 && !want[q.Name] {
 				continue
 			}
-			keys, truncated := shape.EnumerateExpand(q, analyzeCap, drv.expandIn)
+			keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
 			for _, k := range keys {
 				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
 				if err != nil {
@@ -312,13 +362,21 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 				fmt.Fprintf(out, "-- %s shape %s\n%s\n", q.Name, k, plan)
 			}
 			if truncated {
-				fmt.Fprintf(out, "-- %s: analysis truncated at %d shapes\n\n", q.Name, analyzeCap)
+				// An error: the plans printed are the low guard bits
+				// only, so "every shape plans acceptably" was never
+				// established. Other queries still get analyzed.
+				capped.Diags = append(capped.Diags,
+					shapeCapDiag(q, capN, diagnostics.Error, "analysis"))
 			}
 			printed++
 		}
 	}
 	if printed == 0 {
 		fmt.Fprintf(errW, "sqletch: no matching queries\n")
+		return ExitDiagnostics
+	}
+	if len(capped.Diags) > 0 {
+		PrintDiags(errW, capped, false)
 		return ExitDiagnostics
 	}
 	return ExitOK

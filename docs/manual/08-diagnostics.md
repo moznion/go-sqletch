@@ -80,5 +80,6 @@ codes).
 | SQLETCH301 | `sqletch.yaml` field validation (unsupported dialect, missing `server_version`, …). |
 | SQLETCH302 | Static expansion would exceed `static_expansion.max_shapes`, or the query's shape space is unbounded (`@filter-tree`, `@in` on expanding dialects). |
 | SQLETCH303 | A policy declaration in `sqletch.yaml` is malformed (bad name, empty or non-identifier `tables`, unknown `applies_to` kind, …), or its predicate does not parse as one complete boolean expression in the dialect. |
+| SQLETCH304 | `sqletch explain` stopped enumerating shapes at the cap (`--max-shapes`, or the mode's default). A **warning** under `--enumerate`, which only ever offered to print what it could; an **error** under `--analyze`, whose plans would otherwise be read as covering the shape space. Shapes are enumerated in guard-bitmask order, so the ones left out are the later guard combinations, not a random sample. Raise `--max-shapes`. |
 | SQLETCH310 | Generated Go identifiers collide (two queries or columns mapping to the same name). Rename or alias one. |
 | SQLETCH311 | No Go mapping for a database type. Cast to a supported type, or on Tier 2 dialects add/fix the `-- @param` / `-- @column` annotation. |
