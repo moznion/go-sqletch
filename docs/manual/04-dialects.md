@@ -97,8 +97,12 @@ EXPLAIN-grade exhaustive pass) against one committed cache.
 - Prepare compiles through SQLite's planner, so prepare alone is the
   full validity check; errors carry exact byte offsets.
 - Types follow the declared-type affinity rules with two deliberate
-  carve-outs: `BOOLEAN` → `bool`, `DATE`/`DATETIME`/`TIMESTAMP` →
-  `time.Time`. `NUMERIC`/`DECIMAL` → `float64` (lossy, as elsewhere).
+  carve-outs, which match the **whole** declared type (length arguments
+  aside), unlike the affinity rules themselves: `BOOL`/`BOOLEAN` →
+  `bool`, and `DATE`/`DATETIME`/`TIMESTAMP`/`TIMESTAMPTZ`/`TIME` →
+  `time.Time`. A declaration that merely contains one of those words
+  (`LIFETIME`, `CANDIDATE`) keeps SQLite's own NUMERIC affinity.
+  `NUMERIC`/`DECIMAL` → `float64` (lossy, as elsewhere).
   Expression columns need `-- @column` ([annotations](03-annotations.md)).
 - Grammar frontend is rqlite/sql. Known gaps versus the newest SQLite
   grammar surface as parse diagnostics: `RIGHT`/`FULL JOIN` (3.39+)

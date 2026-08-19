@@ -56,6 +56,13 @@ func (TypeMap) GoType(oid uint32) (dialect.GoTypeRef, bool) {
 // want; drivers convert on scan). ok is false only for an empty
 // declared type — an expression column, which needs a `-- @column`
 // annotation.
+//
+// The affinity rules are substring rules and are reproduced as such —
+// POINT really does get INTEGER affinity in SQLite. The carve-outs are
+// NOT SQLite's, so they match the whole declared type instead: as
+// substrings they swept in every declaration that merely contained the
+// word (LIFETIME, CANDIDATE), handing the caller a time.Time field for
+// a column holding an integer.
 func AffinityRef(decltype string) (dialect.TypeRef, bool) {
 	d := strings.ToLower(strings.TrimSpace(decltype))
 	if d == "" {
@@ -74,13 +81,25 @@ func AffinityRef(decltype string) (dialect.TypeRef, bool) {
 		return ref(TypeBlob)
 	case strings.Contains(u, "REAL"), strings.Contains(u, "FLOA"), strings.Contains(u, "DOUB"):
 		return ref(TypeReal)
-	case strings.Contains(u, "BOOL"):
-		return ref(TypeBool)
-	case strings.Contains(u, "DATE"), strings.Contains(u, "TIME"):
-		return ref(TypeTime)
-	default:
-		return ref(TypeNumeric)
 	}
+	switch bareTypeName(d) {
+	case "bool", "boolean":
+		return ref(TypeBool)
+	case "date", "datetime", "timestamp", "timestamptz", "time":
+		return ref(TypeTime)
+	}
+	return ref(TypeNumeric)
+}
+
+// bareTypeName drops a trailing length/precision argument so the
+// carve-outs recognize DATETIME(3) as well as DATETIME. It is only for
+// matching: the resolved TypeRef keeps the declared type verbatim,
+// which is what diagnostics and the catalog show.
+func bareTypeName(d string) string {
+	if i := strings.IndexByte(d, '('); i >= 0 {
+		d = d[:i]
+	}
+	return strings.TrimSpace(d)
 }
 
 // TypeByName resolves a `-- @param name: type` / `-- @column name:

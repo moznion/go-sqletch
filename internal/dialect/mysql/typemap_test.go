@@ -53,6 +53,19 @@ func TestTypeByName(t *testing.T) {
 	if _, ok := tm.TypeByName("weirdtype"); ok {
 		t.Error("unknown type must not resolve")
 	}
+	// Every type GoType can map must be nameable: `-- @param` is
+	// MANDATORY on MySQL, so a type with no spelling is a parameter that
+	// cannot be declared at all. SET used to be the hole next to ENUM.
+	for _, name := range []string{"enum", "set"} {
+		tr, ok := tm.TypeByName(name)
+		if !ok {
+			t.Errorf("TypeByName(%q) failed; the annotation is mandatory on MySQL", name)
+			continue
+		}
+		if gt, ok := tm.GoType(tr.OID); !ok || gt.Name != "string" {
+			t.Errorf("%s -> %+v -> (%+v, %v), want string", name, tr, gt, ok)
+		}
+	}
 	if tr, _ := tm.TypeByName("bigint unsigned"); tr.Name != "bigint unsigned" {
 		t.Errorf("unsigned name = %q", tr.Name)
 	}
