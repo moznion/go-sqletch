@@ -22,7 +22,18 @@ Goals:
   degrades coverage, never correctness of what IS reported.
 - **Incremental**: per-file scan/lexical/R1 results are memoized by
   content hash; an edit re-analyzes one file, cross-file checks
-  (duplicate query names) recompute from memoized scans.
+  (duplicate query names) recompute from memoized scans. The committed
+  catalog is memoized too, behind a cheap stat signature of the schema
+  files plus the catalog file: an unchanged keystroke no longer
+  re-globs, re-reads, and re-hashes every schema file (nor re-parses
+  the catalog JSON). A schema edit or a `generate` run (which rewrites
+  the catalog) invalidates the memo, and a cold→warm cache transition
+  is detected because the catalog file appears; the per-query oracle
+  `Desc`s are still read fresh each check, so nothing goes stale. (The
+  per-query catalog-dependent pass itself is deliberately still
+  recomputed every check: memoizing it correctly would have to track
+  every oracle-entry file, and a stale diagnostic is worse than the
+  recompute cost — revisit if profiling shows it dominating.)
 - **Go-to-definition for parameters** (spec: "go-to-definition for
   params/predicates"): a `:param` occurrence jumps to its
   `-- @param name: type` annotation when present, else to the
@@ -80,7 +91,12 @@ it is bounded (`maxContentLength`, 64 MiB — far above any document an
 editor sends, far below a size that threatens the process). Over the
 bound is a framing error; unbounded, a malformed frame is an
 out-of-memory abort, which takes the server down with nothing to
-report.
+report. The header block itself carries the same risk one step
+earlier — a peer that never sends the terminating newline would grow
+the read buffer without limit — so it is bounded too
+(`maxHeaderBytes`, 8 KiB, and `maxHeaderLines`); real LSP headers are
+two short lines, and over either bound is the same clean framing
+error.
 
 Inbound bodies and params decode with `encoding/json/v2` (still
 stdlib): duplicate members and invalid UTF-8 are rejected, and member
