@@ -164,6 +164,14 @@ toolchain). Cold generates need a disposable dev database — Docker, or
 a DSN you point at via `database.dsn`. On SQLite there is nothing to
 install: the oracle is the real engine, in-process.
 
+sqletch **resets** the schema (drops it, then re-applies) before typing
+your queries, so the dev database must be disposable. A database sqletch
+starts itself (leave `database.dsn` empty for a throwaway container or
+temp file) resets automatically. If you point `database.dsn` at your own
+database, a cold run is refused (`SQLETCH204`) until you confirm it is
+disposable with `--allow-destructive` — the guard is there so cloning
+and running a project cannot silently wipe a database you care about.
+
 ```console
 $ cat sqletch.yaml
 version: 1

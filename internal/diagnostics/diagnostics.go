@@ -98,6 +98,7 @@ const (
 	CodeIndeterminateParam    Code = "SQLETCH201" // undetermined parameter type (add a cast)
 	CodeOracleFailure         Code = "SQLETCH202" // prepare/describe failed
 	CodeCacheServerDrift      Code = "SQLETCH203" // committed cache was generated against a different server version
+	CodeDestructiveReset      Code = "SQLETCH204" // refused to reset a user-supplied database's schema (pass --allow-destructive)
 	CodeColumnAgreement       Code = "SQLETCH210" // renderings disagree on result columns
 	CodeParamAgreement        Code = "SQLETCH211" // renderings disagree on a param's type
 	CodeOptionalInsertNotNull Code = "SQLETCH212" // optional NOT NULL column without default (warning)

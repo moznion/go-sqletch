@@ -65,11 +65,14 @@ static_expansion:
 	runCLI := func(mode string, exhaustive bool) (int, string, string) {
 		var out, errW bytes.Buffer
 		var code int
+		// The config points database.dsn at a disposable container, so
+		// the DB-touching runs opt into the schema reset (H1); the warm
+		// offline runs never connect, so the flag is a no-op for them.
 		switch mode {
 		case "generate":
-			code = cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW)
+			code = cli.Generate(ctx, configPath, false, cli.RunOptions{AllowDestructive: true}, &out, &errW)
 		case "check":
-			code = cli.Check(ctx, configPath, exhaustive, false, cli.RunOptions{}, &out, &errW)
+			code = cli.Check(ctx, configPath, exhaustive, false, cli.RunOptions{AllowDestructive: true}, &out, &errW)
 		}
 		return code, out.String(), errW.String()
 	}
@@ -176,7 +179,7 @@ static_expansion:
 	// 6b. explain --analyze prints a plan per shape via the dev DB.
 	writeConfig(dsn)
 	var out2, err2 bytes.Buffer
-	analyze := cli.ExplainOptions{Analyze: true}
+	analyze := cli.ExplainOptions{Analyze: true, AllowDestructive: true}
 	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, analyze, &out2, &err2); code != cli.ExitOK {
 		t.Fatalf("explain --analyze: exit %d\n%s", code, err2.String())
 	}
@@ -189,7 +192,7 @@ static_expansion:
 	// guard bits, so no claim about the shape space survives. The plans
 	// it did produce are still printed.
 	var out2c, err2c bytes.Buffer
-	capped := cli.ExplainOptions{Analyze: true, MaxShapes: 3}
+	capped := cli.ExplainOptions{Analyze: true, MaxShapes: 3, AllowDestructive: true}
 	if code := cli.Explain(ctx, configPath, []string{"SearchUsers"}, capped, &out2c, &err2c); code != cli.ExitDiagnostics {
 		t.Fatalf("truncated --analyze: exit %d, want %d\n%s", code, cli.ExitDiagnostics, err2c.String())
 	}

@@ -90,6 +90,10 @@ func acquireMySQL(ctx context.Context, cfg Config) (*gomysqlclient.Conn, string,
 	}
 
 	if hasSchema(cfg.SchemaSQL) {
+		if cfg.guardReset() {
+			closeAll()
+			return nil, "", func() {}, &DestructiveResetError{Server: "MySQL"}
+		}
 		if err := resetMySQL(conn); err != nil {
 			closeAll()
 			return nil, "", func() {}, fmt.Errorf("reset dev database schema: %w", err)

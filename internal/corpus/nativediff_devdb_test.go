@@ -112,9 +112,10 @@ func TestNativeDifferential(t *testing.T) {
 
 	schema := []cache.SchemaFile{{Path: "adversarial.sql", Content: []byte(adversarialDDL)}}
 	conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
-		ServerVersion: "8.4",
-		SchemaSQL:     []string{adversarialDDL},
+		DSN:              os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "8.4",
+		SchemaSQL:        []string{adversarialDDL},
 	})
 	if cleanup != nil {
 		defer cleanup()

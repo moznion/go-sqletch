@@ -42,9 +42,10 @@ func TestMySQLCorpusGroundTruth(t *testing.T) {
 				schemaSQL = append(schemaSQL, string(f.Content))
 			}
 			conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
-				DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
-				ServerVersion: c.ServerVersion,
-				SchemaSQL:     schemaSQL,
+				DSN:              os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+				AllowDestructive: true,
+				ServerVersion:    c.ServerVersion,
+				SchemaSQL:        schemaSQL,
 			})
 			if cleanup != nil {
 				defer cleanup()

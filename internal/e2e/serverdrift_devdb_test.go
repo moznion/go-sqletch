@@ -30,8 +30,9 @@ func TestCLIServerDrift(t *testing.T) {
 	defer cancel()
 
 	dsn, cleanup, err := devdb.AcquireDSN(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
-		ServerVersion: "16",
+		DSN:              os.Getenv("SQLETCH_TEST_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "16",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +67,10 @@ cache:
 		return code, out.String(), errW.String()
 	}
 
-	// 1. Cold generate records what it connected to.
+	// 1. Cold generate records what it connected to. The config's dsn is
+	// a disposable container, so the DB-touching runs opt into the reset.
 	var out, errW bytes.Buffer
-	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 
@@ -93,14 +95,14 @@ cache:
 
 	// 2. Reconnecting to the same server is not drift, however the
 	// version happens to be spelled.
-	if code, out, errOut := check(true, cli.RunOptions{}); code != cli.ExitOK {
+	if code, out, errOut := check(true, cli.RunOptions{AllowDestructive: true}); code != cli.ExitOK {
 		t.Fatalf("same server must not drift: exit %d\n%s%s", code, out, errOut)
 	}
 
 	// 3. Doctor the record: the committed cache now claims to come from
 	// a server this run is not talking to.
 	writeEnvVersion(t, sidecar, "16.0")
-	code, _, errOut := check(true, cli.RunOptions{})
+	code, _, errOut := check(true, cli.RunOptions{AllowDestructive: true})
 	if code != cli.ExitDiagnostics {
 		t.Fatalf("drift must fail with diagnostics: exit %d\n%s", code, errOut)
 	}
@@ -113,7 +115,7 @@ cache:
 
 	// 4. The escape hatch accepts it, warns, and adopts the connected
 	// server — a build that no single environment produced, on purpose.
-	code, _, errOut = check(true, cli.RunOptions{AllowServerDrift: true})
+	code, _, errOut = check(true, cli.RunOptions{AllowServerDrift: true, AllowDestructive: true})
 	if code != cli.ExitOK {
 		t.Fatalf("--allow-server-drift: exit %d\n%s", code, errOut)
 	}

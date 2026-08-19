@@ -39,10 +39,12 @@ type driver struct {
 	// acquire constructs the oracle backend. Schema inputs arrive as
 	// files (path + content): server backends execute the contents,
 	// the native backend parses them and needs the paths for
-	// SQLETCH215 spans. det, when non-nil, receives what connecting
-	// revealed about the server (SQLETCH203 drift detection); a backend
-	// that contacts no server leaves it untouched.
-	acquire func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, det *devdb.Detected) (dialect.Oracle, func(), error)
+	// SQLETCH215 spans. allowDestructive threads --allow-destructive to
+	// devdb's user-supplied-DSN reset guard (H1). det, when non-nil,
+	// receives what connecting revealed about the server (SQLETCH203
+	// drift detection); a backend that contacts no server leaves it
+	// untouched.
+	acquire func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error)
 }
 
 func schemaSQLOf(schema []cache.SchemaFile) []string {
@@ -86,12 +88,13 @@ func driverFor(cfg config.Config) driver {
 			expandIn:            true,
 			annotationsRequired: true,
 			columnHintsRequired: true,
-			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, det *devdb.Detected) (dialect.Oracle, func(), error) {
+			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
 				conn, cleanup, err := devdb.AcquireSQLite(ctx, devdb.Config{
-					DSN:           sqliteDSNPath(cfg),
-					ServerVersion: cfg.ServerVersion,
-					SchemaSQL:     schemaSQLOf(schema),
-					Detected:      det,
+					DSN:              sqliteDSNPath(cfg),
+					ServerVersion:    cfg.ServerVersion,
+					SchemaSQL:        schemaSQLOf(schema),
+					AllowDestructive: allowDestructive,
+					Detected:         det,
 				})
 				if err != nil {
 					return nil, cleanup, err
@@ -109,7 +112,7 @@ func driverFor(cfg config.Config) driver {
 			style:               runtime.StyleQuestion,
 			expandIn:            true,
 			annotationsRequired: true,
-			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, det *devdb.Detected) (dialect.Oracle, func(), error) {
+			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
 				if cfg.NativeOracle() {
 					// No server is ever contacted: det stays empty and
 					// this run has nothing to compare (design 04 §3.1).
@@ -117,10 +120,11 @@ func driverFor(cfg config.Config) driver {
 					return o, func() {}, err
 				}
 				conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
-					DSN:           cfg.Database.DSN,
-					ServerVersion: cfg.ServerVersion,
-					SchemaSQL:     schemaSQLOf(schema),
-					Detected:      det,
+					DSN:              cfg.Database.DSN,
+					ServerVersion:    cfg.ServerVersion,
+					SchemaSQL:        schemaSQLOf(schema),
+					AllowDestructive: allowDestructive,
+					Detected:         det,
 				})
 				if err != nil {
 					return nil, cleanup, err
@@ -136,12 +140,13 @@ func driverFor(cfg config.Config) driver {
 		typeByName:   postgres.TypeMap{}.TypeByName,
 		writableName: postgres.TypeMap{}.WritableName,
 		style:        runtime.StyleDollar,
-		acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, det *devdb.Detected) (dialect.Oracle, func(), error) {
+		acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
 			conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
-				DSN:           cfg.Database.DSN,
-				ServerVersion: cfg.ServerVersion,
-				SchemaSQL:     schemaSQLOf(schema),
-				Detected:      det,
+				DSN:              cfg.Database.DSN,
+				ServerVersion:    cfg.ServerVersion,
+				SchemaSQL:        schemaSQLOf(schema),
+				AllowDestructive: allowDestructive,
+				Detected:         det,
 			})
 			if err != nil {
 				return nil, cleanup, err

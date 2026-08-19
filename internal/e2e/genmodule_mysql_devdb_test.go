@@ -28,9 +28,10 @@ func TestMySQLCLIAndGeneratedModule(t *testing.T) {
 	defer cancel()
 
 	dsn, cleanup, err := devdb.AcquireMySQLDSN(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
-		ServerVersion: "8.4",
-		SchemaSQL:     nil, // schema applied by the CLI from config
+		DSN:              os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "8.4",
+		SchemaSQL:        nil, // schema applied by the CLI from config
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +68,7 @@ cache:
 
 	// 1. Cold generate: needs the DB, fills cache and gen/.
 	var out, errW bytes.Buffer
-	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline: no") {
@@ -87,7 +88,7 @@ cache:
 	writeConfig("nobody:nothing@tcp(unreachable.invalid:1)/nope")
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("warm offline check: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline: yes") {
@@ -100,7 +101,7 @@ cache:
 		"-- name: Broken :many\nSELECT u.id FROM users AS u WHERE u.id = :id;\n")
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitDiagnostics {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitDiagnostics {
 		t.Fatalf("missing annotation: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(errW.String(), "@param id") {

@@ -82,6 +82,10 @@ type ExplainOptions struct {
 	// MaxShapes caps shape enumeration for Enumerate/Analyze; 0 takes
 	// the mode's default (enumerateCap / analyzeCap).
 	MaxShapes int
+	// AllowDestructive confirms a user-supplied database.dsn is
+	// disposable so --analyze may reset its schema (H1); ignored by the
+	// offline modes, which never connect.
+	AllowDestructive bool
 }
 
 // Explain implements `sqletch explain [query…]` from the data written
@@ -99,7 +103,7 @@ func Explain(ctx context.Context, configPath string, queryNames []string, opts E
 		return ExitDiagnostics
 	}
 	if opts.Analyze {
-		return explainAnalyze(ctx, cfg, queryNames, shapeCap(opts.MaxShapes, analyzeCap), out, errW)
+		return explainAnalyze(ctx, cfg, queryNames, shapeCap(opts.MaxShapes, analyzeCap), opts.AllowDestructive, out, errW)
 	}
 	if opts.Enumerate {
 		return explainEnumerate(cfg, queryNames, shapeCap(opts.MaxShapes, enumerateCap), out, errW)
@@ -278,7 +282,7 @@ const analyzeCap = 64
 
 // explainAnalyze runs EXPLAIN (GENERIC_PLAN) for every enumerable
 // shape against the dev database and prints the plans.
-func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
+func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string, capN int, allowDestructive bool, out, errW io.Writer) int {
 	drv := driverFor(cfg)
 	profile := drv.profile
 	schemaPaths, err := cfg.ExpandGlobs(cfg.Schema.Files)
@@ -302,9 +306,13 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 	// No drift sink: explain --analyze reads plans and writes no cache
 	// entries, so there is nothing for a mismatched server to
 	// contaminate (SQLETCH203 belongs to the paths that write).
-	o, cleanup, err := drv.acquire(ctx, cfg, schema, nil)
+	o, cleanup, err := drv.acquire(ctx, cfg, schema, allowDestructive, nil)
 	if d, ok := versionPinDiag(cfg, err); ok {
 		// Same user mistake, same code, whichever command hits it.
+		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
+		return ExitDiagnostics
+	}
+	if d, ok := destructiveResetDiag(cfg, err); ok {
 		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
 		return ExitDiagnostics
 	}

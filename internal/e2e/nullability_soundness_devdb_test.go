@@ -500,9 +500,10 @@ func acquireMySQLWithSchema(t *testing.T, schema string) (*gomysqlclient.Conn, c
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
-		ServerVersion: "8.4",
-		SchemaSQL:     []string{schema},
+		DSN:              os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "8.4",
+		SchemaSQL:        []string{schema},
 	})
 	if err != nil {
 		t.Fatalf("acquire MySQL dev database: %v", err)
@@ -720,9 +721,10 @@ func acquireWithSchema(t *testing.T, schema string) (*pgx.Conn, context.Context)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
-		ServerVersion: "16",
-		SchemaSQL:     []string{schema},
+		DSN:              os.Getenv("SQLETCH_TEST_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "16",
+		SchemaSQL:        []string{schema},
 	})
 	if err != nil {
 		t.Fatalf("acquire dev database: %v", err)
