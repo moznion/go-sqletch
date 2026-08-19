@@ -3,6 +3,7 @@ package template
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -117,7 +118,21 @@ type fileScan struct {
 	qb            *queryBuilder
 	names         map[string]diagnostics.Span
 	strayReported bool
+
+	// Per-code emission cap. A pathological input (e.g. a file that is
+	// nothing but `$1$1$1…` positional params) would otherwise emit one
+	// diagnostic per token — millions of structs, gigabytes of memory —
+	// before anything renders. errorf stops appending past the cap and
+	// records the overflow so ScanFile can emit one summary per code.
+	emitted   map[diagnostics.Code]int
+	overflow  map[diagnostics.Code]int
+	firstOver map[diagnostics.Code]diagnostics.Span
 }
+
+// maxDiagsPerCode bounds how many diagnostics of a single code one file
+// emits before the rest collapse into a summary. Chosen far above any
+// realistic hand-written template so ordinary output is untouched.
+const maxDiagsPerCode = 200
 
 type queryBuilder struct {
 	q              *QueryTemplate
@@ -168,6 +183,7 @@ func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.D
 		pos = tok.End
 	}
 	fs.finalize(file, len(src))
+	fs.flushOverflow()
 	diagnostics.Sort(fs.diags)
 	return file, fs.diags
 }
@@ -197,7 +213,41 @@ func (fs *fileScan) span(start, end int) diagnostics.Span {
 }
 
 func (fs *fileScan) errorf(code diagnostics.Code, span diagnostics.Span, format string, args ...any) {
+	if fs.emitted[code] >= maxDiagsPerCode {
+		if fs.overflow == nil {
+			fs.overflow = map[diagnostics.Code]int{}
+			fs.firstOver = map[diagnostics.Code]diagnostics.Span{}
+		}
+		if fs.overflow[code] == 0 {
+			fs.firstOver[code] = span
+		}
+		fs.overflow[code]++
+		return
+	}
+	if fs.emitted == nil {
+		fs.emitted = map[diagnostics.Code]int{}
+	}
+	fs.emitted[code]++
 	fs.diags = append(fs.diags, diagnostics.Errorf(code, span, format, args...))
+}
+
+// flushOverflow appends one summary diagnostic per code whose emission
+// hit maxDiagsPerCode, so a capped file still reports that the code
+// occurred and how many times were suppressed. Codes are visited in
+// sorted order for deterministic output.
+func (fs *fileScan) flushOverflow() {
+	if len(fs.overflow) == 0 {
+		return
+	}
+	codes := make([]diagnostics.Code, 0, len(fs.overflow))
+	for c := range fs.overflow {
+		codes = append(codes, c)
+	}
+	slices.Sort(codes)
+	for _, c := range codes {
+		fs.diags = append(fs.diags, diagnostics.Errorf(c, fs.firstOver[c],
+			"%d further %s diagnostics in this file were suppressed; fix the reported occurrences and re-run", fs.overflow[c], c))
+	}
 }
 
 func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {

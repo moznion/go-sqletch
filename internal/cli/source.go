@@ -20,13 +20,17 @@ func scanSource(sc *template.Scanner, path string, src []byte) (*template.QueryF
 	if !gosrc.IsGoSource(path) {
 		return sc.ScanFile(path, src)
 	}
-	views, diags := gosrc.Views(path, src)
 	file := &template.QueryFile{Path: path}
-	for _, v := range views {
+	var diags []diagnostics.Diagnostic
+	// The view is only valid inside the callback — gosrc reuses one
+	// backing buffer across views to stay O(file size). The scanner
+	// keeps only copies, so scanning eagerly here is safe.
+	extractDiags := gosrc.Views(path, src, func(v []byte) {
 		f, ds := sc.ScanFile(path, v)
 		file.Queries = append(file.Queries, f.Queries...)
 		diags = append(diags, ds...)
-	}
+	})
+	diags = append(diags, extractDiags...)
 	diagnostics.Sort(diags)
 	return file, diags
 }
