@@ -29,17 +29,47 @@ type Oracle struct {
 
 func NewOracle(conn *sqlite3.Conn) *Oracle { return &Oracle{conn: conn} }
 
-// prepareOne prepares sql and rejects trailing statements.
+// prepareOne prepares sql and rejects trailing statements. A tail made
+// up only of whitespace, extra semicolons, and comments is legal: the
+// template scanner preserves post-`;` comments in the skeleton, so a
+// rendering like `SELECT 1; -- note` must not be read as two statements.
 func (o *Oracle) prepareOne(sql string) (*sqlite3.Stmt, error) {
 	stmt, tail, err := o.conn.Prepare(sql)
 	if err != nil {
 		return nil, toOracleError(sql, err)
 	}
-	if strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(tail), ";")) != "" {
+	if tailHasStatement(tail) {
 		_ = stmt.Close()
 		return nil, &dialect.OracleError{Pos: -1, Msg: "multiple statements in one query"}
 	}
 	return stmt, nil
+}
+
+// tailHasStatement reports whether tail carries anything beyond
+// whitespace, semicolons, and comments — i.e. a genuine second
+// statement. A tail that fails to lex cleanly is treated conservatively
+// as a statement (rejected), preserving the strict behaviour for
+// pathological input while accepting ordinary trailing comments.
+func tailHasStatement(tail string) bool {
+	src := []byte(tail)
+	prof := Profile{}
+	pos := 0
+	for {
+		tok, err := prof.NextToken(src, pos)
+		if err != nil {
+			return true
+		}
+		if tok.Kind == dialect.KindEOF {
+			return false
+		}
+		pos = tok.End
+		switch tok.Kind {
+		case dialect.KindWhitespace, dialect.KindLineComment,
+			dialect.KindBlockComment, dialect.KindSemicolon:
+			continue
+		}
+		return true
+	}
 }
 
 func (o *Oracle) Describe(ctx context.Context, sql string) (dialect.Desc, error) {
@@ -95,13 +125,20 @@ func (o *Oracle) PlanText(ctx context.Context, sql string) (string, error) {
 	return strings.Join(rows, "\n") + "\n", nil
 }
 
+// explainQueryPlanPrefix wraps a rendering for EXPLAIN QUERY PLAN. SQLite
+// error offsets are relative to the prepared (prefixed) string, so
+// plan-stage diagnostics subtract its length to become rendering-relative
+// (see dialect.ShiftOracleErrPos).
+const explainQueryPlanPrefix = "EXPLAIN QUERY PLAN "
+
 func (o *Oracle) planRows(ctx context.Context, sql string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	stmt, err := o.prepareOne("EXPLAIN QUERY PLAN " + sql)
+	prefixed := explainQueryPlanPrefix + sql
+	stmt, err := o.prepareOne(prefixed)
 	if err != nil {
-		return nil, err
+		return nil, dialect.ShiftOracleErrPos(err, len(explainQueryPlanPrefix))
 	}
 	defer func() { _ = stmt.Close() }()
 	var rows []string
@@ -110,7 +147,10 @@ func (o *Oracle) planRows(ctx context.Context, sql string) ([]string, error) {
 		rows = append(rows, stmt.ColumnText(3))
 	}
 	if err := stmt.Err(); err != nil {
-		return nil, toOracleError(sql, err)
+		// The statement was prepared from the prefixed string, so the
+		// error offset is measured against it; strip the prefix so the
+		// span lands in the rendering.
+		return nil, dialect.ShiftOracleErrPos(toOracleError(prefixed, err), len(explainQueryPlanPrefix))
 	}
 	return rows, nil
 }

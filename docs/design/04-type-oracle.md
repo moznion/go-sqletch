@@ -239,6 +239,19 @@ Describe errors are mapped through the rendering's source map; the
 postgres driver pattern-matches "could not determine data type of
 parameter $n" and attaches the `:param::type` hint (`SQLETCH201`).
 
+`Plan` wraps the rendering in an engine `EXPLAIN` prefix
+(`EXPLAIN (GENERIC_PLAN) ` on PostgreSQL, `EXPLAIN QUERY PLAN ` on
+SQLite), so a plan-stage error position is measured against that
+prefixed string. Both drivers strip the prefix length via
+`dialect.ShiftOracleErrPos` before returning, so a plan-stage `Pos` is
+rendering-relative exactly like a `Describe` `Pos` (an error landing
+inside the prefix is reported unpositioned rather than mis-attributed).
+Without the strip, planner-only diagnostics land 23/19 columns to the
+right of their true template span. (PostgreSQL's `Position` counts
+characters, not bytes, so a multibyte rendering can still drift the span
+by the count of multibyte runes left of the error — right span shape,
+right verdict; the all-ASCII prefix contributes none of it.)
+
 ## 5. Cross-rendering agreement (the R2/R9 type half)
 
 After all `Desc`s are in hand (from cache or live):

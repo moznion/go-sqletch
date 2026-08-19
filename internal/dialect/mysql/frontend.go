@@ -489,8 +489,14 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 	}
 
 	// scanFor advances until an ident token equal to name in FROM
-	// position; returns its start offset or -1 when the stream ends.
+	// position; returns its start offset or -1 when the stream ends. A
+	// relation follows FROM/JOIN/','/'('/INTO/UPDATE, or a '.' whose
+	// qualifier was itself in FROM position (a db-qualified name like
+	// `db.t`). A bare `x.y` column reference — whose qualifier `x` is NOT
+	// in FROM position — must not be mistaken for a relation.
 	scanFor := func(name string) int {
+		prevIdentInFrom := false    // was the previous ident in FROM position
+		dotQualifierInFrom := false // set when a '.' follows such an ident
 		for {
 			tok, ok := next()
 			if !ok {
@@ -498,35 +504,49 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 			}
 			switch tok.Kind {
 			case dialect.KindLParen:
-				// Peek: subqueries are opaque; parenthesized joins are
-				// transparent (the '(' itself is a valid predecessor).
+				// Peek: subqueries and (VALUES …) table constructors are
+				// opaque; parenthesized joins are transparent (the '('
+				// itself is a valid predecessor).
 				save := pos
 				peek, ok2 := next()
 				if ok2 && peek.Kind == dialect.KindIdent {
-					if u := strings.ToUpper(peek.Text); u == "SELECT" || u == "WITH" {
+					if u := strings.ToUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
 						skipParen()
 						prev = ")"
+						prevIdentInFrom = false
 						continue
 					}
 				}
 				pos = save
 				prev = "("
+				prevIdentInFrom = false
 			case dialect.KindIdent, dialect.KindQuotedIdent:
 				tokName := tok.Text
 				if tok.Kind == dialect.KindQuotedIdent {
 					tokName = strings.ReplaceAll(tokName[1:len(tokName)-1], "``", "`")
 				}
-				match := tokName == name && fromPosition(prev)
+				inFrom := fromPositionKeyword(prev) || (prev == "." && dotQualifierInFrom)
+				match := tokName == name && inFrom
 				if tok.Kind == dialect.KindIdent {
 					prev = strings.ToUpper(tok.Text)
 				} else {
-					prev = tokName
+					// A quoted identifier is never a keyword: keep its
+					// content out of `prev` so a relation named e.g.
+					// `FROM` cannot act as the FROM keyword for the next
+					// token. Its FROM-position status still flows through
+					// prevIdentInFrom for a following qualified name.
+					prev = quotedIdentPrev
 				}
+				prevIdentInFrom = inFrom
 				if match {
 					return tok.Start
 				}
 			default:
+				if tok.Text == "." {
+					dotQualifierInFrom = prevIdentInFrom
+				}
 				prev = tok.Text
+				prevIdentInFrom = false
 			}
 		}
 	}
@@ -539,9 +559,18 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 	}
 }
 
-func fromPosition(prev string) bool {
+// quotedIdentPrev is the `prev` sentinel recorded after a backquoted
+// identifier: a non-keyword, non-punctuation marker so quoted content can
+// never be read as a FROM-introducing token.
+const quotedIdentPrev = "\x00quoted"
+
+// fromPositionKeyword reports whether prev directly introduces a relation
+// name. '.' is deliberately excluded: a qualified name's '.' is handled
+// with a qualifier-in-FROM check so a `x.y` column reference is not
+// mistaken for a relation.
+func fromPositionKeyword(prev string) bool {
 	switch prev {
-	case "FROM", "JOIN", "STRAIGHT_JOIN", ",", "(", ".", "INTO", "UPDATE":
+	case "FROM", "JOIN", "STRAIGHT_JOIN", ",", "(", "INTO", "UPDATE":
 		return true
 	}
 	return false

@@ -58,12 +58,18 @@ func (o *Oracle) Describe(ctx context.Context, sql string) (dialect.Desc, error)
 	return desc, nil
 }
 
+// genericPlanPrefix wraps a rendering for GENERIC_PLAN. Error positions
+// PostgreSQL reports are relative to this whole string, so plan-stage
+// diagnostics subtract its length to become rendering-relative (see
+// dialect.ShiftOracleErrPos).
+const genericPlanPrefix = "EXPLAIN (GENERIC_PLAN) "
+
 // Plan surfaces planner-stage errors invisible to prepare. GENERIC_PLAN
 // (PostgreSQL 16+) plans a parameterized statement without values —
 // exactly the shape-verification need.
 func (o *Oracle) Plan(ctx context.Context, sql string) error {
-	if _, err := o.conn.Exec(ctx, "EXPLAIN (GENERIC_PLAN) "+sql); err != nil {
-		return mapOracleErr(err)
+	if _, err := o.conn.Exec(ctx, genericPlanPrefix+sql); err != nil {
+		return dialect.ShiftOracleErrPos(mapOracleErr(err), len(genericPlanPrefix))
 	}
 	return nil
 }
@@ -73,14 +79,14 @@ func (o *Oracle) Plan(ctx context.Context, sql string) error {
 // query: GENERIC_PLAN takes bare $n placeholders without values, and
 // pgx's higher-level paths would demand arguments for them.
 func (o *Oracle) PlanText(ctx context.Context, sql string) (string, error) {
-	results, err := o.conn.PgConn().Exec(ctx, "EXPLAIN (GENERIC_PLAN) "+sql).ReadAll()
+	results, err := o.conn.PgConn().Exec(ctx, genericPlanPrefix+sql).ReadAll()
 	if err != nil {
-		return "", mapOracleErr(err)
+		return "", dialect.ShiftOracleErrPos(mapOracleErr(err), len(genericPlanPrefix))
 	}
 	var b strings.Builder
 	for _, res := range results {
 		if res.Err != nil {
-			return "", mapOracleErr(res.Err)
+			return "", dialect.ShiftOracleErrPos(mapOracleErr(res.Err), len(genericPlanPrefix))
 		}
 		for _, row := range res.Rows {
 			if len(row) > 0 {
@@ -175,7 +181,12 @@ func mapOracleErr(err error) error {
 	if pgErr.Position > 0 {
 		// Position is 1-based; PostgreSQL counts characters, which for
 		// sqletch renderings (predominantly ASCII SQL) coincides with
-		// bytes closely enough for diagnostics.
+		// bytes closely enough for diagnostics — a multibyte rendering
+		// can still drift the span by the number of multibyte runes left
+		// of the error (right span, right verdict). Plan-stage callers
+		// wrap the rendering in an all-ASCII EXPLAIN prefix and strip its
+		// length via dialect.ShiftOracleErrPos, so the prefix never
+		// contributes drift.
 		pos = int(pgErr.Position) - 1
 	}
 	return &dialect.OracleError{

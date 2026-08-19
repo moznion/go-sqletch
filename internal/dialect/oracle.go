@@ -2,6 +2,7 @@ package dialect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -42,6 +43,29 @@ type OracleError struct {
 
 func (e *OracleError) Error() string {
 	return fmt.Sprintf("oracle error (%s) at %d: %s", e.SQLState, e.Pos, e.Msg)
+}
+
+// ShiftOracleErrPos returns err with an *OracleError's Pos moved left by
+// delta bytes. The plan oracles measure error positions against an
+// EXPLAIN-wrapped string (a delta-byte prefix + the rendering), but
+// pipeline diagnostics map Pos straight through the rendering's source
+// map, so the prefix must be stripped for the position to be
+// rendering-relative like the Describe path's. A Pos landing inside the
+// stripped prefix, or a non-positional error, is reported unpositioned
+// (Pos = -1) rather than mis-attributed; a non-*OracleError is returned
+// unchanged.
+func ShiftOracleErrPos(err error, delta int) error {
+	var oe *OracleError
+	if !errors.As(err, &oe) || oe.Pos < 0 {
+		return err
+	}
+	shifted := *oe
+	if oe.Pos < delta {
+		shifted.Pos = -1
+	} else {
+		shifted.Pos = oe.Pos - delta
+	}
+	return &shifted
 }
 
 // NativeUnsupportedError is a native-backend refusal: the input is
