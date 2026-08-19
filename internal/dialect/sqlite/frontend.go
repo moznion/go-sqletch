@@ -259,6 +259,12 @@ func (t *tree) Relations() []dialect.RelRef {
 		if s.Table != nil {
 			out = append(out, relFromQTN(s.Table, dialect.JoinBase, false))
 		}
+		// UPDATE … FROM src (SQLite 3.33+): the FROM sources are
+		// ordinary FROM relations the scoping/weaving logic must see,
+		// exactly like a SELECT's FROM.
+		if s.Source != nil {
+			collectSource(s.Source, dialect.JoinBase, false, &out)
+		}
 	case *rsql.DeleteStatement:
 		if s.Table != nil {
 			out = append(out, relFromQTN(s.Table, dialect.JoinBase, false))
@@ -364,8 +370,17 @@ func (t *tree) HasUnresolvableProvenance() bool {
 // sub-facades, tracking null-extension exactly like collectSource.
 func (t *tree) DerivedRels() []dialect.SubRel {
 	var out []dialect.SubRel
-	if s := t.sel(); s != nil && s.Source != nil {
-		collectDerivedSource(s.Source, false, t.r2b, &out)
+	switch s := t.first().(type) {
+	case *rsql.SelectStatement:
+		if s.Source != nil {
+			collectDerivedSource(s.Source, false, t.r2b, &out)
+		}
+	case *rsql.UpdateStatement:
+		// UPDATE … FROM sources can be derived tables too; expose them
+		// so nullability recursion matches the SELECT path.
+		if s.Source != nil {
+			collectDerivedSource(s.Source, false, t.r2b, &out)
+		}
 	}
 	return out
 }
@@ -394,16 +409,37 @@ func collectDerivedSource(src rsql.Source, nullable bool, r2b []int, out *[]dial
 	}
 }
 
+// withClause returns the statement's top-level WITH clause. All four
+// statement kinds carry one (rqlite's UpdateStatement/DeleteStatement/
+// InsertStatement each have a WithClause, like SelectStatement), so a
+// CTE on a DML statement is visible here rather than being silently
+// dropped — the policy weaver compares CTEs()/DeepTables() against
+// Relations() and must see every position a designated table can hide
+// in (doc 14 §D6).
+func (t *tree) withClause() *rsql.WithClause {
+	switch s := t.first().(type) {
+	case *rsql.SelectStatement:
+		return s.WithClause
+	case *rsql.UpdateStatement:
+		return s.WithClause
+	case *rsql.DeleteStatement:
+		return s.WithClause
+	case *rsql.InsertStatement:
+		return s.WithClause
+	}
+	return nil
+}
+
 // CTEs returns the statement's WITH-list definitions. SQLite CTE
 // bodies are always selects, so Tree is always non-nil.
 func (t *tree) CTEs() []dialect.CTEDef {
-	s := t.sel()
-	if s == nil || s.WithClause == nil {
+	wc := t.withClause()
+	if wc == nil {
 		return nil
 	}
-	recursive := s.WithClause.Recursive.IsValid()
+	recursive := wc.Recursive.IsValid()
 	var out []dialect.CTEDef
-	for _, c := range s.WithClause.CTEs {
+	for _, c := range wc.CTEs {
 		def := dialect.CTEDef{Recursive: recursive}
 		if c.TableName != nil {
 			def.Name = c.TableName.Name
@@ -435,20 +471,24 @@ func (t *tree) DeepTables() []dialect.TableRef {
 	case *rsql.SelectStatement:
 		w.walkSelect(s)
 	case *rsql.UpdateStatement:
+		w.walkWith(s.WithClause)
 		if s.Table != nil {
 			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Schema: qtnSchema(s.Table), Loc: s.Table.Name.NamePos.Offset})
 		}
+		w.walkSource(s.Source) // UPDATE … FROM sources
 		for _, a := range s.Assignments {
 			w.walkExpr(a.Expr)
 		}
 		w.walkExpr(s.WhereExpr)
 		w.walkReturning(s.ReturningClause)
 	case *rsql.DeleteStatement:
+		w.walkWith(s.WithClause)
 		if s.Table != nil {
 			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Schema: qtnSchema(s.Table), Loc: s.Table.Name.NamePos.Offset})
 		}
 		w.walkExpr(s.WhereExpr)
 	case *rsql.InsertStatement:
+		w.walkWith(s.WithClause)
 		if s.Table != nil {
 			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name, Loc: s.Table.NamePos.Offset})
 		}
@@ -477,15 +517,23 @@ func (w *tableWalker) walkReturning(rc *rsql.ReturningClause) {
 	}
 }
 
+// walkWith walks every CTE body of a WITH clause (on any statement
+// kind). CTE names shadowing a designated table are surfaced by the
+// body's own table refs; the weaver treats such names conservatively.
+func (w *tableWalker) walkWith(wc *rsql.WithClause) {
+	if wc == nil {
+		return
+	}
+	for _, cte := range wc.CTEs {
+		w.walkSelect(cte.Select)
+	}
+}
+
 func (w *tableWalker) walkSelect(s *rsql.SelectStatement) {
 	if s == nil {
 		return
 	}
-	if s.WithClause != nil {
-		for _, cte := range s.WithClause.CTEs {
-			w.walkSelect(cte.Select)
-		}
-	}
+	w.walkWith(s.WithClause)
 	for _, rc := range s.Columns {
 		if rc != nil {
 			w.walkExpr(rc.Expr)
@@ -589,6 +637,8 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 	case *rsql.SelectStatement:
 		w.walkSelect(s, false)
 	case *rsql.UpdateStatement:
+		w.walkWith(s.WithClause)
+		w.walkSource(s.Source, false) // UPDATE … FROM: resolve its columns
 		for _, a := range s.Assignments {
 			w.walkExpr(a.Expr, false)
 		}
@@ -599,8 +649,10 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 			}
 		}
 	case *rsql.DeleteStatement:
+		w.walkWith(s.WithClause)
 		w.walkExpr(s.WhereExpr, false)
 	case *rsql.InsertStatement:
+		w.walkWith(s.WithClause)
 		for _, vl := range s.ValueLists {
 			for _, e := range vl.Exprs {
 				w.walkExpr(e, false)
@@ -621,15 +673,22 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 	return w.out
 }
 
+// walkWith walks every CTE body of a WITH clause; CTE bodies are their
+// own scope, so refs inside them carry InSubquery.
+func (w *refWalker) walkWith(wc *rsql.WithClause) {
+	if wc == nil {
+		return
+	}
+	for _, cte := range wc.CTEs {
+		w.walkSelect(cte.Select, true)
+	}
+}
+
 func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool) {
 	if s == nil {
 		return
 	}
-	if s.WithClause != nil {
-		for _, cte := range s.WithClause.CTEs {
-			w.walkSelect(cte.Select, true)
-		}
-	}
+	w.walkWith(s.WithClause)
 	for _, rc := range s.Columns {
 		w.walkResultColumn(rc, inSub)
 	}

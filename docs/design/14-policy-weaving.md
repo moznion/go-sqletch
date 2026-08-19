@@ -610,6 +610,22 @@ positive is a loud diagnostic with an opt-out, never a silent leak.
 Extending `Tree` is compile-visible across all three frontends, which
 is exactly the property we want for a soundness-relevant capability.
 
+Each frontend's `DeepTables()`/`Relations()` must cover **every**
+position a designated table can appear, including on data-modifying
+statements. The SQLite facade originally read `CTEs()` from the SELECT
+statement only and never walked a DML `WITH` clause or an
+`UPDATE … FROM` source, so a designated table inside
+`WITH x AS (SELECT … FROM t) UPDATE …` or `UPDATE … FROM t …` appeared
+in neither method and was silently un-woven and un-rejected — the exact
+leak D6 forbids. The facade now returns DML `WITH` CTEs and walks the
+`UPDATE … FROM` source in `Relations()`, `DeepTables()`, `DerivedRels()`,
+and `ColumnRefs()`, matching the PostgreSQL (protoreflect) and MySQL
+(TiDB `Accept`) walks. A hidden-in-`WITH` occurrence now surfaces in
+`DeepTables()` but not `Relations()`, so the per-name count goes
+negative and the weaver raises `SQLETCH125` as intended; an
+`UPDATE … FROM t` occurrence is a top-level relation and is scoped
+normally.
+
 ### 11.2 D2 detection uses `RelRef.NullableSide`
 
 `RelRef.Join` describes only how the relation itself was introduced;
