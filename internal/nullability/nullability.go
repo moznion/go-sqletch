@@ -340,40 +340,70 @@ type presence struct {
 	count        int
 }
 
+// cloneEnv copies a CTE environment, reserving room for extra entries
+// the caller will add. A nil source yields a fresh empty map.
+func cloneEnv(src map[string]dialect.CTEDef, extra int) map[string]dialect.CTEDef {
+	dst := make(map[string]dialect.CTEDef, len(src)+extra)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 // collectPresence walks one statement level: catalog relations join
 // the presence map (hazards merged), CTE references and derived
 // tables recurse with the enclosing null-extension compounded, and
 // hazardous sub-levels poison instead of contributing (design 05
-// §2b). env carries the CTE definitions visible at this level; a
-// definition's own name is removed while inside its body (a
-// non-recursive CTE cannot legally self-reference, and WITH RECURSIVE
-// is poisoned before recursion).
+// §2b). env carries the CTE definitions visible from enclosing scopes;
+// this level's own definitions are added with positional visibility (a
+// definition's body sees only the definitions preceding it, matching
+// engine name resolution — see the body of this function).
 func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
 	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
 	present map[uint32]*presence, res *instanceResolver, top bool) {
 
-	ctes := t.CTEs()
-	if len(ctes) > 0 {
-		env2 := make(map[string]dialect.CTEDef, len(env)+len(ctes))
-		for k, v := range env {
-			env2[k] = v
-		}
+	// A WITH list is visible to the enclosing SELECT/DML FROM (and to
+	// derived tables) in full — every definition, regardless of order —
+	// so stmtEnv adds them all. A definition's OWN body sees a narrower
+	// scope: the outer environment plus only the definitions that
+	// PRECEDE it in the list. PostgreSQL (and MySQL) resolve a name
+	// inside a non-recursive CTE body against earlier definitions only,
+	// so a forward reference binds to an outer/base relation, never to
+	// the later same-named CTE; keying the body scope positionally is
+	// what keeps that base relation's null-extension hazard from being
+	// dropped. (WITH RECURSIVE is poisoned before recursion, so a
+	// definition's self-visibility never matters here.) SQLite makes a
+	// whole WITH list visible within each body, but analyzing a forward
+	// reference as a base relation only ever ADDS a presence instance or
+	// SKIPS a descent — both conservative for narrowing — so positional
+	// scoping stays sound there too.
+	outer := env
+	stmtEnv := env
+	var bodyEnvOf map[string]map[string]dialect.CTEDef
+	if ctes := t.CTEs(); len(ctes) > 0 {
+		stmtEnv = cloneEnv(outer, len(ctes))
+		bodyEnvOf = make(map[string]map[string]dialect.CTEDef, len(ctes))
+		preceding := cloneEnv(outer, len(ctes))
 		for _, def := range ctes {
-			env2[def.Name] = def
+			bodyEnvOf[def.Name] = cloneEnv(preceding, 0)
+			preceding[def.Name] = def
+			stmtEnv[def.Name] = def
 		}
-		env = env2
 	}
+	env = stmtEnv
 
 	for _, rel := range t.Relations() {
 		if isGuarded(maxR, rel.Loc) || rel.Table == "" {
 			continue
 		}
 		if def, ok := env[rel.Table]; ok && rel.Schema == "" {
-			sub := make(map[string]dialect.CTEDef, len(env))
-			for k, v := range env {
-				if k != def.Name {
-					sub[k] = v
-				}
+			sub := bodyEnvOf[def.Name]
+			if sub == nil {
+				// The definition comes from an enclosing scope; its body
+				// sees that scope, never this level's definitions. Drop
+				// its own name to preclude a self-reference loop.
+				sub = cloneEnv(outer, 0)
+				delete(sub, def.Name)
 			}
 			descend(def.Tree, def.Recursive, sub, maxR, cat,
 				nullExt || rel.NullableSide, present, res)

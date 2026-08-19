@@ -251,6 +251,21 @@ ORDER BY m.id;
 `,
 		note: "positive: recursion narrows a clean INNER-joined CTE — execution must agree",
 	},
+	{
+		name: "forward_cte_reference_base_table",
+		src: `-- name: ForwardCTE :many
+WITH a AS (
+  SELECT o.name AS org_name
+  FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+),
+orgs AS (SELECT 1 AS one)
+SELECT a.org_name
+FROM a, public.orgs AS po
+WHERE po.id = 1
+ORDER BY a.org_name NULLS LAST;
+`,
+		note: "forward reference: inside `a`, `orgs` binds to the base table (the CTE `orgs` is defined later), null-extended by the LEFT JOIN; analyzing it as the forward CTE drops that hazard and, with the clean public.orgs instance, would unsoundly narrow org_name",
+	},
 }
 
 func TestNullabilitySoundnessAdversarial(t *testing.T) {

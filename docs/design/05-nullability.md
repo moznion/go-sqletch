@@ -97,6 +97,23 @@ distrusting the whole statement. Mechanics:
 - A FROM reference whose name matches an in-scope CTE resolves to the
   CTE definition, never the catalog (shadowing); the definition's own
   name is out of scope inside its body.
+- CTE scope is POSITIONAL, matching engine name resolution. The whole
+  WITH list is visible to the enclosing SELECT/DML FROM (and to derived
+  tables), but a definition's own body sees only the outer environment
+  plus the definitions that PRECEDE it in the list. PostgreSQL and
+  MySQL resolve a name inside a non-recursive CTE body against earlier
+  definitions only, so a FORWARD reference binds to an outer/base
+  relation — never to the later same-named CTE. Keying the body scope
+  positionally is what keeps that base relation's null-extension hazard
+  from being dropped: analyzing the forward reference as the later CTE
+  would hide the LEFT JOIN inside the earlier body, and a second clean
+  instance of the base table (e.g. a schema-qualified `public.orgs`)
+  would then unsoundly narrow the column
+  (`forward_cte_reference_base_table`). SQLite makes a whole WITH list
+  visible within each body, but analyzing a forward reference as a base
+  relation only ever ADDS a presence instance or SKIPS a descent —
+  both conservative for narrowing — so positional scoping stays sound
+  there too.
 - Null-extension compounds: a table inside a derived body is
   null-extended if ITS side is, or if ANY enclosing derived/CTE
   reference sits on a null-extended side.
