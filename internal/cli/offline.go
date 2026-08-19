@@ -65,6 +65,20 @@ func statOf(path string) statSig {
 	return statSig{size: fi.Size(), modNs: fi.ModTime().UnixNano(), exists: true}
 }
 
+// resolvedID is a file's symlink-resolved identity, used ONLY to dedupe
+// the same file reached under different spellings (a symlinked
+// workspace path vs its resolved twin). A path that does not resolve (a
+// new unsaved buffer, a broken symlink) keys on its cleaned form. This
+// value is never stored or published: paths keep their original
+// spelling so a published diagnostic URI matches the one the editor
+// opened.
+func resolvedID(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
 type schemaStat struct {
 	path string
 	sig  statSig
@@ -128,8 +142,11 @@ func NewOfflineChecker(cfg config.Config) *OfflineChecker {
 }
 
 // Check analyzes the workspace with overlay contents (open editor
-// buffers) replacing disk. The error return is environmental (an
-// unreadable glob-matched file); user mistakes are diagnostics.
+// buffers) replacing disk. It degrades rather than failing: an
+// unreadable glob-matched file becomes a per-file diagnostic
+// (CodeSourceUnreadable) and the rest of the workspace still checks, so
+// the error return is retained only for the interface and is currently
+// always nil. User mistakes are diagnostics.
 func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error) {
 	res := WorkspaceCheck{
 		Diags:   map[string][]diagnostics.Diagnostic{},
@@ -137,41 +154,82 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 		Sources: map[string][]byte{},
 	}
 
-	// File set: config globs ∪ overlay keys. A glob error (typoed
-	// pattern, or simply no template files yet in a fresh project) must
-	// not take the whole server down — the open buffers still get
-	// checked.
-	seen := map[string]bool{}
+	// Rebuild the overlay under cleaned keys (the LSP already cleans via
+	// uriToPath; a direct caller may not) so a content lookup at read
+	// time uses the same key. Cleaning preserves the caller's spelling —
+	// only symlink IDENTITY (resolvedID below) is used to dedupe, never
+	// to rewrite a path, so a published diagnostic keeps the URI the
+	// editor opened.
+	if len(overlay) > 0 {
+		canon := make(map[string][]byte, len(overlay))
+		for p, src := range overlay {
+			canon[filepath.Clean(p)] = src
+		}
+		overlay = canon
+	}
+
+	// File set: open overlay buffers first (an edited buffer wins over
+	// its on-disk glob twin), then config globs. A file reached BOTH ways
+	// — e.g. the editor opened it under a symlinked workspace path (/tmp)
+	// while the glob expands the resolved path (/private/tmp) — must
+	// enter ONCE, else every query is flagged a duplicate and checked
+	// against the stale disk copy. Dedupe keys on symlink-resolved
+	// identity but each path keeps its own spelling for reading and
+	// publishing. A glob error (typoed pattern, or no template files yet
+	// in a fresh project) must not take the server down — the open
+	// buffers still get checked.
+	seen := map[string]bool{} // resolved identity → already added
 	var paths []string
+	add := func(p string) {
+		id := resolvedID(p)
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		paths = append(paths, p)
+	}
+	overlayPaths := make([]string, 0, len(overlay))
+	for p := range overlay {
+		overlayPaths = append(overlayPaths, p)
+	}
+	sort.Strings(overlayPaths) // deterministic add() precedence
+	for _, p := range overlayPaths {
+		add(p)
+	}
 	if globbed, err := c.cfg.ExpandGlobs(c.cfg.Queries); err == nil {
 		for _, p := range globbed {
-			seen[p] = true
-			paths = append(paths, p)
-		}
-	}
-	for p := range overlay {
-		if !seen[p] {
-			seen[p] = true
-			paths = append(paths, p)
+			add(filepath.Clean(p))
 		}
 	}
 	sort.Strings(paths)
 
-	// Per-file phase, memoized by content hash.
+	// Per-file phase, memoized by content hash. One unreadable
+	// glob-matched file (permission denied, a broken symlink) must not
+	// abort the whole snapshot: that would freeze EVERY file's
+	// diagnostics for the rest of the session. Report it against that
+	// file and keep checking the rest; only the readable files advance to
+	// the workspace and catalog phases below (which index res.Files /
+	// c.memo per path and would nil-panic on a skipped one).
+	readable := make([]string, 0, len(paths))
 	for _, p := range paths {
 		src, ok := overlay[p]
 		if !ok {
 			var err error
 			src, err = os.ReadFile(p)
 			if err != nil {
-				return WorkspaceCheck{}, err
+				res.Diags[p] = append(res.Diags[p], diagnostics.Errorf(
+					diagnostics.CodeSourceUnreadable, diagnostics.Span{File: p},
+					"cannot read template file: %v", err))
+				continue
 			}
 		}
 		m := c.analyzeFile(p, src)
 		res.Sources[p] = src
 		res.Files[p] = m.file
 		res.Diags[p] = append([]diagnostics.Diagnostic(nil), m.diags...)
+		readable = append(readable, p)
 	}
+	paths = readable
 
 	// Broken policies degrade to unwoven checking (never a crash),
 	// with the SQLETCH303s pinned to the config file on every snapshot.

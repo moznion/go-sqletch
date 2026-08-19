@@ -89,6 +89,13 @@ func (s *server) run() int {
 }
 
 func (s *server) dispatch(msg *Message) {
+	// A message with no method is a response (result/error to a request)
+	// or otherwise not a call. This server issues no requests, and
+	// JSON-RPC has no reply to a response — so drop it rather than
+	// answering MethodNotFound to an empty method name.
+	if msg.Method == "" {
+		return
+	}
 	switch msg.Method {
 	case "initialize":
 		s.respond(msg.ID, InitializeResult{
@@ -227,6 +234,13 @@ func toLSPDiagnostic(src []byte, d diagnostics.Diagnostic) Diagnostic {
 }
 
 func (s *server) definition(msg *Message) {
+	// definition is a request; a notification-shaped one (no id) is
+	// malformed. Replying is wrong twice over — JSON-RPC forbids a reply
+	// to a notification, and an error response with no id member (id is
+	// omitempty) is not a valid message — so drop it.
+	if msg.ID == nil {
+		return
+	}
 	var p DefinitionParams
 	if err := jsonv2.Unmarshal(msg.Params, &p); err != nil {
 		s.writeErr(msg.ID, codeInvalidParams, err.Error())

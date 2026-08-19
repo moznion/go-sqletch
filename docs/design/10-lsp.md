@@ -123,6 +123,14 @@ Handled methods:
 | other requests | `MethodNotFound` error response |
 | other notifications | ignored |
 
+Two message shapes are dropped rather than answered, since replying
+would be malformed: a **response-shaped** message (no `method`, an `id`
+— a reply to a request, but this server issues none) and a **request
+method sent as a notification** (e.g. `textDocument/definition` with no
+`id`). Replying to a notification is illegal, and an error response
+whose `id` member is omitted (the field is `omitempty`) is not a valid
+JSON-RPC message — so both are ignored.
+
 Requests are answered in arrival order on a single goroutine: every
 operation is an in-memory recompute over a small workspace, so
 concurrency buys nothing and ordering bugs cost correctness
@@ -154,9 +162,26 @@ One `Check` call is one consistent snapshot; the server runs it per
 didOpen/didChange/didSave/didClose and publishes per file. The file
 set is `cfg.ExpandGlobs(cfg.Queries)` ∪ overlay keys (an open
 unsaved buffer participates even before it matches a glob on disk).
-Overlay content wins over disk. The error return is environmental
-(unreadable non-overlay file) — the server logs it and keeps the last
-published state.
+Overlay content wins over disk.
+
+The glob and overlay sides are deduped by **symlink-resolved identity**,
+not by string equality: a file reached one way as `/tmp/ws/q.sql` (an
+editor opened under a symlinked workspace root) and the other as
+`/private/tmp/ws/q.sql` (the glob's resolved spelling) is one file, and
+counting it twice would flag every query as a false duplicate and check
+the stale disk copy instead of the buffer. Resolution keys the dedup
+only; each path keeps its own spelling for reading and for the published
+diagnostic URI (an editor matches diagnostics to the document by the URI
+it opened, so the server must never rewrite it). `uriToPath` cleans the
+URI path (so `..`/`//` spellings collapse) but does not resolve it.
+
+An **unreadable** glob-matched file (permission denied, a broken
+symlink) degrades to a per-file `SQLETCH308` diagnostic on that file and
+the rest of the workspace still checks — one bad file must not abort the
+snapshot and freeze every file's diagnostics for the session. (The
+one-shot `generate`/`check` pipeline still fails hard on such a file;
+only the long-lived server degrades.) The `Check` error return is thus
+retained only for the interface and is currently always nil.
 
 Phases, mirroring pipeline.Run's order:
 
@@ -206,8 +231,11 @@ not kill the server (clients auto-restart in a loop and the user gets
 no message): the server starts, answers `initialize`, reports the
 config diagnostics once via `window/showMessage` after `initialized`,
 and then answers every request with empty results until restarted.
-Environmental failures mid-session (unreadable file) are logged to
-stderr; the last good diagnostics stay published.
+An unreadable glob-matched file mid-session no longer freezes the
+snapshot: it surfaces as a per-file `SQLETCH308` diagnostic (§4) while
+the rest of the workspace keeps checking. Genuine transport/framing
+failures still tear the connection down (exit 1) and are logged to
+stderr.
 
 ## 7. Testing
 
