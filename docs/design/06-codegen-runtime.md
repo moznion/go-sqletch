@@ -108,6 +108,26 @@ Post-mapping collisions (two params mapping to one Go name, enum
 constant colliding with another decl) are `SQLETCH310` at generate
 time — never silently renamed.
 
+Every name sqletch controls is `snake_case`-gated at scan time
+(`snakeRe`/`headerRe`), so `GoName` always receives a clean word list —
+except **result column names**, which come from the oracle (a Describe
+column or a quoted `AS` alias) and are unconstrained. A column whose
+mapped name is not a valid Go identifier (spaces, punctuation, or
+injection-shaped text) is refused with `SQLETCH307`, not emitted: doing
+so would otherwise surface only as an opaque "generated code does not
+gofmt" failure, or — for hostile input — splice arbitrary text into the
+generated struct. The fix is an `AS` alias / `-- @column` name that is a
+valid identifier.
+
+Required arguments (policy parameters, `@filter-tree!`) share the query
+method's outermost scope with every local the body emits, so `argIdent`
+suffixes any name that would collide with one — the fixed locals
+(`ctx`, `err`, `key`, `execStart`, `res`, `tag`, `n`, `rerr`, `row`, …)
+and the indexed `ord`/`oseq`/`nul` families. Without this a parameter
+spelled like a local (e.g. `exec_start`) produces generated Go that
+fails to compile in the consumer's module. Keep the reserved set in sync
+with the locals `writeFunc` declares.
+
 ## 4. `runtime` composition (mirror of ast.Render)
 
 ```go

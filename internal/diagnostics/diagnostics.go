@@ -117,8 +117,14 @@ const (
 	CodePolicyInvalid   Code = "SQLETCH303" // a policy declaration is malformed
 	CodeShapeCapReached Code = "SQLETCH304" // shape enumeration stopped at its cap (explain --max-shapes, verification.max_shapes)
 	CodePathEscape      Code = "SQLETCH306" // cache.path/output.path escapes the project directory
-	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
-	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
+	// A result column's name does not form a valid Go identifier once
+	// mapped (an oracle column or quoted alias carrying spaces, braces,
+	// punctuation, …): emitting it verbatim would either fail gofmt with
+	// no span or, worse, splice attacker-influenced text into the
+	// generated package. Refuse it and ask for an `AS` alias / `-- @column`.
+	CodeInvalidColumnIdentifier Code = "SQLETCH307"
+	CodeNameCollision           Code = "SQLETCH310" // generated Go identifiers collide
+	CodeUnsupportedType         Code = "SQLETCH311" // no Go mapping for a database type
 	// null_overrides hygiene: overrides are the analyzer's escape
 	// hatch and are applied by RESULT-COLUMN NAME, so a key that
 	// matches nothing is dead config and a key matching several

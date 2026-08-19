@@ -3,7 +3,9 @@ package codegen
 import (
 	"fmt"
 	"go/format"
+	"go/token"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -415,6 +417,18 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				g.addImport(optionalImport)
 			}
 			goName := GoName(col.Name)
+			// The column name comes from the oracle (a Describe column or a
+			// quoted alias), which — unlike every param/predicate name,
+			// gated by snakeRe at scan time — is unconstrained. If it does
+			// not map to a valid Go identifier, emitting it verbatim would
+			// at best fail gofmt with no span and at worst splice arbitrary
+			// text into the generated struct/scan target. Refuse it here.
+			if !token.IsIdentifier(goName) {
+				fail(diagnostics.CodeInvalidColumnIdentifier, q.HeaderSpan,
+					"result column %q maps to Go identifier %q, which is not valid; give it an `AS` alias (or a `-- @column` name) that is a valid Go identifier",
+					col.Name, goName)
+				continue
+			}
 			if prev, dup := colNames[goName]; dup {
 				fail(diagnostics.CodeNameCollision, q.HeaderSpan,
 					"row field %q generated for both columns %q and %q; alias one differently", goName, prev, col.Name)
@@ -593,13 +607,27 @@ func policyFile(pkg string, types map[string]*policyType) string {
 	return b.String()
 }
 
-// argIdent names a required argument. Reserved identifiers get a
-// suffix so a parameter called `ctx` or `arg` cannot shadow the
-// generated locals.
+// reservedLocal matches an indexed local writeFunc emits (ord0, oseq1,
+// nul2, …); a required argument spelled the same way would redeclare or
+// shadow it in the query method's body.
+var reservedLocal = regexp.MustCompile(`^(?:ord|oseq|nul)[0-9]+$`)
+
+// argIdent names a required argument. A required argument shares the
+// query method's outermost scope with every local writeFunc declares,
+// so any collision would produce generated Go that fails to compile (or
+// silently clobbers the argument) in the consumer's module. Reserved
+// names get an "Arg" suffix. Keep this in sync with the locals writeFunc
+// emits: ctx/arg/q (signature + receiver), the fixed locals below, and
+// the indexed ord/oseq/nul families (reservedLocal).
 func argIdent(param string) string {
 	name := lowerCamel(GoName(param))
 	switch name {
-	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds", "sqlText", "argIdx", "items", "rows", "i":
+	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds",
+		"sqlText", "argIdx", "items", "rows", "i", "row",
+		"execStart", "res", "n", "rerr", "tag":
+		return name + "Arg"
+	}
+	if reservedLocal.MatchString(name) {
 		return name + "Arg"
 	}
 	return name
