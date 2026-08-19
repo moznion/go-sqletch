@@ -319,13 +319,16 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 // bodies, set-operation branches, and subqueries inside expressions — so
 // a view is caught wherever it can contribute an attributed column.
 //
-// The hazard is engine-specific: SQLite attributes a view's result
-// columns THROUGH to the view's base tables (sqlite3_column_origin_name),
+// The hazard: engines attribute a view's result columns THROUGH to the
+// view's base tables (SQLite via sqlite3_column_origin_name; PostgreSQL
+// and MySQL resolve view columns to their base relation OID/org_table),
 // so a base table appearing directly in FROM can vouch for a column that
 // actually flows through the view's invisible, possibly null-extending
-// body (cache.Table.IsView). PostgreSQL and MySQL report the view's own
-// identity and never set IsView, so this never fires for them and their
-// narrowing is unchanged.
+// body. All three snapshots now mark views (cache.Table.IsView): the
+// SQLite oracle, the PostgreSQL snapshot (relkind v/m), and the MySQL
+// snapshot (information_schema.tables.table_type = 'VIEW'). A base table
+// present in FROM alongside a view that exposes it is exactly the
+// unsound case this kill-switch closes.
 func touchesView(t dialect.Tree, cat *cache.Catalog) bool {
 	if cat == nil {
 		return false
@@ -367,10 +370,26 @@ type presence struct {
 	count        int
 }
 
+// cteBinding is a CTE definition paired with the environment visible
+// INSIDE its own body, captured at DEFINITION time: the enclosing scope
+// plus only the same-level definitions that precede it. Carrying the
+// body env with the definition is what lets a reference resolve the
+// body correctly no matter how deeply nested the reference site is — a
+// definition's body scope is a property of where it was WRITTEN, never
+// of where it is USED. Reconstructing the body scope from the
+// referencing level (the old fallback) leaked later same-level
+// definitions into a body they cannot see, dropping a base relation's
+// null-extension hazard when a deeper reference bound a base table to a
+// forward CTE name.
+type cteBinding struct {
+	def     dialect.CTEDef
+	bodyEnv map[string]cteBinding
+}
+
 // cloneEnv copies a CTE environment, reserving room for extra entries
 // the caller will add. A nil source yields a fresh empty map.
-func cloneEnv(src map[string]dialect.CTEDef, extra int) map[string]dialect.CTEDef {
-	dst := make(map[string]dialect.CTEDef, len(src)+extra)
+func cloneEnv(src map[string]cteBinding, extra int) map[string]cteBinding {
+	dst := make(map[string]cteBinding, len(src)+extra)
 	for k, v := range src {
 		dst[k] = v
 	}
@@ -385,7 +404,7 @@ func cloneEnv(src map[string]dialect.CTEDef, extra int) map[string]dialect.CTEDe
 // this level's own definitions are added with positional visibility (a
 // definition's body sees only the definitions preceding it, matching
 // engine name resolution — see the body of this function).
-func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
+func collectPresence(t dialect.Tree, env map[string]cteBinding,
 	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
 	present map[uint32]*presence, res *instanceResolver, top bool) {
 
@@ -406,15 +425,17 @@ func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
 	// scoping stays sound there too.
 	outer := env
 	stmtEnv := env
-	var bodyEnvOf map[string]map[string]dialect.CTEDef
 	if ctes := t.CTEs(); len(ctes) > 0 {
 		stmtEnv = cloneEnv(outer, len(ctes))
-		bodyEnvOf = make(map[string]map[string]dialect.CTEDef, len(ctes))
 		preceding := cloneEnv(outer, len(ctes))
 		for _, def := range ctes {
-			bodyEnvOf[def.Name] = cloneEnv(preceding, 0)
-			preceding[def.Name] = def
-			stmtEnv[def.Name] = def
+			// A definition's body sees the enclosing scope plus only the
+			// definitions preceding it — captured here, at definition
+			// time, and carried with the binding so a reference from any
+			// depth resolves the body against the same scope.
+			b := cteBinding{def: def, bodyEnv: cloneEnv(preceding, 0)}
+			preceding[def.Name] = b
+			stmtEnv[def.Name] = b
 		}
 	}
 	env = stmtEnv
@@ -423,16 +444,14 @@ func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
 		if isGuarded(maxR, rel.Loc) || rel.Table == "" {
 			continue
 		}
-		if def, ok := env[rel.Table]; ok && rel.Schema == "" {
-			sub := bodyEnvOf[def.Name]
-			if sub == nil {
-				// The definition comes from an enclosing scope; its body
-				// sees that scope, never this level's definitions. Drop
-				// its own name to preclude a self-reference loop.
-				sub = cloneEnv(outer, 0)
-				delete(sub, def.Name)
-			}
-			descend(def.Tree, def.Recursive, sub, maxR, cat,
+		if b, ok := env[rel.Table]; ok && rel.Schema == "" {
+			// Always descend with the definition's OWN captured body env,
+			// never one reconstructed from this (possibly deeper)
+			// reference level. A non-recursive body's scope excludes its
+			// own name by construction (bodyEnv is the PRECEDING set), so
+			// no self-reference loop is possible; a recursive body is
+			// poisoned in descend before any recursion.
+			descend(b.def.Tree, b.def.Recursive, b.bodyEnv, maxR, cat,
 				nullExt || rel.NullableSide, present, res)
 			continue
 		}
@@ -474,7 +493,7 @@ func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
 // tables' attribution while breaking their declared constraints
 // (SQLite attributes compound output to the FIRST branch's table;
 // grouping sets null grouping columns).
-func descend(sub dialect.Tree, recursive bool, env map[string]dialect.CTEDef,
+func descend(sub dialect.Tree, recursive bool, env map[string]cteBinding,
 	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
 	present map[uint32]*presence, res *instanceResolver) {
 

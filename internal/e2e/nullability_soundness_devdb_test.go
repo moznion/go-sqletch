@@ -266,6 +266,30 @@ ORDER BY a.org_name NULLS LAST;
 `,
 		note: "forward reference: inside `a`, `orgs` binds to the base table (the CTE `orgs` is defined later), null-extended by the LEFT JOIN; analyzing it as the forward CTE drops that hazard and, with the clean public.orgs instance, would unsoundly narrow org_name",
 	},
+	{
+		name: "deeper_forward_cte_reference_base_table",
+		src: `-- name: DeeperForwardCTE :many
+WITH a AS (
+  SELECT o.name AS org_name
+  FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+),
+orgs AS (SELECT 1 AS one)
+SELECT p.org_name
+FROM (SELECT a.org_name FROM a) AS p, public.orgs AS po
+WHERE po.id = 1
+ORDER BY p.org_name NULLS LAST;
+`,
+		note: "`a` is referenced one level down (inside a derived table); its body scope belongs to the definition site, not the reference site. Rebuilding the body env from the deeper level bound `orgs` to the forward CTE, dropped the LEFT JOIN null-extension, and unsoundly narrowed org_name",
+	},
+	{
+		name: "view_alongside_base_table",
+		src: `-- name: ViewPlusBase :many
+SELECT v.org_name, o2.name AS other
+FROM members_orgs AS v JOIN orgs AS o2 ON o2.id = 1
+ORDER BY v.member_id;
+`,
+		note: "the view attributes org_name through to orgs.name (NOT NULL); the sibling base instance orgs AS o2 grants presence, so without IsView on the PG snapshot the view's invisible internal LEFT JOIN is missed and org_name narrows unsoundly",
+	},
 }
 
 func TestNullabilitySoundnessAdversarial(t *testing.T) {
@@ -445,6 +469,15 @@ SELECT v.m
 FROM members_empty_max AS v;
 `,
 		note: "max() over an empty input yields one NULL row; is information_schema is_nullable trustworthy?",
+	},
+	{
+		name: "view_alongside_base_table",
+		src: `-- name: ViewPlusBase :many
+SELECT v.org_name, o2.name AS other
+FROM members_orgs AS v JOIN orgs AS o2 ON o2.id = 1
+ORDER BY v.member_id;
+`,
+		note: "the view attributes org_name through to orgs.name (NOT NULL); the sibling base instance orgs AS o2 grants presence, so without IsView on the MySQL snapshot the view's invisible internal LEFT JOIN is missed and org_name narrows unsoundly",
 	},
 }
 

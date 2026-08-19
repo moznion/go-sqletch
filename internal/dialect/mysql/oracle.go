@@ -122,8 +122,11 @@ SELECT c.table_name,
        (c.is_nullable = 'NO') AS not_null,
        (c.column_default IS NOT NULL
         OR c.extra LIKE '%auto_increment%'
-        OR c.extra LIKE '%DEFAULT_GENERATED%') AS has_default
+        OR c.extra LIKE '%DEFAULT_GENERATED%') AS has_default,
+       (t.table_type = 'VIEW') AS is_view
 FROM information_schema.columns AS c
+JOIN information_schema.tables AS t
+  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
 WHERE c.table_schema = DATABASE()
 ORDER BY BINARY c.table_name, c.ordinal_position`
 
@@ -166,7 +169,8 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 		typ, err4 := res.GetString(i, 3)
 		notNull, err5 := res.GetInt(i, 4)
 		hasDef, err6 := res.GetInt(i, 5)
-		if err := errors.Join(err1, err2, err3, err4, err5, err6); err != nil {
+		isView, err7 := res.GetInt(i, 6)
+		if err := errors.Join(err1, err2, err3, err4, err5, err6, err7); err != nil {
 			return nil, fmt.Errorf("snapshot row %d: %w", i, err)
 		}
 		// go-mysql's GetString is zero-copy over pooled row buffers;
@@ -176,6 +180,7 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 		if cur == nil || cur.Name != tbl {
 			cat.Tables = append(cat.Tables, cache.Table{
 				Schema: schema, Name: tbl, OID: uint32(len(cat.Tables) + 1),
+				IsView: isView != 0,
 			})
 			cur = &cat.Tables[len(cat.Tables)-1]
 		}
