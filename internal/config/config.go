@@ -284,6 +284,18 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	checkPath("cache.path", cfg.Cache.Path)
 	checkPath("output.path", cfg.Output.Path)
+	// For SQLite, database.dsn is a FILE PATH that generate/check
+	// creates and opens, so it is subject to the same clone-and-run
+	// write-redirection policy as the other output paths. The URI
+	// spellings (`:memory:`, `file:`) are not paths and are exempt,
+	// matching cli.sqliteDSNPath; for the server dialects the DSN is a
+	// connection URL and must not be path-checked at all.
+	if cfg.Dialect == "sqlite" {
+		if dsn := cfg.Database.DSN; dsn != "" && dsn != ":memory:" &&
+			!strings.HasPrefix(dsn, "file:") {
+			checkPath("database.dsn", dsn)
+		}
+	}
 
 	return cfg, diags
 }
