@@ -1153,6 +1153,15 @@ Rules, settled deliberately (D1–D6 in the design record):
   shadows a designated table is conservatively treated as touching it.
 - **A designated table introduced by a guarded (`@if-present`) join is
   rejected** (`SQLETCH125`): it cannot be unconditionally scoped.
+- **A parameter-name collision with an incompatible kind is rejected**
+  (`SQLETCH125`): the woven parameter is a *required* value bound
+  unconditionally, so it may share a name only with a plain required
+  value parameter the author already declared. A collision with an
+  optional (`@if-present`) parameter would bind `NULL` in every shape a
+  caller omits it (silently emptying the result), and a collision with
+  a control parameter (`@when`, presence guard, or `@filter-tree`
+  `@predicate` argument) would bind a value where a control parameter
+  belongs — both rejected loudly rather than woven.
 - **The policy parameter is an ordinary parameter**: it appears in the
   affected queries' generated `Params` structs, typed by the oracle
   (Tier 1, where `param.type` is asserted like a `-- @param` hint) or

@@ -151,15 +151,57 @@ func TestWeave_Idempotence(t *testing.T) {
 	}
 }
 
-// A guarded copy of the conjunct must NOT satisfy the policy: it
-// vanishes in guard-off shapes.
+// A guarded copy of a policy's conjunct must NOT satisfy the policy:
+// it vanishes in guard-off shapes, so the weaver still adds the
+// unconditional one (idempotence keys on skeleton conjuncts only). A
+// paramless policy is used so the property is tested without a
+// parameter-name collision — see TestWeave_RejectsCollisionWith*.
 func TestWeave_GuardedCopyDoesNotCount(t *testing.T) {
-	src := "-- name: Q :many\nSELECT o.id FROM orders o WHERE o.ok\n@if-present(tenant_id)\nAND o.tenant_id = :tenant_id\n@endif\n"
-	res := weaveOne(t, src, tenantPolicy())
+	soft := Policy{Name: "soft", Tables: []string{"orders"}, Predicate: "{}.deleted_at IS NULL"}
+	src := "-- name: Q :many\nSELECT o.id FROM orders o WHERE o.ok\n@if-present(inc_deleted)\nAND o.deleted_at IS NULL\n@endif\n"
+	res := weaveOne(t, src, soft)
 	noDiags(t, res)
 	got := renderSQL(t, res.Query)
-	if !strings.Contains(got, "WHERE o.tenant_id = $1 AND o.ok") {
+	if !strings.Contains(got, "WHERE o.deleted_at IS NULL AND o.ok") {
 		t.Errorf("guarded copy suppressed weaving:\n%s", got)
+	}
+}
+
+// A policy must not re-bind a name the query already declares as an
+// optional @if-present parameter: the woven conjunct is unconditional,
+// so a caller passing None would send NULL in every shape and silently
+// empty the result set. Reject with SQLETCH125 instead of weaving a
+// copy the SQLETCH124 enforcement pass would then wrongly accept (M13).
+func TestWeave_RejectsCollisionWithOptionalParam(t *testing.T) {
+	src := "-- name: Q :many\nSELECT o.id FROM orders o WHERE o.ok\n@if-present(tenant_id)\nAND o.tenant_id = :tenant_id\n@endif\n"
+	res := weaveOne(t, src, tenantPolicy())
+	if len(res.Diags) != 1 || res.Diags[0].Code != diagnostics.CodePolicyUnweavable {
+		t.Fatalf("want exactly one SQLETCH125, got %+v", res.Diags)
+	}
+	if got := renderSQL(t, res.Query); strings.Contains(got, "WHERE o.tenant_id = $") {
+		t.Errorf("collision must not be woven unconditionally:\n%s", got)
+	}
+}
+
+// The same rejection for a name the query binds inside a @filter-tree
+// @predicate (a constructor argument, not a params-struct value).
+func TestWeave_RejectsCollisionWithFilterTreeParam(t *testing.T) {
+	src := "-- name: Q :many\nSELECT o.id FROM orders AS o\nWHERE TRUE\n  AND @filter-tree(scope)\n@predicate(tenant)\no.tenant_id = :tenant_id\n@end\n"
+	res := weaveOne(t, src, tenantPolicy())
+	if len(res.Diags) != 1 || res.Diags[0].Code != diagnostics.CodePolicyUnweavable {
+		t.Fatalf("want exactly one SQLETCH125, got %+v", res.Diags)
+	}
+}
+
+// A plain, always-required value parameter of the same name is the D3a
+// safe case: the policy binds the same required value, so weaving
+// proceeds with no diagnostic.
+func TestWeave_AllowsCollisionWithRequiredValueParam(t *testing.T) {
+	src := "-- name: Q :many\nSELECT o.id FROM orders o WHERE o.owner_id = :tenant_id AND o.ok\n"
+	res := weaveOne(t, src, tenantPolicy())
+	noDiags(t, res)
+	if got := renderSQL(t, res.Query); !strings.Contains(got, "o.tenant_id = $") {
+		t.Errorf("policy should weave on a plain required-value collision:\n%s", got)
 	}
 }
 
