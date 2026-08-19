@@ -699,6 +699,78 @@ INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
 	}
 }
 
+// TestSQLiteNullabilityGuardedMultibyteOffset pins the F1a invariant
+// ("nullability never narrows from a GUARDED fragment") for SQLite in
+// the presence of multibyte skeleton text. rqlite/sql reports byte
+// positions as rune counts; the frontend translates them to bytes, so
+// a guarded `col IS NOT NULL` that sits after multibyte skeleton text
+// still resolves to a location INSIDE its guard fragment. Without the
+// translation the location is reported left of its true byte offset and
+// lands in skeleton space, so the analyzer treats the guarded predicate
+// as unconditional and narrows a column that is NULL in every guard-off
+// shape — a silent soundness hole that no oracle backstops.
+//
+// The check is at the analyzer level (not execution) because the
+// maximal rendering executed by the table-driven suite carries the
+// guard ON, which filters the NULL row away; the unsoundness only
+// surfaces in a guard-off shape at runtime. Asserting the per-query
+// verdict stays nullable catches it deterministically for both shapes.
+func TestSQLiteNullabilityGuardedMultibyteOffset(t *testing.T) {
+	conn, ctx := acquireSQLiteWithSchema(t, sqliteNullSoundSchemaSQL)
+	oracle := sqlite.NewOracle(conn)
+	if err := conn.Exec(`
+INSERT INTO orgs VALUES (1, 'acme');
+INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
+`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cat, err := oracle.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A long multibyte literal in the SELECT skeleton pushes the guarded
+	// `m.org_id IS NOT NULL` many bytes past its rune index. The @when
+	// value guard is a pure control fragment (no bind, one conjunct), so
+	// it satisfies R9/R1 while keeping the IS NOT NULL GUARDED — it must
+	// not narrow.
+	src := "-- name: GuardedMultibyte :many\n" +
+		"-- @column pad: text\n" +
+		"SELECT m.email, m.org_id, 'あいうえおかきくけこさしすせそたちつてと' AS pad\n" +
+		"FROM members AS m\n" +
+		"WHERE TRUE\n" +
+		"@when(mode = 1)\n" +
+		"  AND m.org_id IS NOT NULL\n" +
+		"@end\n" +
+		"ORDER BY m.id;\n"
+
+	q := compileSQLite(t, src)
+	rs, err := ast.Renderings(sqlite.Profile{}, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := oracle.Describe(ctx, rs[0].SQL)
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	tree, err := sqlite.Frontend{}.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := nullability.Analyze(tree, rs[0], desc, cat, nil)
+	// Column 1 is m.org_id — nullable in the catalog, narrowed only by an
+	// UNCONDITIONAL IS NOT NULL. Here the IS NOT NULL is guarded, so the
+	// verdict must stay nullable in every shape.
+	if len(verdict) != 3 {
+		t.Fatalf("verdict has %d columns, want 3", len(verdict))
+	}
+	if !verdict[1] {
+		t.Errorf("SOUNDNESS: m.org_id claimed non-nullable, but its IS NOT NULL is GUARDED "+
+			"(guard-off shapes return NULL); rune/byte offset confusion misread the guarded "+
+			"conjunct as skeleton. verdict=%v", verdict)
+	}
+}
+
 func acquireSQLiteWithSchema(t *testing.T, schema string) (*sqlite3.Conn, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
