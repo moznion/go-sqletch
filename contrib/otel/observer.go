@@ -25,6 +25,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -183,7 +184,6 @@ func (m *Metrics) Bind(instance string, q Queries, space map[string]runtime.Shap
 		instance: attribute.String("instance", instance),
 		cache:    q.Cache(),
 		space:    space,
-		used:     map[string]*usedSet{},
 	}
 	reg, err := m.meter.RegisterCallback(b.collect,
 		m.cacheHits, m.cacheMisses, m.cacheInserts, m.cacheEvictions,
@@ -207,11 +207,11 @@ type Binding struct {
 
 	// attrs caches per-query measurement options: attribute sets are
 	// immutable and shared, so the hot path reuses them instead of
-	// rebuilding key-value slices per event.
+	// rebuilding key-value slices per event. Each *queryAttrs also
+	// carries that query's bounded distinct-shape set, so distinct
+	// tracking is sharded per query (no global lock) and a saturated set
+	// is detected lock-free on the compose hot path.
 	attrs sync.Map // query string -> *queryAttrs
-
-	mu   sync.Mutex
-	used map[string]*usedSet // query -> bounded distinct-shape set
 }
 
 // Close unregisters the scrape callback. The observer keeps counting
@@ -219,9 +219,14 @@ type Binding struct {
 // re-pointed elsewhere.
 func (b *Binding) Close() error { return b.reg.Unregister() }
 
+// usedSet is one query's bounded distinct-shape set. Its own mutex
+// guards keys (so tracking is sharded per query, never behind one global
+// lock), and saturated is atomic so the compose hot path can skip the
+// lock and the key encoding entirely once the bound is reached.
 type usedSet struct {
+	mu        sync.Mutex
 	keys      map[string]struct{}
-	saturated bool
+	saturated atomic.Bool
 }
 
 type queryAttrs struct {
@@ -230,6 +235,11 @@ type queryAttrs struct {
 	rows          metric.MeasurementOption
 	usedPlain     attribute.Set // + saturated flag variants, scrape-time only
 	usedSaturated attribute.Set
+	// used is this query's distinct-shape set, created lazily on the
+	// first compose event (nil until then, so scrape only reports queries
+	// that actually composed). Held via an atomic pointer so the hot path
+	// reads it without a lock.
+	used atomic.Pointer[usedSet]
 }
 
 func (b *Binding) queryAttrs(query string) *queryAttrs {
@@ -261,26 +271,36 @@ func (b *Binding) ObserveCompose(query string, key runtime.ShapeKey, hit bool) {
 	}
 	b.m.composeCalls.Add(context.Background(), 1, opt)
 
-	// Exact distinct tracking, bounded (doc 18 D5). The encoding is
-	// built here, adapter-side: the core hands over its retained key
-	// for free and stays free of unbounded state.
-	enc := key.String()
-	b.mu.Lock()
-	us := b.used[query]
+	// Exact distinct tracking, bounded (doc 18 D5). Once a query's set is
+	// saturated it never grows again, so the hot path returns here
+	// without encoding the key or taking any lock — the common
+	// steady-state cost of an observed cache is just the counter Add
+	// above. The lock, when taken, is this query's own (sharded), never a
+	// global one shared across every query and goroutine.
+	us := qa.used.Load()
 	if us == nil {
-		us = &usedSet{keys: map[string]struct{}{}}
-		b.used[query] = us
-	}
-	if !us.saturated {
-		if _, seen := us.keys[enc]; !seen {
-			if len(us.keys) >= b.m.cfg.usedBound {
-				us.saturated = true
-			} else {
-				us.keys[enc] = struct{}{}
-			}
+		ns := &usedSet{keys: map[string]struct{}{}}
+		if qa.used.CompareAndSwap(nil, ns) {
+			us = ns
+		} else {
+			us = qa.used.Load()
 		}
 	}
-	b.mu.Unlock()
+	if us.saturated.Load() {
+		return
+	}
+	// The encoding is built here, adapter-side: the core hands over its
+	// retained key for free and stays free of unbounded state.
+	enc := key.String()
+	us.mu.Lock()
+	if _, seen := us.keys[enc]; !seen {
+		if len(us.keys) >= b.m.cfg.usedBound {
+			us.saturated.Store(true)
+		} else {
+			us.keys[enc] = struct{}{}
+		}
+	}
+	us.mu.Unlock()
 }
 
 // ObserveExec implements [runtime.Observer]. The shape key encoding is
@@ -359,26 +379,32 @@ func (b *Binding) collect(_ context.Context, o metric.Observer) error {
 			attribute.Bool("unbounded", info.Unbounded)))
 	}
 
-	b.mu.Lock()
-	usedNames := make([]string, 0, len(b.used))
-	for name := range b.used {
-		usedNames = append(usedNames, name)
-	}
-	sort.Strings(usedNames)
 	type usedRow struct {
+		name  string
 		set   attribute.Set
 		count int64
 	}
-	rows := make([]usedRow, 0, len(usedNames))
-	for _, name := range usedNames {
-		us := b.used[name]
-		set := b.queryAttrs(name).usedPlain
-		if us.saturated {
-			set = b.queryAttrs(name).usedSaturated
+	var rows []usedRow
+	b.attrs.Range(func(k, v any) bool {
+		qa := v.(*queryAttrs)
+		us := qa.used.Load()
+		if us == nil { // observed (e.g. exec) but never composed a shape
+			return true
 		}
-		rows = append(rows, usedRow{set: set, count: int64(len(us.keys))})
-	}
-	b.mu.Unlock()
+		sat := us.saturated.Load()
+		us.mu.Lock()
+		count := int64(len(us.keys))
+		us.mu.Unlock()
+		set := qa.usedPlain
+		if sat {
+			set = qa.usedSaturated
+		}
+		rows = append(rows, usedRow{name: k.(string), set: set, count: count})
+		return true
+	})
+	// Sorted output: byte-identical scrapes for equal state, the
+	// repo-wide determinism discipline.
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 	for _, r := range rows {
 		o.ObserveInt64(b.m.shapesUsed, r.count, metric.WithAttributeSet(r.set))
 	}

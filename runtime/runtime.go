@@ -714,6 +714,31 @@ type ComposedCache struct {
 	evictions  uint64
 	hitsFolded uint64
 	sqlBytes   int64
+	// maxBytes bounds the approximate retained bytes (composed SQL +
+	// bind plans + arg indices) across resident entries; 0 disables the
+	// byte bound. totalBytes is the running sum eviction compares to it.
+	// The count cap alone leaves memory unbounded when a caller-driven
+	// @in arity makes single entries large (up to MaxInArity elements),
+	// so the byte bound caps that independently of the entry count.
+	maxBytes   int64
+	totalBytes int64
+}
+
+// defaultCacheMaxBytes is the default byte ceiling: generous enough that
+// an ordinary shape set never trips it, finite enough that caller-driven
+// @in arities (each entry up to ~MaxInArity elements of SQL + binds)
+// cannot pin unbounded memory. Override with SetMaxBytes.
+const defaultCacheMaxBytes int64 = 64 << 20
+
+// cacheBindBytes approximates one Bind's retained size (a
+// {bool,int16,int16} padded to 8) for the byte accounting; the exact
+// value only affects when the byte bound trips, never correctness.
+const cacheBindBytes = 8
+
+// entryBytes approximates an entry's retained memory for the byte bound.
+func entryBytes(e *cacheEntry) int64 {
+	return int64(len(e.sql)) + int64(len(e.mapKey)) +
+		int64(len(e.binds))*cacheBindBytes + int64(len(e.argIdx))*2
 }
 
 type cacheEntry struct {
@@ -764,7 +789,30 @@ func NewComposedCache(capacity int) *ComposedCache {
 	if capacity <= 0 {
 		capacity = 256
 	}
-	return &ComposedCache{cap: capacity, m: map[string]*cacheEntry{}, order: list.New()}
+	return &ComposedCache{
+		cap:      capacity,
+		maxBytes: defaultCacheMaxBytes,
+		m:        map[string]*cacheEntry{},
+		order:    list.New(),
+	}
+}
+
+// SetMaxBytes bounds the cache's approximate retained bytes (Σ composed
+// SQL + bind plans + arg indices over resident entries) in addition to
+// the entry-count capacity, evicting least-recently-used entries when
+// the total would exceed it. A value <= 0 disables the byte bound
+// (count cap only). Like SetObserver, call it before the cache serves
+// traffic. The default is [defaultCacheMaxBytes]; it exists so a
+// caller-controlled @in arity cannot pin unbounded memory behind a
+// modest entry count.
+func (c *ComposedCache) SetMaxBytes(n int64) {
+	c.mu.Lock()
+	c.maxBytes = n
+	for len(c.m) > 1 && c.maxBytes > 0 && c.totalBytes > c.maxBytes {
+		c.evictOne()
+	}
+	c.publishNow()
+	c.mu.Unlock()
 }
 
 func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (string, []int16) {
@@ -855,6 +903,14 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 		// Present but not (yet) in the published snapshot.
 		if keysEqual(e.key, key) {
 			c.order.MoveToFront(e.el)
+			// The lock-free snapshot missed this entry: it was created
+			// after the last publish and held back by the amortization
+			// guard. Flush now so this shape — and every co-resident one —
+			// serves lock-free again. Without it, a workload that fills
+			// past capacity and then stops inserting (steady state = pure
+			// hits) would serve its newest shapes under this mutex forever,
+			// defeating the lock-free hit path.
+			c.publishNow()
 			c.mu.Unlock()
 			touch(e)
 			if c.track.Load() {
@@ -906,7 +962,11 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 	c.m[mapKey] = e
 	c.inserts++
 	c.sqlBytes += int64(len(sql))
-	for len(c.m) > c.cap {
+	c.totalBytes += entryBytes(e)
+	// Evict on either bound: the count cap, or the byte ceiling (never
+	// below one entry — the just-composed one must survive so the caller
+	// receives it, even if it alone exceeds the ceiling).
+	for len(c.m) > c.cap || (c.maxBytes > 0 && c.totalBytes > c.maxBytes && len(c.m) > 1) {
 		c.evictOne()
 	}
 	c.publish()
@@ -939,6 +999,7 @@ func (c *ComposedCache) remove(e *cacheEntry) {
 	delete(c.m, e.mapKey)
 	c.hitsFolded += e.hits.Load()
 	c.sqlBytes -= int64(len(e.sql))
+	c.totalBytes -= entryBytes(e)
 	c.evictedSince = true
 }
 
@@ -978,10 +1039,19 @@ func (c *ComposedCache) publish() {
 	// a lock. Once the shape set outgrows the capacity, publishing is
 	// amortized: copying the map on every miss would otherwise make the
 	// degenerate case far more expensive than the composition it
-	// caches.
+	// caches. The deferred snapshot is flushed either by a later insert
+	// or, if inserts stop, by the first hit that finds an unpublished
+	// entry (see entry()'s mutex-path hit) — so no entry is stranded off
+	// the lock-free path indefinitely.
 	if c.evictedSince && c.sinceSnap < c.cap {
 		return
 	}
+	c.publishNow()
+}
+
+// publishNow snapshots the entry map unconditionally and re-arms the
+// amortization window. Callers hold c.mu.
+func (c *ComposedCache) publishNow() {
 	snap := make(map[string]*cacheEntry, len(c.m))
 	for k, v := range c.m {
 		snap[k] = v

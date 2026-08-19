@@ -77,7 +77,13 @@ Hard constraints, all existing invariants:
   snapshot with no mutex and no allocation, and `touch()` deliberately
   load-guards its store to avoid cross-core cache-line traffic. The
   metrics design must not reintroduce what that code exists to avoid
-  (D4); `runtime/bench_test.go` is the referee.
+  (D4); `runtime/bench_test.go` is the referee. The observer's own
+  distinct-shape tracking honours the same rule: the bounded used-set is
+  sharded per query (each `queryAttrs` carries its own set behind its own
+  lock, never one global mutex across all queries), and once a query's
+  set saturates the compose path detects it through an atomic flag and
+  returns without encoding the key or taking any lock — a saturated
+  steady state costs only the counter increment.
 - **Compose conformance is untouched.** Nothing here changes
   composition, shape keys, bind plans, or emitted SQL.
   `TestComposeConformance` must pass unmodified.

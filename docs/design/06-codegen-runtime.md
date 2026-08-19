@@ -149,7 +149,20 @@ is deterministic, so a stale entry is the same SQL) and bounds retained
 entries at twice the capacity. Republishing copies the map, so it is
 amortized once the shape set outgrows the capacity: a thrashing
 workload falls back to the locked path instead of paying O(cap) per
-miss.
+miss. The amortization defers a republish while the shape set churns;
+so a deferred entry is never stranded off the lock-free path when
+inserts stop, the first hit that finds an unpublished entry flushes the
+snapshot (an idle steady state converges to fully lock-free serving
+rather than serving its newest shapes under the mutex forever).
+
+The cache is bounded on two axes: the entry-count `Capacity` and a byte
+ceiling (`SetMaxBytes`, default 64 MiB). Eviction runs on whichever
+binds first — the byte bound exists because a caller-controlled `@in`
+arity makes a single entry as large as its list (up to `MaxInArity`
+elements of SQL plus bind plan), so counting entries alone would leave
+retained memory unbounded. The just-composed entry always survives even
+if it alone exceeds the ceiling (the caller needs it); the bound never
+empties the cache below one entry.
 
 `prepared` statement mode is **not** sqletch code: pgx's
 `QueryExecModeCacheStatement` provides per-connection statement
