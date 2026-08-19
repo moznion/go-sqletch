@@ -122,14 +122,14 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	names, err := o.tableNames()
+	rels, err := o.relations()
 	if err != nil {
 		return nil, err
 	}
 	cat := &cache.Catalog{}
-	for _, name := range names {
-		tbl := cache.Table{Schema: "main", Name: name, OID: uint32(len(cat.Tables) + 1)}
-		if err := o.tableColumns(name, &tbl); err != nil {
+	for _, rel := range rels {
+		tbl := cache.Table{Schema: "main", Name: rel.name, OID: uint32(len(cat.Tables) + 1), IsView: rel.isView}
+		if err := o.tableColumns(rel.name, &tbl); err != nil {
 			return nil, err
 		}
 		cat.Tables = append(cat.Tables, tbl)
@@ -137,18 +137,27 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 	return cat, nil
 }
 
-func (o *Oracle) tableNames() ([]string, error) {
+// relInfo is one queryable relation and whether it is a view. A view's
+// result columns are attributed THROUGH to base tables by SQLite, so
+// the nullability analyzer must know which relations are views (see
+// cache.Table.IsView).
+type relInfo struct {
+	name   string
+	isView bool
+}
+
+func (o *Oracle) relations() ([]relInfo, error) {
 	stmt, err := o.prepareOne(
-		"SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
+		"SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = stmt.Close() }()
-	var names []string
+	var rels []relInfo
 	for stmt.Step() {
-		names = append(names, stmt.ColumnText(0))
+		rels = append(rels, relInfo{name: stmt.ColumnText(0), isView: stmt.ColumnText(1) == "view"})
 	}
-	return names, stmt.Err()
+	return rels, stmt.Err()
 }
 
 func (o *Oracle) tableColumns(table string, out *cache.Table) error {
