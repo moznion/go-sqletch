@@ -75,6 +75,67 @@ func TestLoad_NoEnvExpansion(t *testing.T) {
 	}
 }
 
+// TestLoad_PathEscape pins the M6 fix: a committed RELATIVE cache/output
+// path climbing out of the project with `..` is refused (SQLETCH305
+// error) because a cloned repo could redirect writes; an ABSOLUTE path
+// is a deliberate operator choice and only warns; an in-tree relative
+// path is unaffected.
+func TestLoad_PathEscape(t *testing.T) {
+	hasCode := func(diags []diagnostics.Diagnostic, sev diagnostics.Severity) bool {
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape && d.Severity == sev {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("relative escape is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		y := strings.Replace(validYAML, "path: gen", "path: ../../evil", 1)
+		_, diags := Load(write(t, dir, "sqletch.yaml", y))
+		if !hasCode(diags, diagnostics.Error) {
+			t.Fatalf("want SQLETCH305 error, got %+v", diags)
+		}
+		if !diagnostics.HasErrors(diags) {
+			t.Error("a relative escape must fail the load")
+		}
+	})
+
+	t.Run("absolute path only warns", func(t *testing.T) {
+		dir := t.TempDir()
+		abs := filepath.Join(t.TempDir(), "out")
+		y := strings.Replace(validYAML, "path: gen", "path: "+abs, 1)
+		_, diags := Load(write(t, dir, "sqletch.yaml", y))
+		if !hasCode(diags, diagnostics.Warning) {
+			t.Fatalf("want SQLETCH305 warning, got %+v", diags)
+		}
+		if diagnostics.HasErrors(diags) {
+			t.Error("an absolute path must not fail the load")
+		}
+	})
+
+	t.Run("in-tree relative is clean", func(t *testing.T) {
+		dir := t.TempDir()
+		y := strings.Replace(validYAML, "path: gen", "path: sub/gen", 1)
+		_, diags := Load(write(t, dir, "sqletch.yaml", y))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("in-tree path must not flag: %+v", d)
+			}
+		}
+	})
+
+	t.Run("relative cache.path escape is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		y := validYAML + "cache:\n  path: ../escape\n"
+		_, diags := Load(write(t, dir, "sqletch.yaml", y))
+		if !hasCode(diags, diagnostics.Error) {
+			t.Fatalf("want SQLETCH305 error for cache.path, got %+v", diags)
+		}
+	})
+}
+
 func TestLoad_UnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	path := write(t, dir, "sqletch.yaml", validYAML+"typo_key: true\n")

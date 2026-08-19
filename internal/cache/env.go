@@ -3,7 +3,6 @@ package cache
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 )
 
@@ -81,7 +80,7 @@ func (s *Store) envPath(fp string) string {
 // before this sidecar existed have no record, and adopting the
 // connected server on the next write is the correct migration.
 func (s *Store) LoadEnv(fp string) (*Env, bool) {
-	data, err := os.ReadFile(s.envPath(fp))
+	data, err := ReadFileCapped(s.envPath(fp))
 	if err != nil {
 		return nil, false
 	}

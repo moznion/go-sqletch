@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 
@@ -248,6 +249,32 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			badPolicy("%s: param.type without param.name", id)
 		}
 	}
+
+	// cache.path and output.path drive every write sqletch performs.
+	// A committed relative path climbing out of the project with `..`
+	// is the clone-and-run write-redirection vector, so it is refused;
+	// an absolute path is a deliberate operator choice and only warns.
+	checkPath := func(field, p string) {
+		if p == "" {
+			return
+		}
+		if filepath.IsAbs(p) {
+			diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
+				"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
+				WithHint("prefer a project-relative path so generated output stays inside the repository"))
+			return
+		}
+		resolved := filepath.Clean(filepath.Join(cfg.Dir, p))
+		rel, err := filepath.Rel(cfg.Dir, resolved)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
+				"%s %q escapes the project directory (resolves to %q): a relative path climbing out with `..` is refused because a cloned repository could otherwise redirect writes to arbitrary locations", field, p, resolved).
+				WithHint("keep %s inside the project directory", field))
+		}
+	}
+	checkPath("cache.path", cfg.Cache.Path)
+	checkPath("output.path", cfg.Output.Path)
+
 	return cfg, diags
 }
 

@@ -127,7 +127,7 @@ func Explain(ctx context.Context, configPath string, queryNames []string, opts E
 		if len(want) > 0 && !want[name] {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		data, err := cache.ReadFileCapped(filepath.Join(dir, e.Name()))
 		if err != nil {
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
 			return ExitEnvironment
