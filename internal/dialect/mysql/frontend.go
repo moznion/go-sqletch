@@ -593,6 +593,13 @@ type colRefVisitor struct {
 	root     ast.Node
 	subDepth int
 	out      []dialect.ColRef
+	// scopes holds the effective FROM names of the enclosing subquery
+	// selects, flat, with marks recording each pushed frame's start so
+	// Leave can pop it. A column reference's ScopeAliases is a copy of
+	// the whole stack (the union across enclosing subquery levels). The
+	// top-level select's FROM is never pushed (n == root).
+	scopes []string
+	marks  []int
 }
 
 func (v *colRefVisitor) Enter(n ast.Node) (ast.Node, bool) {
@@ -602,9 +609,14 @@ func (v *colRefVisitor) Enter(n ast.Node) (ast.Node, bool) {
 	case *ast.SelectStmt:
 		if n != v.root {
 			v.subDepth++
+			v.marks = append(v.marks, len(v.scopes))
+			v.scopes = append(v.scopes, selectFromNames(x)...)
 		}
 	case *ast.ColumnNameExpr:
 		cr := dialect.ColRef{Loc: x.OriginTextPosition(), InSubquery: v.subDepth > 0}
+		if len(v.scopes) > 0 {
+			cr.ScopeAliases = append([]string(nil), v.scopes...)
+		}
 		if x.Name.Schema.O != "" {
 			cr.Fields = append(cr.Fields, x.Name.Schema.O)
 		}
@@ -632,9 +644,33 @@ func (v *colRefVisitor) Leave(n ast.Node) (ast.Node, bool) {
 	case *ast.SelectStmt:
 		if n != v.root {
 			v.subDepth--
+			last := len(v.marks) - 1
+			v.scopes = v.scopes[:v.marks[last]]
+			v.marks = v.marks[:last]
 		}
 	}
 	return n, true
+}
+
+// selectFromNames returns the effective FROM names (alias else table)
+// of a select's own FROM clause. Set-operation branches are not
+// descended (under-collection is sound; see dialect.ColRef.ScopeAliases).
+func selectFromNames(sel *ast.SelectStmt) []string {
+	if sel == nil || sel.From == nil {
+		return nil
+	}
+	var rels []dialect.RelRef
+	collectJoin(sel.From.TableRefs, dialect.JoinBase, false, &rels)
+	names := make([]string, 0, len(rels))
+	for _, r := range rels {
+		switch {
+		case r.Alias != "":
+			names = append(names, r.Alias)
+		case r.Table != "":
+			names = append(names, r.Table)
+		}
+	}
+	return names
 }
 
 // DeepTables walks the whole statement and collects every TableName —

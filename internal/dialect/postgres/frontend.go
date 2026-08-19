@@ -505,14 +505,24 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 		return nil
 	}
 	var out []dialect.ColRef
-	collectColRefs(n.ProtoReflect(), false, &out)
+	collectColRefs(n.ProtoReflect(), nil, false, &out)
 	return out
 }
 
-func collectColRefs(m protoreflect.Message, inSub bool, out *[]dialect.ColRef) {
-	switch v := m.Interface().(type) {
-	case *pgquery.ColumnRef:
+// collectColRefs walks the statement collecting every ColumnRef.
+// InSubquery is set (coarsely) for every descendant of a SubLink /
+// derived table / CTE. scopes carries the effective FROM names of the
+// enclosing subquery scopes (ScopeAliases): at a subquery boundary the
+// names are appended ONLY when descending into that subquery's own
+// select body (pointer-identity match), never into a sibling field such
+// as a SubLink test expression, whose references belong to the enclosing
+// scope and must stay checkable.
+func collectColRefs(m protoreflect.Message, scopes []string, inSub bool, out *[]dialect.ColRef) {
+	if v, ok := m.Interface().(*pgquery.ColumnRef); ok {
 		cr := dialect.ColRef{Loc: int(v.Location), InSubquery: inSub}
+		if len(scopes) > 0 {
+			cr.ScopeAliases = append([]string(nil), scopes...)
+		}
 		for _, f := range v.Fields {
 			if s := f.GetString_(); s != nil {
 				cr.Fields = append(cr.Fields, s.Sval)
@@ -523,21 +533,83 @@ func collectColRefs(m protoreflect.Message, inSub bool, out *[]dialect.ColRef) {
 		}
 		*out = append(*out, cr)
 		return
-	case *pgquery.SubLink, *pgquery.RangeSubselect, *pgquery.CommonTableExpr:
-		inSub = true
 	}
+	var innerSelect *pgquery.Node
+	isSubBoundary := false
+	switch v := m.Interface().(type) {
+	case *pgquery.SubLink:
+		innerSelect, isSubBoundary = v.Subselect, true
+	case *pgquery.RangeSubselect:
+		innerSelect, isSubBoundary = v.Subquery, true
+	case *pgquery.CommonTableExpr:
+		innerSelect, isSubBoundary = v.Ctequery, true
+	}
+	childInSub := inSub || isSubBoundary
 	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+		childScopes := scopes
+		if innerSelect != nil && fd.Kind() == protoreflect.MessageKind &&
+			!fd.IsList() && !fd.IsMap() {
+			if n, ok := val.Message().Interface().(*pgquery.Node); ok && n == innerSelect {
+				childScopes = appendFromNames(scopes, innerSelect)
+			}
+		}
 		switch {
 		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
 			l := val.List()
 			for i := 0; i < l.Len(); i++ {
-				collectColRefs(l.Get(i).Message(), inSub, out)
+				collectColRefs(l.Get(i).Message(), childScopes, childInSub, out)
 			}
 		case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
-			collectColRefs(val.Message(), inSub, out)
+			collectColRefs(val.Message(), childScopes, childInSub, out)
 		}
 		return true
 	})
+}
+
+// appendFromNames returns scopes extended with the effective FROM names
+// (alias else relation name) of node's SELECT, if any. Set-operation
+// branch FROMs are deliberately not descended: under-collecting a name
+// only leaves the pre-existing sound check in place, whereas an extra
+// name would wrongly suppress one.
+func appendFromNames(scopes []string, node *pgquery.Node) []string {
+	sel := node.GetSelectStmt()
+	if sel == nil {
+		return scopes
+	}
+	var names []string
+	for _, item := range sel.FromClause {
+		fromNames(item, &names)
+	}
+	if len(names) == 0 {
+		return scopes
+	}
+	return append(append([]string(nil), scopes...), names...)
+}
+
+func fromNames(node *pgquery.Node, out *[]string) {
+	switch {
+	case node.GetRangeVar() != nil:
+		rv := node.GetRangeVar()
+		if rv.Alias != nil && rv.Alias.Aliasname != "" {
+			*out = append(*out, rv.Alias.Aliasname)
+		} else if rv.Relname != "" {
+			*out = append(*out, rv.Relname)
+		}
+	case node.GetJoinExpr() != nil:
+		je := node.GetJoinExpr()
+		fromNames(je.Larg, out)
+		fromNames(je.Rarg, out)
+	case node.GetRangeSubselect() != nil:
+		if a := node.GetRangeSubselect().Alias; a != nil && a.Aliasname != "" {
+			*out = append(*out, a.Aliasname)
+		}
+	case node.GetRangeFunction() != nil:
+		if a := node.GetRangeFunction().Alias; a != nil && a.Aliasname != "" {
+			*out = append(*out, a.Aliasname)
+		}
+	case node.GetRangeTableSample() != nil:
+		fromNames(node.GetRangeTableSample().Relation, out)
+	}
 }
 
 func (t *tree) TargetItems() []dialect.TargetItem {

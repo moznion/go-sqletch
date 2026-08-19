@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
@@ -15,11 +16,15 @@ import (
 // expansion, ambiguity detection, and the planner-sensitive
 // combination table. See docs/design/03-structural-rules.md §6–7.
 //
-// Known limitation (documented in design 03 §6): unqualified column
-// references *inside subquery scopes* are skipped — innermost-first
-// resolution is not modeled in v0.1. Qualified references are checked
-// everywhere. The per-shape EXPLAIN property test is the mechanical
-// backstop for the skipped corner.
+// Qualified column references are resolved innermost-first (design 03
+// §6): a qualifier introduced by an enclosing subquery scope
+// (ColRef.ScopeAliases) shadows a same-named top-level relation, so the
+// reference binds locally and the top-level guard is not re-derived for
+// it; a correlated qualified reference (qualifier absent from every
+// enclosing subquery FROM) is still checked. UNqualified references
+// inside subquery scopes remain skipped — resolving a bare column
+// against nested scopes is not modeled — with the per-shape EXPLAIN
+// property test as the mechanical backstop.
 func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 	maxTree dialect.Tree, cat *cache.Catalog) []diagnostics.Diagnostic {
 
@@ -34,7 +39,18 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 		}
 		var rel *relInfo
 		if len(cr.Fields) >= 2 {
-			rel = res.byName[cr.Fields[len(cr.Fields)-2]]
+			qualifier := cr.Fields[len(cr.Fields)-2]
+			// Innermost-first resolution: a qualifier introduced by a
+			// nearer subquery scope shadows a same-named top-level
+			// relation, so this reference does not touch the top-level
+			// join and its guard must not be re-derived here (design 03
+			// §6). A correlated reference whose qualifier is absent from
+			// every enclosing subquery FROM is not shadowed and is
+			// checked as before, preserving the correlated-ref guarantee.
+			if slices.Contains(cr.ScopeAliases, qualifier) {
+				continue
+			}
+			rel = res.byName[qualifier]
 		} else {
 			if cr.InSubquery {
 				continue // conservative skip; see doc comment

@@ -374,19 +374,14 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.
-- R3 skips unqualified column refs inside subquery scopes
-  (innermost-first resolution unmodeled); qualified refs are checked
-  everywhere. The exhaustive/property tests are the backstop. Caveat
-  (design 03 §6 "Known limitation"): because qualified refs key on
-  TOP-LEVEL relation names only, a subquery that REDEFINES an alias
-  shadowing a guarded top-level alias is OVER-REJECTED (`SQLETCH115`
-  false positive — over-rejection, never unsound; workaround: rename
-  the inner alias). Checking qualified subquery refs is deliberate and
-  must stay: it catches correlated refs to a guarded outer join
-  (`TestCheckResolved_R3_CorrelatedSubqueryRef`). A sound fix needs
-  innermost-first scope resolution, which the facades don't yet
-  support (`SubRel` has no byte range; non-FROM sublinks aren't in
-  `DerivedRels()`) — an analysis addition, not a mechanical fix.
+- R3 resolves QUALIFIED column refs innermost-first: a qualifier
+  introduced by an enclosing subquery scope (`dialect.ColRef.ScopeAliases`,
+  populated by all three facades) shadows a same-named top-level
+  relation, so its guard is not re-derived; a correlated qualified ref
+  (qualifier absent from every enclosing subquery FROM) is still
+  checked. UNqualified refs inside subquery scopes are still skipped
+  (bare-column innermost resolution unmodeled). The exhaustive/property
+  tests are the backstop.
 - Indeterminate-parameter detection covers SQLSTATE 42P18 and 42725;
   bare `SELECT $1` is NOT an error on modern PostgreSQL.
 - The numeric OID maps to float64 (lossy, documented in typemap.go).

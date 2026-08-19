@@ -102,8 +102,21 @@ type Resolver struct {
 Resolution algorithm (mirrors PostgreSQL's, restricted to what
 templates can contain):
 
-- Qualified `a.col`: match alias, else table name. Unknown: the
-  maximal parse already failed, so this is an internal error here.
+- Qualified `a.col`: match alias, else table name — but **resolved
+  innermost-first**. If `a` is introduced by a subquery scope enclosing
+  the reference (`ColRef.ScopeAliases` — the union of the effective FROM
+  names of every enclosing subquery, top-level FROM excluded), the
+  reference binds to that nearer relation, not to a same-named top-level
+  one, so R3 does not re-derive the top-level guard for it. A
+  *correlated* qualified reference — one whose qualifier is a top-level
+  relation absent from every enclosing subquery FROM — is not shadowed
+  and is checked normally, which is what keeps a correlated reference to
+  a guarded outer join an error. Facades under-collect the scope set
+  (set-operation branch FROMs are omitted, and a SubLink test expression
+  keeps the enclosing scope): a missing name only leaves the sound check
+  in place, whereas an extra name would wrongly suppress one. Unknown
+  qualifier: the maximal parse already failed, so this is an internal
+  error here.
 - Unqualified `col`: candidate = every rel whose catalog column set
   contains `col`. 0 candidates → internal error (parse caught it);
   ≥2 → already a PostgreSQL ambiguity error at parse/describe time —
@@ -125,23 +138,16 @@ with any guarded LEFT join → `SQLETCH116` (planner-sensitive
 combination, per spec's known-list; the list lives in one table in
 `plannerchecks.go`).
 
-### Known limitation — qualified refs and subquery alias shadowing
+### Qualified-ref scope resolution (subquery alias shadowing)
 
-The resolver keys qualified refs (`a.col`) on **top-level** relation
-names only (`Resolver.rels` comes from `Tree.Relations()`, which does
-not descend into subqueries). This is deliberate and load-bearing:
-a qualified ref inside a subquery that **correlates** to a guarded
-outer join must still be checked — dropping it would be a genuine R3
-soundness hole (regression-pinned by
-`TestCheckResolved_R3_CorrelatedSubqueryRef`: `... EXISTS (SELECT 1
-FROM audits a WHERE a.user_id = ou.user_id)` where `ou` is the guarded
-top-level join must fire `SQLETCH115`).
-
-The cost is a **false positive** (over-rejection, never unsound): when
-a subquery **redefines** an alias that shadows a guarded top-level
-alias, the inner ref is attributed to the outer guarded join and
-wrongly demanded to be guarded. Example — the inner `o` is `audits`,
-but R3 attributes `o.user_id` to the guarded `orgs o`:
+Qualified refs (`a.col`) are resolved **innermost-first**. Each facade
+records, on every `ColRef`, the effective FROM names of the enclosing
+subquery scopes (`dialect.ColRef.ScopeAliases`; top-level FROM
+excluded). When a qualifier appears in that set it is bound by a nearer
+subquery relation, so R3 does not re-derive the top-level guard for the
+reference — this is exactly what SQL does. Example — the inner `o` is
+`audits`, and R3 no longer attributes `o.user_id` to the guarded
+`orgs o`:
 
 ```sql
 SELECT u.id,
@@ -151,21 +157,21 @@ FROM users AS u
 WHERE TRUE;
 ```
 
-Resolving this correctly needs **innermost-first** scope resolution:
-bind the qualifier against the relations introduced by the enclosing
-subquery scope before falling back to the outer/top-level scope. The
-facade does not expose what that requires — `SubRel` carries no byte
-range to map a `ColRef.Loc` to its enclosing scope, and non-FROM
-sublinks (scalar/`EXISTS` subqueries, the common shadowing case) are
-not surfaced by `DerivedRels()` at all. Adding per-scope relation sets
-with ranges across all three frontends (pg_query / TiDB / rqlite) is a
-real analysis addition, not a mechanical fix, and any shortcut that
-skips qualified subquery refs would reopen the correlated-ref hole
-above. Until scope-aware resolution is built, the **workaround** is to
-rename the subquery-local alias so it does not shadow a guarded
-top-level alias. The per-shape EXPLAIN property test remains the
-mechanical backstop that the over-rejection is never masking
-unsoundness.
+A **correlated** qualified ref — one whose qualifier is a top-level
+relation absent from every enclosing subquery FROM — is *not* shadowed
+and is still checked: dropping it would be a genuine R3 soundness hole,
+regression-pinned by `TestCheckResolved_R3_CorrelatedSubqueryRef`
+(`... EXISTS (SELECT 1 FROM audits a WHERE a.user_id = ou.user_id)`
+where `ou` is the guarded top-level join must fire `SQLETCH115`).
+Facades deliberately **under-collect** the scope set — set-operation
+branch FROMs are omitted, and a SubLink test expression keeps the
+enclosing scope — so a missing name only leaves the sound check in
+place; an extra name would be the only way to wrongly suppress one. The
+per-shape EXPLAIN property test remains the mechanical backstop.
+
+Still a limitation: **unqualified** refs inside subquery scopes are
+skipped (`ColRef.InSubquery`) — resolving a bare column against nested
+scopes is not modeled, and the EXPLAIN backstop covers the corner.
 
 ## 7. R2 — star expansion & shape constancy (catalog-dependent)
 
