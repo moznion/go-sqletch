@@ -484,11 +484,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		if prev, err := os.ReadFile(path); err == nil && string(prev) == string(content) {
 			continue // unchanged: keep mtime for build systems
 		}
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, content, 0o644); err != nil {
-			return nil, err
-		}
-		if err := os.Rename(tmp, path); err != nil {
+		if err := cache.WriteFileAtomic(path, content, 0o644); err != nil {
 			return nil, err
 		}
 	}
@@ -594,7 +590,7 @@ func writeExpandedFiles(cfg config.Config, query string, shapes map[string]runti
 	}
 	for key, e := range shapes {
 		name := shapeFileName(key) + ".sql"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(e.SQL+"\n"), 0o644); err != nil {
+		if err := cache.WriteFileAtomic(filepath.Join(dir, name), []byte(e.SQL+"\n"), 0o644); err != nil {
 			return err
 		}
 	}
@@ -697,7 +693,7 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 			return err
 		}
 		path := filepath.Join(dir, cq.q.Name+".json")
-		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		if err := cache.WriteFileAtomic(path, append(data, '\n'), 0o644); err != nil {
 			return err
 		}
 	}

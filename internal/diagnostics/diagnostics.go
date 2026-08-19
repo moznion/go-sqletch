@@ -116,6 +116,7 @@ const (
 	CodeExpansionLarge  Code = "SQLETCH302" // static expansion exceeds max_shapes
 	CodePolicyInvalid   Code = "SQLETCH303" // a policy declaration is malformed
 	CodeShapeCapReached Code = "SQLETCH304" // shape enumeration stopped at its cap (explain --max-shapes, verification.max_shapes)
+	CodePathEscape      Code = "SQLETCH306" // cache.path/output.path escapes the project directory
 	CodeNameCollision   Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType Code = "SQLETCH311" // no Go mapping for a database type
 	// null_overrides hygiene: overrides are the analyzer's escape

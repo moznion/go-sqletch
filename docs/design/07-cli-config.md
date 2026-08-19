@@ -52,7 +52,18 @@ otherwise splice the caller's environment, including secrets, into
 `database.dsn` and point it at an attacker host). An operator who
 wants the DSN from the environment leaves `database.dsn` empty and
 relies on the driver's own DSN environment variables, or templates the
-config file outside sqletch. The loaded config carries its own canonical hash — a config
+config file outside sqletch.
+
+`cache.path` and `output.path` drive every write sqletch performs, so
+`Load` also validates them (`SQLETCH306`): a **relative** path escaping
+the project directory via `..` is an **error** (a committed relative
+path climbing out of the repo is the clone-and-run write-redirection
+vector), while an **absolute** path is a deliberate operator choice and
+only **warns**; in-tree relative paths are unaffected. Combined with the
+symlink-safe writes in design 04 §3, this closes the arbitrary-overwrite
+surface for an untrusted cloned repository.
+
+The loaded config carries its own canonical hash — a config
 change that affects renderings or keys (dialect, server_version,
 schema) invalidates cache naturally through the fingerprint.
 

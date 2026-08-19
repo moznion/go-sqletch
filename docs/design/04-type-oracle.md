@@ -133,6 +133,23 @@ Canonical JSON (sorted keys, LF, trailing newline) for clean diffs;
 `generate` prunes entries whose `qh` no longer corresponds to any
 rendering (keeps the committed dir from accreting garbage).
 
+**Untrusted-tree hardening.** The cache tree is committed, so a cloned
+repository can plant files at these *fingerprint-derived, hence
+attacker-computable* paths. Two defences (`internal/cache`):
+
+- **Bounded reads** (`ReadFileCapped`, `MaxFileBytes` = 64 MiB): every
+  cache read (`LoadCatalog`/`LoadOracle`/`LoadEnv`, and the `explain`
+  reader) reads at most `MaxFileBytes+1` and rejects beyond it, so a
+  giant file planted at a hit path is a miss, never an OOM — the bound
+  holds even if the file grows after stat (no size TOCTOU).
+- **Symlink-safe atomic writes** (`WriteFileAtomic`): writes go through
+  `os.CreateTemp` (O_CREATE|O_EXCL + random suffix) then `Rename`, so a
+  pre-planted symlink at the *predictable* old `<path>.tmp` name — or at
+  the destination itself — is never followed; the rename replaces a
+  destination symlink rather than writing through it. All committed-tree
+  writers (cache entries, generated `.go`, `expanded/`, `explain/`) use
+  it.
+
 ### 3.1 Generation-environment record (`env-<fp>.json`)
 
 The fingerprint pins the *pinned* `server_version` (a major, e.g.

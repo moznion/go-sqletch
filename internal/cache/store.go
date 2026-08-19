@@ -5,9 +5,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
+
+// MaxFileBytes bounds every cache file sqletch reads. Cache file names
+// are fingerprint-derived, hence attacker-computable: a cloned repo can
+// plant a file at the exact hit path, so an unbounded os.ReadFile would
+// OOM before any key check runs. 64 MiB dwarfs any real catalog/oracle
+// entry while capping the blast radius (mirrors the LSP body cap).
+const MaxFileBytes = 64 << 20
 
 // FormatVersion is the on-disk cache format. Every written file
 // carries it; loads treat any other value — including its absence in
@@ -108,7 +116,7 @@ func (s *Store) oraclePath(qh string) string {
 // LoadCatalog returns the snapshot for fp, or ok=false on miss or
 // key mismatch.
 func (s *Store) LoadCatalog(fp string) (*Catalog, bool) {
-	data, err := os.ReadFile(s.catalogPath(fp))
+	data, err := ReadFileCapped(s.catalogPath(fp))
 	if err != nil {
 		return nil, false
 	}
@@ -130,7 +138,7 @@ func (s *Store) SaveCatalog(cat *Catalog) error {
 // LoadOracle returns the cached Describe result for (fp, renderedSQL),
 // comparing the stored full keys (never trusting the filename hash).
 func (s *Store) LoadOracle(fp, renderedSQL string) (*OracleEntry, bool) {
-	data, err := os.ReadFile(s.oraclePath(queryHash(fp, renderedSQL)))
+	data, err := ReadFileCapped(s.oraclePath(queryHash(fp, renderedSQL)))
 	if err != nil {
 		return nil, false
 	}
@@ -183,12 +191,68 @@ func marshalCanonical(v any) ([]byte, error) {
 
 // writeFile writes atomically, creating parent directories.
 func (s *Store) writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return WriteFileAtomic(path, data, 0o644)
+}
+
+// ReadFileCapped reads path but refuses more than MaxFileBytes, so an
+// attacker-planted giant file at a computable cache path cannot OOM the
+// process. It reads at most MaxFileBytes+1 and rejects if that ceiling
+// is reached, so the bound holds even if the file grows after an
+// initial stat (no size TOCTOU).
+func ReadFileCapped(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > MaxFileBytes {
+		return nil, fmt.Errorf("cache file %s exceeds the %d-byte cap", path, MaxFileBytes)
+	}
+	return data, nil
+}
+
+// WriteFileAtomic writes data to path atomically without ever following
+// a symlink at path or at a predictable temp name. A cloned repo can
+// pre-plant `<path>.tmp` (a computable name) as a symlink to a secret
+// or config file; writing through it and renaming over the target would
+// corrupt an arbitrary location. os.CreateTemp opens with
+// O_CREATE|O_EXCL and a RANDOM suffix, so it neither follows nor
+// collides with any planted link; the final os.Rename replaces a
+// symlink sitting at path with our regular file rather than writing
+// through it.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	defer func() {
+		if tmp != "" {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	tmp = "" // rename consumed it; skip the deferred cleanup
+	return nil
 }
