@@ -3,6 +3,7 @@ package lsp
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 )
 
 // The LSP type subset this server speaks. Field names and casing
@@ -119,5 +120,5 @@ func uriToPath(uri string) (string, error) {
 	if u.Scheme != "file" {
 		return "", fmt.Errorf("lsp: non-file document URI %q", uri)
 	}
-	return u.Path, nil
+	return filepath.Clean(u.Path), nil
 }

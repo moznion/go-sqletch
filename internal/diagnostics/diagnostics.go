@@ -123,6 +123,7 @@ const (
 	// no span or, worse, splice attacker-influenced text into the
 	// generated package. Refuse it and ask for an `AS` alias / `-- @column`.
 	CodeInvalidColumnIdentifier Code = "SQLETCH307"
+	CodeSourceUnreadable        Code = "SQLETCH308" // a glob-matched template file could not be read (LSP degrades past it)
 	CodeNameCollision           Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType         Code = "SQLETCH311" // no Go mapping for a database type
 	// null_overrides hygiene: overrides are the analyzer's escape
