@@ -38,7 +38,7 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status.UnwrapAsPtr()})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	row := q.db.QueryRow(ctx, sqlText, args...)

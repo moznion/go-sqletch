@@ -270,9 +270,16 @@ func Compose(frags []Frag, key ShapeKey) (string, []int16) {
 func ComposeStyle(style Style, frags []Frag, key ShapeKey) (string, []int16) {
 	sql, binds, err := ComposeTreeStyle(style, frags, key, Tree{}, DefaultTreeCaps)
 	if err != nil {
-		// Without a tree the composer has no failure modes; a non-nil
-		// error here is a generated-code bug.
-		panic(err)
+		// An empty tree removes the FilterTree failure modes, but an
+		// InList fragment can still exceed MaxInArity
+		// ([ErrShapeKeyLimit]) even with no tree — so this is reachable,
+		// though only by a hand-built fragment table with an InList
+		// frag. Generated code never reaches it: dollar-style tables
+		// carry no InList frag, and question-style @in routes through
+		// the error-returning GetBindsStyle. This value API cannot
+		// return the error; a caller composing an InList/tree fragment
+		// table must use GetBindsStyle / GetTreeStyle instead.
+		panic(fmt.Errorf("runtime.ComposeStyle: %w (use GetBindsStyle/GetTreeStyle for @in or @filter-tree fragment tables)", err))
 	}
 	argIdx := make([]int16, len(binds))
 	for i, bd := range binds {
@@ -698,9 +705,12 @@ type ComposedCache struct {
 	sinceSnap    int
 	evictedSince bool
 
-	// obs receives one ObserveCompose per access; installed before the
-	// cache serves traffic (see SetObserver), so reads need no fence.
-	obs Observer
+	// obs receives one ObserveCompose per access. It is an atomic
+	// pointer so a SetObserver that races in-flight lock-free reads is
+	// safe (a plain interface field is two words: a torn read of one
+	// mid-install can crash). The hot path pays a single atomic load;
+	// nil until installed. A nil pointer means no observer.
+	obs atomic.Pointer[Observer]
 	// track gates per-entry hit counting. It flips on (sticky) at the
 	// first SetObserver/Stats/TopShapes call: a cache nobody observes
 	// pays only this shared read on its hit path, never the counter's
@@ -823,7 +833,10 @@ func (c *ComposedCache) Get(queryName string, frags []Frag, key ShapeKey) (strin
 func (c *ComposedCache) GetStyle(style Style, queryName string, frags []Frag, key ShapeKey) (string, []int16) {
 	e, err := c.entry(style, queryName, frags, key, Tree{}, DefaultTreeCaps)
 	if err != nil {
-		panic(err) // no failure modes without a tree
+		// Reachable only for a hand-built InList fragment table over
+		// MaxInArity (see ComposeStyle); generated code routes @in
+		// through the error-returning GetBindsStyle and never gets here.
+		panic(fmt.Errorf("runtime.GetStyle: %w (use GetBindsStyle/GetTreeStyle for @in or @filter-tree fragment tables)", err))
 	}
 	return e.sql, e.argIdx
 }
@@ -891,8 +904,8 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 			if c.track.Load() {
 				e.hits.Add(1)
 			}
-			if c.obs != nil {
-				c.obs.ObserveCompose(queryName, e.key, true)
+			if op := c.obs.Load(); op != nil {
+				(*op).ObserveCompose(queryName, e.key, true)
 			}
 			return e, nil
 		}
@@ -916,8 +929,8 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 			if c.track.Load() {
 				e.hits.Add(1)
 			}
-			if c.obs != nil {
-				c.obs.ObserveCompose(queryName, e.key, true)
+			if op := c.obs.Load(); op != nil {
+				(*op).ObserveCompose(queryName, e.key, true)
 			}
 			return e, nil
 		}
@@ -950,8 +963,8 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 			c.order.MoveToFront(e.el)
 			c.mu.Unlock()
 			touch(e)
-			if c.obs != nil {
-				c.obs.ObserveCompose(queryName, e.key, false)
+			if op := c.obs.Load(); op != nil {
+				(*op).ObserveCompose(queryName, e.key, false)
 			}
 			return e, nil
 		}
@@ -971,8 +984,8 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 	}
 	c.publish()
 	c.mu.Unlock()
-	if c.obs != nil {
-		c.obs.ObserveCompose(queryName, e.key, false)
+	if op := c.obs.Load(); op != nil {
+		(*op).ObserveCompose(queryName, e.key, false)
 	}
 	return e, nil
 }

@@ -5,6 +5,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"sync/atomic"
 	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
@@ -21,8 +22,8 @@ type DBTX interface {
 type Queries struct {
 	db      DBTX
 	cache   *runtime.ComposedCache
-	onQuery func(shapeKey, sql string)
-	obs     runtime.Observer
+	onQuery atomic.Pointer[func(shapeKey, sql string)]
+	obs     atomic.Pointer[runtime.Observer]
 }
 
 func New(db DBTX) *Queries {
@@ -30,12 +31,25 @@ func New(db DBTX) *Queries {
 }
 
 func (q *Queries) WithTx(tx *sql.Tx) *Queries {
-	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery, obs: q.obs}
+	nq := &Queries{db: tx, cache: q.cache}
+	if p := q.onQuery.Load(); p != nil {
+		nq.onQuery.Store(p)
+	}
+	if p := q.obs.Load(); p != nil {
+		nq.obs.Store(p)
+	}
+	return nq
 }
 
 // OnQuery installs an observability hook receiving the shape key and
 // the composed SQL of every call.
-func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
+func (q *Queries) OnQuery(fn func(shapeKey, sql string)) {
+	if fn == nil {
+		q.onQuery.Store(nil)
+	} else {
+		q.onQuery.Store(&fn)
+	}
+}
 
 // SetObserver installs a runtime observer receiving compose, exec,
 // and reject events for every query on this Queries value and any
@@ -43,7 +57,11 @@ func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 // traffic; Cache() exposes the same cache for scrape-time Stats and
 // TopShapes.
 func (q *Queries) SetObserver(o runtime.Observer) {
-	q.obs = o
+	if o == nil {
+		q.obs.Store(nil)
+	} else {
+		q.obs.Store(&o)
+	}
 	q.cache.SetObserver(o)
 }
 
@@ -53,45 +71,46 @@ func (q *Queries) SetObserver(o runtime.Observer) {
 func (q *Queries) Cache() *runtime.ComposedCache { return q.cache }
 
 func (q *Queries) hook(key runtime.ShapeKey, sql string) {
-	if q.onQuery != nil {
-		q.onQuery(key.String(), sql)
+	if fn := q.onQuery.Load(); fn != nil {
+		(*fn)(key.String(), sql)
 	}
 }
 
 // observeExec encodes the key only when an observer is installed: an
 // unobserved call must not pay for the canonical encoding.
 func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
-	if q.obs != nil {
-		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
+	if o := q.obs.Load(); o != nil {
+		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 
 func (q *Queries) observeReject(ctx context.Context, query string, err error) {
-	if q.obs != nil {
-		q.obs.ObserveReject(ctx, query, err)
+	if o := q.obs.Load(); o != nil {
+		(*o).ObserveReject(ctx, query, err)
 	}
 }
 
 // observeExecResult consults RowsAffected only when an observer is
 // installed: some drivers make it a round-trip.
 func (q *Queries) observeExecResult(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
-	if q.obs == nil {
+	o := q.obs.Load()
+	if o == nil {
 		return
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		n = -1
 	}
-	q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), n, nil)
+	(*o).ObserveExec(ctx, query, key.String(), time.Since(start), n, nil)
 }
 
 // hookTree is hook for a @filter-tree query. The tree's key segment is
 // derived here rather than at the call site so that a query without an
 // installed hook never encodes its tree twice.
 func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
-	if q.onQuery != nil {
+	if fn := q.onQuery.Load(); fn != nil {
 		key.Trees = []string{t.Encode()}
-		q.onQuery(key.String(), sql)
+		(*fn)(key.String(), sql)
 	}
 }
 
@@ -100,9 +119,9 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 // unobserved call never encodes its tree a second time (the same
 // trade hookTree makes).
 func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
-	if q.obs != nil {
+	if o := q.obs.Load(); o != nil {
 		key.Trees = []string{t.Encode()}
-		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
+		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
 }
 

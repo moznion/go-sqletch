@@ -44,12 +44,16 @@ type Observer interface {
 }
 
 // SetObserver installs an observer receiving one ObserveCompose per
-// cache access. It must be called before the cache serves traffic:
-// installation is not synchronized with in-flight reads (the same
-// contract as the generated OnQuery hook). It also enables hit
-// counting (see Stats).
+// cache access. The install is atomic, so calling it after the cache
+// has begun serving traffic is safe (a racing hot-path read sees either
+// the old or the new observer, never a torn value). It also enables hit
+// counting (see Stats). Passing nil removes the observer.
 func (c *ComposedCache) SetObserver(o Observer) {
-	c.obs = o
+	if o == nil {
+		c.obs.Store(nil)
+	} else {
+		c.obs.Store(&o)
+	}
 	c.track.Store(true)
 }
 

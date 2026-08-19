@@ -44,7 +44,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	args := runtime.BuildArgs(argIdx, []any{arg.Email.UnwrapAsPtr(), arg.Nickname.UnwrapAsPtr(), arg.ID})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	row := q.db.QueryRow(ctx, sqlText, args...)
