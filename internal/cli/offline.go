@@ -192,7 +192,7 @@ func (c *OfflineChecker) analyzeFile(path string, src []byte) *fileMemo {
 		m.rends = map[string][]ast.Rendering{}
 		m.wovenq = map[string]*template.QueryTemplate{}
 		for _, q := range file.Queries {
-			wres, rs, d, err := scanChecks(c.drv, c.pols, q)
+			wres, rs, d, err := scanChecks(c.drv, c.pols, q, c.cfg.Verification.MaxShapes)
 			m.diags = append(m.diags, d...)
 			if err != nil {
 				m.diags = append(m.diags, diagnostics.Errorf(diagnostics.CodeRenderingParse,
