@@ -103,6 +103,21 @@ type ColRef struct {
 	Star       bool     // reference ends in * (e.g. u.*)
 	Loc        int      // byte offset in the parsed SQL
 	InSubquery bool     // inside a sublink/derived table/CTE scope
+	// ScopeAliases is the set of effective relation names (alias if
+	// present, else table name) introduced by the subquery scope(s)
+	// ENCLOSING this reference — the union across every enclosing
+	// subquery level, but NOT the top-level statement's own FROM. It is
+	// nil for a top-level reference. R3 uses it to resolve a qualified
+	// reference innermost-first: a qualifier found here is bound by a
+	// nearer scope (SQL resolves innermost-first), so the reference does
+	// not touch a same-named top-level relation and its guard need not
+	// be re-derived. A correlated reference — whose qualifier is a
+	// top-level relation absent from every enclosing subquery FROM — is
+	// NOT listed here and is still checked. Facades under-collect rather
+	// than over-collect (set-operation branch FROMs are omitted): a
+	// missing name only preserves the pre-existing (sound) check, an
+	// extra name would wrongly suppress one.
+	ScopeAliases []string
 }
 
 // TargetItem is one projection entry.

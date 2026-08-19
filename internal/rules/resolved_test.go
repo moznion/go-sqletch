@@ -275,3 +275,47 @@ WHERE TRUE
 		t.Fatalf("want SQLETCH115 for correlated ref, got %+v", diags)
 	}
 }
+
+// A subquery-local alias that shadows a guarded top-level join's alias
+// binds innermost-first, so R3 must NOT demand the top-level guard for a
+// reference through that inner alias (design 03 §6). This was a spurious
+// SQLETCH115 before qualified-ref scope resolution.
+func TestCheckResolved_R3_SubqueryAliasShadowsGuardedJoin(t *testing.T) {
+	src := `-- name: Ok :many
+SELECT u.id FROM users AS u
+@if-present(organization_id)
+JOIN orgs AS o ON o.id = u.org_id
+ AND o.id = :organization_id
+@endif
+WHERE TRUE
+  AND EXISTS (SELECT 1 FROM audits AS o WHERE o.user_id = u.id)
+;
+`
+	diags := checkResolved(t, src)
+	if hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("subquery alias o shadows the guarded top-level orgs o; want no SQLETCH115, got %+v", diags)
+	}
+}
+
+// Two-level shadowing: the reference's qualifier is introduced by the
+// innermost subquery, so the union of enclosing subquery FROMs must
+// suppress the top-level guard demand.
+func TestCheckResolved_R3_NestedSubqueryShadowing(t *testing.T) {
+	src := `-- name: Ok :many
+SELECT u.id FROM users AS u
+@if-present(organization_id)
+JOIN orgs AS o ON o.id = u.org_id
+ AND o.id = :organization_id
+@endif
+WHERE TRUE
+  AND EXISTS (
+    SELECT 1 FROM audits AS a
+    WHERE EXISTS (SELECT 1 FROM organization_users AS o WHERE o.user_id = a.id)
+  )
+;
+`
+	diags := checkResolved(t, src)
+	if hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("nested subquery alias o shadows the guarded top-level orgs o; want no SQLETCH115, got %+v", diags)
+	}
+}

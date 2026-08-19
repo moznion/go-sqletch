@@ -635,35 +635,35 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 	w := &refWalker{}
 	switch s := t.first().(type) {
 	case *rsql.SelectStatement:
-		w.walkSelect(s, false)
+		w.walkSelect(s, false, nil)
 	case *rsql.UpdateStatement:
-		w.walkWith(s.WithClause)
-		w.walkSource(s.Source, false) // UPDATE … FROM: resolve its columns
+		w.walkWith(s.WithClause, nil)
+		w.walkSource(s.Source, false, nil, nil) // UPDATE … FROM: resolve its columns
 		for _, a := range s.Assignments {
-			w.walkExpr(a.Expr, false)
+			w.walkExpr(a.Expr, false, nil)
 		}
-		w.walkExpr(s.WhereExpr, false)
+		w.walkExpr(s.WhereExpr, false, nil)
 		if s.ReturningClause != nil {
 			for _, rc := range s.ReturningClause.Columns {
-				w.walkResultColumn(rc, false)
+				w.walkResultColumn(rc, false, nil)
 			}
 		}
 	case *rsql.DeleteStatement:
-		w.walkWith(s.WithClause)
-		w.walkExpr(s.WhereExpr, false)
+		w.walkWith(s.WithClause, nil)
+		w.walkExpr(s.WhereExpr, false, nil)
 	case *rsql.InsertStatement:
-		w.walkWith(s.WithClause)
+		w.walkWith(s.WithClause, nil)
 		for _, vl := range s.ValueLists {
 			for _, e := range vl.Exprs {
-				w.walkExpr(e, false)
+				w.walkExpr(e, false, nil)
 			}
 		}
 		if s.Select != nil {
-			w.walkSelect(s.Select, true)
+			w.walkSelect(s.Select, true, nil)
 		}
 		if s.ReturningClause != nil {
 			for _, rc := range s.ReturningClause.Columns {
-				w.walkResultColumn(rc, false)
+				w.walkResultColumn(rc, false, nil)
 			}
 		}
 	}
@@ -673,42 +673,63 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 	return w.out
 }
 
+// The scope parameter threaded through the walk is the set of effective
+// FROM names of the ENCLOSING subquery scopes (dialect.ColRef.ScopeAliases):
+// a subquery select adds its own FROM names for its body but passes the
+// unextended enclosing scope to non-lateral derived tables (they cannot
+// see sibling FROM items) and to compound (set-operation) branches (each
+// branch has its own FROM) — under-collecting rather than over-collecting.
+// The top-level statement's own FROM is never added.
+
 // walkWith walks every CTE body of a WITH clause; CTE bodies are their
-// own scope, so refs inside them carry InSubquery.
-func (w *refWalker) walkWith(wc *rsql.WithClause) {
+// own scope, so refs inside them carry InSubquery. A CTE body does not
+// see the defining select's FROM, so it is entered with the enclosing
+// scope only.
+func (w *refWalker) walkWith(wc *rsql.WithClause, enclosing []string) {
 	if wc == nil {
 		return
 	}
 	for _, cte := range wc.CTEs {
-		w.walkSelect(cte.Select, true)
+		w.walkSelect(cte.Select, true, enclosing)
 	}
 }
 
-func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool) {
+// walkSelect walks one select. enclosing is the scope from strictly
+// outer subqueries; the select's own FROM names are added to the scope
+// its own clauses see (its columns/WHERE/…) when it is a subquery.
+func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool, enclosing []string) {
 	if s == nil {
 		return
 	}
-	w.walkWith(s.WithClause)
+	scope := enclosing
+	if inSub {
+		var own []string
+		sourceNames(s.Source, &own)
+		if len(own) > 0 {
+			scope = append(append([]string(nil), enclosing...), own...)
+		}
+	}
+	w.walkWith(s.WithClause, enclosing)
 	for _, rc := range s.Columns {
-		w.walkResultColumn(rc, inSub)
+		w.walkResultColumn(rc, inSub, scope)
 	}
-	w.walkSource(s.Source, inSub)
-	w.walkExpr(s.WhereExpr, inSub)
+	w.walkSource(s.Source, inSub, scope, enclosing)
+	w.walkExpr(s.WhereExpr, inSub, scope)
 	for _, e := range s.GroupByExprs {
-		w.walkExpr(e, inSub)
+		w.walkExpr(e, inSub, scope)
 	}
-	w.walkExpr(s.HavingExpr, inSub)
+	w.walkExpr(s.HavingExpr, inSub, scope)
 	for _, ot := range s.OrderingTerms {
-		w.walkExpr(ot.X, inSub)
+		w.walkExpr(ot.X, inSub, scope)
 	}
-	w.walkExpr(s.LimitExpr, inSub)
-	w.walkExpr(s.OffsetExpr, inSub)
+	w.walkExpr(s.LimitExpr, inSub, scope)
+	w.walkExpr(s.OffsetExpr, inSub, scope)
 	if s.Compound != nil {
-		w.walkSelect(s.Compound, inSub)
+		w.walkSelect(s.Compound, inSub, enclosing)
 	}
 }
 
-func (w *refWalker) walkResultColumn(rc *rsql.ResultColumn, inSub bool) {
+func (w *refWalker) walkResultColumn(rc *rsql.ResultColumn, inSub bool, scope []string) {
 	if rc == nil {
 		return
 	}
@@ -716,30 +737,34 @@ func (w *refWalker) walkResultColumn(rc *rsql.ResultColumn, inSub bool) {
 		w.out = append(w.out, dialect.ColRef{Star: true, Loc: rc.Star.Offset, InSubquery: inSub})
 		return
 	}
-	w.walkExpr(rc.Expr, inSub)
+	w.walkExpr(rc.Expr, inSub, scope)
 }
 
-func (w *refWalker) walkSource(src rsql.Source, inSub bool) {
+// walkSource walks a FROM source. ON-constraint expressions reference
+// the join's tables (this select's own scope), while a nested derived
+// table is entered with the enclosing scope only (non-lateral: it does
+// not see its sibling FROM items).
+func (w *refWalker) walkSource(src rsql.Source, inSub bool, scope, enclosing []string) {
 	switch v := src.(type) {
 	case nil:
 	case *rsql.JoinClause:
-		w.walkSource(v.X, inSub)
-		w.walkSource(v.Y, inSub)
+		w.walkSource(v.X, inSub, scope, enclosing)
+		w.walkSource(v.Y, inSub, scope, enclosing)
 		if on, ok := v.Constraint.(*rsql.OnConstraint); ok {
-			w.walkExpr(on.X, inSub)
+			w.walkExpr(on.X, inSub, scope)
 		}
 	case *rsql.ParenSource:
 		if sub, ok := v.X.(*rsql.SelectStatement); ok {
-			w.walkSelect(sub, true)
+			w.walkSelect(sub, true, enclosing)
 			return
 		}
-		w.walkSource(v.X, inSub)
+		w.walkSource(v.X, inSub, scope, enclosing)
 	case *rsql.SelectStatement:
-		w.walkSelect(v, true)
+		w.walkSelect(v, true, enclosing)
 	}
 }
 
-func (w *refWalker) walkExpr(e rsql.Expr, inSub bool) {
+func (w *refWalker) walkExpr(e rsql.Expr, inSub bool, scope []string) {
 	switch v := e.(type) {
 	case nil:
 	case *rsql.Ident:
@@ -748,6 +773,9 @@ func (w *refWalker) walkExpr(e rsql.Expr, inSub bool) {
 		})
 	case *rsql.QualifiedRef:
 		cr := dialect.ColRef{Loc: exprPos(v), InSubquery: inSub}
+		if len(scope) > 0 {
+			cr.ScopeAliases = append([]string(nil), scope...)
+		}
 		if v.Schema != nil {
 			cr.Fields = append(cr.Fields, v.Schema.Name)
 		}
@@ -761,45 +789,70 @@ func (w *refWalker) walkExpr(e rsql.Expr, inSub bool) {
 		}
 		w.out = append(w.out, cr)
 	case *rsql.BinaryExpr:
-		w.walkExpr(v.X, inSub)
-		w.walkExpr(v.Y, inSub)
+		w.walkExpr(v.X, inSub, scope)
+		w.walkExpr(v.Y, inSub, scope)
 	case *rsql.UnaryExpr:
-		w.walkExpr(v.X, inSub)
+		w.walkExpr(v.X, inSub, scope)
 	case *rsql.ParenExpr:
-		w.walkExpr(v.X, inSub)
+		w.walkExpr(v.X, inSub, scope)
 	case *rsql.ExprList:
 		for _, x := range v.Exprs {
-			w.walkExpr(x, inSub)
+			w.walkExpr(x, inSub, scope)
 		}
 	case *rsql.Call:
 		for _, a := range v.Args {
-			w.walkExpr(a, inSub)
+			w.walkExpr(a, inSub, scope)
 		}
 		if v.Filter != nil {
-			w.walkExpr(v.Filter.X, inSub)
+			w.walkExpr(v.Filter.X, inSub, scope)
 		}
 	case *rsql.CaseExpr:
-		w.walkExpr(v.Operand, inSub)
+		w.walkExpr(v.Operand, inSub, scope)
 		for _, b := range v.Blocks {
-			w.walkExpr(b.Condition, inSub)
-			w.walkExpr(b.Body, inSub)
+			w.walkExpr(b.Condition, inSub, scope)
+			w.walkExpr(b.Body, inSub, scope)
 		}
-		w.walkExpr(v.ElseExpr, inSub)
+		w.walkExpr(v.ElseExpr, inSub, scope)
 	case *rsql.CastExpr:
-		w.walkExpr(v.X, inSub)
+		w.walkExpr(v.X, inSub, scope)
 	case *rsql.CollateExpr:
-		w.walkExpr(v.X, inSub)
+		w.walkExpr(v.X, inSub, scope)
 	case *rsql.Null:
-		w.walkExpr(v.X, inSub)
+		w.walkExpr(v.X, inSub, scope)
 	case *rsql.Range:
-		w.walkExpr(v.X, inSub)
-		w.walkExpr(v.Y, inSub)
+		w.walkExpr(v.X, inSub, scope)
+		w.walkExpr(v.Y, inSub, scope)
 	case *rsql.Exists:
-		w.walkSelect(v.Select, true)
+		w.walkSelect(v.Select, true, scope)
 	case rsql.SelectExpr:
-		w.walkSelect(v.SelectStatement, true)
+		w.walkSelect(v.SelectStatement, true, scope)
 	}
 	// BindExpr, literals, Raise: no column references.
+}
+
+// sourceNames collects the effective FROM names (alias else table) of a
+// single select's own FROM source. Nested subquery/derived-table bodies
+// are not descended (their names belong to deeper scopes).
+func sourceNames(src rsql.Source, out *[]string) {
+	switch v := src.(type) {
+	case *rsql.JoinClause:
+		sourceNames(v.X, out)
+		sourceNames(v.Y, out)
+	case *rsql.QualifiedTableName:
+		if v.Alias != nil {
+			*out = append(*out, v.Alias.Name)
+		} else if v.Name != nil {
+			*out = append(*out, v.Name.Name)
+		}
+	case *rsql.ParenSource:
+		if _, ok := v.X.(*rsql.SelectStatement); ok {
+			if v.Alias != nil {
+				*out = append(*out, v.Alias.Name)
+			}
+			return
+		}
+		sourceNames(v.X, out) // parenthesized join
+	}
 }
 
 func exprPos(e rsql.Expr) int {
