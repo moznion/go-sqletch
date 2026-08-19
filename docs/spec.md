@@ -312,9 +312,14 @@ configured target dialect only.
     occurrence (repeated named params repeat the bind); generated code
     is the `database/sql` flavor. One documented approximation: the
     TiDB AST has no byte offsets on relation nodes, so relation
-    locations are recovered lexically (a FROM-position name is always
-    preceded by FROM/JOIN/','/'('/'.'/INTO/UPDATE, with subqueries
-    skipped whole); the real-database property suite backstops it.
+    locations are recovered lexically (a FROM-position name is preceded
+    by FROM/JOIN/STRAIGHT_JOIN/','/'('/INTO/UPDATE, or by a `.` whose
+    qualifier was itself in FROM position — a db-qualified `db.t`, not a
+    bare `x.y` column reference; a backquoted identifier never counts as
+    a keyword predecessor, and `SELECT`/`WITH`/`VALUES` parenthesized
+    subqueries are skipped whole); the real-database property suite
+    backstops it. A mis-location only shifts a diagnostic span, never a
+    verdict.
 -   **SQLite**: `sqlite3_prepare` plus declared
     column types as the oracle — over ncruces/go-sqlite3, the real
     SQLite compiled to WASM and run in-process under wazero, so this
