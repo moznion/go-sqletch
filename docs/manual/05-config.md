@@ -1,8 +1,10 @@
 # sqletch.yaml reference
 
-Strict decoding: unknown keys are errors (SQLETCH300). `${VAR}`
-expands from the environment anywhere in the file. Relative paths
-resolve against the file's directory.
+Strict decoding: unknown keys are errors (SQLETCH300). Values are
+literal — there is **no** `${VAR}` environment expansion (it was
+removed as a secret-exfiltration / SSRF vector: a cloned repo must not
+be able to splice your environment into `database.dsn`). Relative
+paths resolve against the file's directory.
 
 ```yaml
 version: 1                     # required, must be 1
@@ -10,7 +12,7 @@ dialect: postgres              # required: postgres | mysql | sqlite
 server_version: "16"           # required: pins the oracle AND keys the cache
 
 database:
-  dsn: ${SQLETCH_DEV_DSN}      # optional (see below)
+  # dsn: postgres://…          # optional, LITERAL (see below); empty = disposable
 
 schema:
   files: [db/schema.sql]       # required: ordered globs of plain DDL
@@ -60,7 +62,10 @@ policies:                      # cross-query policies (see the policies chapter)
   the major version; SQLite compares a dotted prefix (`"3.50"`
   matches `3.50.x`).
 - **`database.dsn`** is per-dialect: a PostgreSQL URL, a go-sql-driver
-  MySQL DSN, or a SQLite file path. Empty means auto-managed:
+  MySQL DSN, or a SQLite file path. It is a **literal** string — no
+  `${VAR}` expansion — so to source it from the environment, leave it
+  empty and use the driver's own DSN environment variables, or template
+  the file before sqletch reads it. Empty means auto-managed:
   a disposable container (PostgreSQL/MySQL) or a temp file (SQLite).
   Whatever it points at is treated as **disposable** — sqletch resets
   it (drops the public schema / all tables) before applying

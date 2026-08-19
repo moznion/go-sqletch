@@ -2,7 +2,7 @@ version: 1
 dialect: postgres
 server_version: "16"
 database:
-  dsn: ${SQLETCH_DSN} # empty = start a disposable container
+  # dsn: postgres://…  # optional, literal only (no ${VAR}); empty = disposable container
 schema:
   files:
     - db/schema.sql

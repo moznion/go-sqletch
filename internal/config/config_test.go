@@ -13,7 +13,7 @@ const validYAML = `version: 1
 dialect: postgres
 server_version: "16"
 database:
-  dsn: ${SQLETCH_TEST_CONFIG_DSN}
+  dsn: postgres://x
 schema:
   files: [db/schema.sql]
 queries: [queries/*.sql]
@@ -34,8 +34,7 @@ func write(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-func TestLoad_ValidWithEnvExpansion(t *testing.T) {
-	t.Setenv("SQLETCH_TEST_CONFIG_DSN", "postgres://x")
+func TestLoad_Valid(t *testing.T) {
 	dir := t.TempDir()
 	path := write(t, dir, "sqletch.yaml", validYAML)
 	cfg, diags := Load(path)
@@ -43,7 +42,7 @@ func TestLoad_ValidWithEnvExpansion(t *testing.T) {
 		t.Fatalf("diags: %+v", diags)
 	}
 	if cfg.Database.DSN != "postgres://x" {
-		t.Errorf("env expansion: DSN = %q", cfg.Database.DSN)
+		t.Errorf("DSN = %q", cfg.Database.DSN)
 	}
 	if cfg.Cache.Path != ".sqletch/cache" {
 		t.Errorf("cache default: %q", cfg.Cache.Path)
@@ -53,6 +52,26 @@ func TestLoad_ValidWithEnvExpansion(t *testing.T) {
 	}
 	if got := cfg.Abs("db/schema.sql"); got != filepath.Join(dir, "db/schema.sql") {
 		t.Errorf("Abs = %q", got)
+	}
+}
+
+// TestLoad_NoEnvExpansion pins the security decision that config values
+// are literal: a ${VAR} in the DSN is NOT expanded from the environment
+// (removing that expansion closed a secret-exfiltration / SSRF vector
+// where a cloned repo could splice the caller's env into the DSN). The
+// literal must survive verbatim, and the referenced variable — even
+// when set — must have no effect.
+func TestLoad_NoEnvExpansion(t *testing.T) {
+	t.Setenv("SQLETCH_TEST_CONFIG_DSN", "postgres://attacker.example/db")
+	dir := t.TempDir()
+	y := strings.Replace(validYAML,
+		"dsn: postgres://x", "dsn: postgres://x:${SQLETCH_TEST_CONFIG_DSN}@h/db", 1)
+	cfg, diags := Load(write(t, dir, "sqletch.yaml", y))
+	if len(diags) != 0 {
+		t.Fatalf("diags: %+v", diags)
+	}
+	if cfg.Database.DSN != "postgres://x:${SQLETCH_TEST_CONFIG_DSN}@h/db" {
+		t.Errorf("env expansion must be disabled; DSN = %q", cfg.Database.DSN)
 	}
 }
 
@@ -210,7 +229,7 @@ func TestLoad_OracleBackend(t *testing.T) {
 		"dialect: postgres", "dialect: mysql", 1),
 		"server_version: \"16\"", "server_version: \"8.4\"", 1)
 	noDSN := func(y string) string {
-		return strings.Replace(y, "database:\n  dsn: ${SQLETCH_TEST_CONFIG_DSN}\n", "", 1)
+		return strings.Replace(y, "database:\n  dsn: postgres://x\n", "", 1)
 	}
 	withOracle := func(y, backend string) string {
 		return strings.Replace(y, "database:\n", "database:\n  oracle: "+backend+"\n", 1)
@@ -249,7 +268,6 @@ func TestLoad_OracleBackend(t *testing.T) {
 	}
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("SQLETCH_TEST_CONFIG_DSN", "user:pass@tcp(h:3306)/db")
 			dir := t.TempDir()
 			_, diags := Load(write(t, dir, "sqletch.yaml", tt.yaml))
 			found := false

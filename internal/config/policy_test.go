@@ -21,7 +21,6 @@ const policyYAML = validYAML + `policies:
 `
 
 func TestLoad_Policies(t *testing.T) {
-	t.Setenv("SQLETCH_TEST_CONFIG_DSN", "postgres://x")
 	dir := t.TempDir()
 	path := write(t, dir, "sqletch.yaml", policyYAML)
 	cfg, diags := Load(path)
@@ -44,7 +43,6 @@ func TestLoad_Policies(t *testing.T) {
 }
 
 func TestLoad_PolicyVocabulary(t *testing.T) {
-	t.Setenv("SQLETCH_TEST_CONFIG_DSN", "postgres://x")
 	cases := []struct {
 		name    string
 		yamlAdd string
@@ -104,7 +102,6 @@ func TestLoad_PolicyVocabulary(t *testing.T) {
 // binaries whose Config predates the key (strict decoding); the
 // inverse — this binary reading an old config — must stay silent.
 func TestLoad_NoPoliciesKeyStaysValid(t *testing.T) {
-	t.Setenv("SQLETCH_TEST_CONFIG_DSN", "postgres://x")
 	dir := t.TempDir()
 	path := write(t, dir, "sqletch.yaml", validYAML)
 	cfg, diags := Load(path)
