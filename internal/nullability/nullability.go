@@ -101,6 +101,8 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 		untrusted = "narrowing disabled: ROLLUP/CUBE/GROUPING SETS nulls grouping columns"
 	case maxTree.HasUnresolvableProvenance():
 		untrusted = "narrowing disabled: database-qualified names defeat name-keyed column attribution"
+	case touchesView(maxTree, cat):
+		untrusted = "narrowing disabled: a view in the statement attributes result columns through to base tables whose NOT NULL its (invisible, possibly null-extending) body need not preserve"
 	}
 	trustSrc := untrusted == ""
 
@@ -309,6 +311,31 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 		return Verdict{Nullable: true, Reason: qual + " is nullable in the catalog"}
 	}
 	return Verdict{Nullable: false, Reason: qual + " is NOT NULL in the catalog"}
+}
+
+// touchesView reports whether the statement references, at ANY nesting
+// level, a relation the catalog knows as a view. DeepTables walks every
+// base-relation name position — FROM lists, joins, derived tables, CTE
+// bodies, set-operation branches, and subqueries inside expressions — so
+// a view is caught wherever it can contribute an attributed column.
+//
+// The hazard is engine-specific: SQLite attributes a view's result
+// columns THROUGH to the view's base tables (sqlite3_column_origin_name),
+// so a base table appearing directly in FROM can vouch for a column that
+// actually flows through the view's invisible, possibly null-extending
+// body (cache.Table.IsView). PostgreSQL and MySQL report the view's own
+// identity and never set IsView, so this never fires for them and their
+// narrowing is unchanged.
+func touchesView(t dialect.Tree, cat *cache.Catalog) bool {
+	if cat == nil {
+		return false
+	}
+	for _, tr := range t.DeepTables() {
+		if tbl := cat.LookupQualified(tr.Schema, tr.Name); tbl != nil && tbl.IsView {
+			return true
+		}
+	}
+	return false
 }
 
 // inSkeleton reports whether a rendered offset lies in skeleton text:

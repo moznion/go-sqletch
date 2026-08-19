@@ -66,11 +66,14 @@ SrcRel narrowing is therefore gated on **provenance trust**:
   also covers FROM constructs the frontend does not model
   (e.g. an unrecognized range item simply never becomes present).
 - **Kill-switches** (`Tree.HasSetOperation`, `Tree.HasGroupingSets`,
-  `Tree.HasUnresolvableProvenance`): a statement-level set operation
+  `Tree.HasUnresolvableProvenance`, plus a SQLite view referenced
+  anywhere in the statement): a statement-level set operation
   or grouping set disables SrcRel narrowing for the whole statement,
   as does any database-qualified table reference on MySQL/SQLite
   (their wire attribution is name-based and database-blind — deep,
-  subqueries included). Derived tables and CTEs are handled by
+  subqueries included), as does any view on SQLite (its columns are
+  attributed through to base tables past an invisible body — see §2a
+  Views). Derived tables and CTEs are handled by
   RECURSION instead (§2b). INSERT is exempt on PostgreSQL (RETURNING
   columns are attributed to the target relation only); sublinks are
   not FROM-reachable and stay transparent.
@@ -126,15 +129,40 @@ independent reflection scan of each level (same boundaries — sublinks
 skipped, subquery bodies counted but not entered) must agree with the
 facade's enumeration, recursing exactly where the analyzer recurses.
 
-Views need no special case under these rules: PostgreSQL and MySQL
-report the *view's own* identity (whose catalog rows carry the
-engine's per-view nullability), and SQLite resolves through to a base
-table that then fails the presence check. MySQL's engine-computed
-view-column nullability is the one place the analysis trusts a value
-the engine derived rather than declared; the adversarial suite pins
-that trust with view bodies containing WITH ROLLUP, UNION, and an
-empty-input aggregate (all correctly reported nullable by
-information_schema).
+Views are safe on PostgreSQL and MySQL, but need an explicit
+kill-switch on SQLite. PostgreSQL and MySQL report the *view's own*
+identity (whose catalog rows carry the engine's per-view nullability),
+so a view column is attributed to the view, never to a base table.
+MySQL's engine-computed view-column nullability is the one place the
+analysis trusts a value the engine derived rather than declared; the
+adversarial suite pins that trust with view bodies containing WITH
+ROLLUP, UNION, and an empty-input aggregate (all correctly reported
+nullable by information_schema).
+
+SQLite is different: `sqlite3_column_origin_name` resolves a view's
+result column THROUGH to the base table it ultimately reads, and the
+view body — including any null-extending LEFT JOIN inside it — is
+invisible to the catalog. A single-instance view query is still safe
+(the base table is not itself in FROM, so it fails the presence
+check), but a query that references a view AND independently names one
+of the view's base tables in FROM is NOT: the direct, clean base
+instance makes `present[baseOID]` count-1/unpoisoned, and the view
+column — attributed to that same `baseOID` — then narrows even though
+the view's body can null it. This defeats the presence check because
+attribution collapses the view path and the direct path onto one OID.
+Because the view body is unavailable to reason about, SQLite therefore
+treats **any view referenced anywhere in the statement** (FROM lists,
+joins, derived tables, CTE bodies, set-operation branches, expression
+subqueries — every position `Tree.DeepTables` walks) as a wholesale
+narrowing kill-switch, alongside statement-level set operations,
+grouping sets, and database-qualified names. `cache.Table.IsView`
+carries the table-vs-view distinction; only the SQLite catalog builder
+sets it (PostgreSQL and MySQL leave it false, keeping their catalogs
+byte-identical via `omitempty`). The adversarial suite pins the
+dual-instance hazard in three shapes — a direct join, the view behind
+a flattening derived table, and the view on a LEFT JOIN's
+null-extended side — each a proven NULL-into-value counterexample
+before this switch.
 
 The index-based expression whitelist (rule 3) is likewise gated on
 exact alignment: any star target item, or a length mismatch between

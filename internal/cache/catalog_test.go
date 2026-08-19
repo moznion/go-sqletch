@@ -1,6 +1,31 @@
 package cache
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// TestTableIsViewOmitEmpty pins the byte-identity guarantee: a base
+// table (IsView false) must marshal WITHOUT an is_view member, so
+// PostgreSQL/MySQL catalogs — which never set it — stay byte-identical
+// to before the field existed. A view carries is_view:true.
+func TestTableIsViewOmitEmpty(t *testing.T) {
+	base, err := json.Marshal(Table{Schema: "main", Name: "users", OID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(base), "is_view") {
+		t.Errorf("base table must omit is_view, got %s", base)
+	}
+	view, err := json.Marshal(Table{Schema: "main", Name: "v", OID: 2, IsView: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(view), `"is_view":true`) {
+		t.Errorf("view must carry is_view:true, got %s", view)
+	}
+}
 
 func TestCatalogLookup(t *testing.T) {
 	cat := &Catalog{Tables: []Table{

@@ -24,8 +24,19 @@ type Table struct {
 	// parents ('p') are exempt: partitions cannot drop inherited NOT
 	// NULL (42P16). omitempty keeps every inheritance-free catalog
 	// byte-identical.
-	HasChildren bool     `json:"has_children,omitempty"`
-	Cols        []Column `json:"cols"`
+	HasChildren bool `json:"has_children,omitempty"`
+	// IsView marks a relation that is a VIEW rather than a base table.
+	// SQLite's column-origin attribution (sqlite3_column_origin_name)
+	// resolves a view's result columns THROUGH to the view's base
+	// tables, whose declared NOT NULL the view's (invisible, possibly
+	// null-extending) body need not preserve — so a base table appearing
+	// directly in FROM must not be allowed to vouch for a column that
+	// actually flows through a view. The nullability analyzer treats any
+	// view in play as a wholesale narrowing kill-switch. PostgreSQL and
+	// MySQL report the view's own identity (never the base table) and so
+	// never set this; omitempty keeps their catalogs byte-identical.
+	IsView bool     `json:"is_view,omitempty"`
+	Cols   []Column `json:"cols"`
 }
 
 type Column struct {

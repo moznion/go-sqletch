@@ -552,6 +552,34 @@ ORDER BY v.member_id;
 		note: "column-origin attribution resolves through views",
 	},
 	{
+		name: "view_with_direct_instance",
+		src: `-- name: ViewPlusDirect :many
+SELECT v.org_name, o2.name AS direct_name
+FROM members_orgs AS v JOIN orgs AS o2 ON 1 = 1
+ORDER BY v.member_id, o2.id;
+`,
+		note: "view-piercing: v.org_name is attributed to base orgs.name, and the DIRECT orgs o2 instance must NOT vouch for it (the view's internal LEFT JOIN nulls it)",
+	},
+	{
+		name: "view_in_derived_with_direct_instance",
+		src: `-- name: ViewInDerivedPlusDirect :many
+SELECT s.org_name, o2.name AS direct_name
+FROM (SELECT vv.org_name, vv.member_id FROM members_orgs AS vv) AS s
+JOIN orgs AS o2 ON 1 = 1
+ORDER BY s.member_id, o2.id;
+`,
+		note: "view piercing survives a flattening derived table: attribution still reaches base orgs.name",
+	},
+	{
+		name: "view_on_null_side_with_direct_instance",
+		src: `-- name: ViewOuterPlusDirect :many
+SELECT o2.name AS direct_name, v.org_name
+FROM orgs AS o2 LEFT JOIN members_orgs AS v ON 1 = 1
+ORDER BY o2.id, v.member_id;
+`,
+		note: "view on the null-extended side: the hazard lands on the view OID, but attribution is base orgs.name — the clean o2 must not vouch",
+	},
+	{
 		name: "derived_table_on_null_side",
 		src: `-- name: ViaDerived :many
 SELECT m.email, s.name AS org_name
