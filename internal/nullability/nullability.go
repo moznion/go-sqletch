@@ -88,54 +88,36 @@ type Verdict struct {
 func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 	cat *cache.Catalog, overrides map[string]bool) []Verdict {
 
-	// Statement-wide kill-switches: with a derived table/CTE/set
-	// operation or a grouping set anywhere relevant, no SrcRel
-	// narrowing at all — even a directly-present table can be
-	// re-attributed through the opaque construct (e.g. the same table
-	// both joined directly and wrapped in a null-extended derived
-	// table).
+	// Statement-wide kill-switches no recursion can lift: a top-level
+	// set operation (engines may attribute the output to a branch's
+	// base table — SQLite: the FIRST branch), top-level grouping sets
+	// (super-aggregate rows null grouping columns), and name-keyed
+	// attribution defeated by database qualifiers (MySQL/SQLite).
 	untrusted := ""
 	switch {
-	case maxTree.HasOpaqueProvenance():
-		untrusted = "narrowing disabled: statement contains a derived table, CTE, or set operation"
+	case maxTree.HasSetOperation():
+		untrusted = "narrowing disabled: statement is a set operation"
 	case maxTree.HasGroupingSets():
 		untrusted = "narrowing disabled: ROLLUP/CUBE/GROUPING SETS nulls grouping columns"
+	case maxTree.HasUnresolvableProvenance():
+		untrusted = "narrowing disabled: database-qualified names defeat name-keyed column attribution"
 	}
 	trustSrc := untrusted == ""
 
-	// present: source OIDs accounted for by SKELETON FROM relations,
-	// with their aggregated null-extension. Guarded relations are
-	// excluded: their instance never supplies result columns (R2), and
-	// a skeleton instance of the same table must not inherit a guarded
-	// instance's properties.
+	// present: source OIDs accounted for by skeleton FROM relations —
+	// now RECURSIVELY (design 05 §2b): derived tables and referenced
+	// CTE definitions contribute their own relations, with the
+	// enclosing side's null-extension compounded in, and hazardous
+	// subqueries (set ops, grouping sets, recursive CTEs) POISON every
+	// table they mention instead of distrusting the whole statement.
+	// Guarded relations are excluded where locations allow: their
+	// instance never supplies result columns (R2), and a skeleton
+	// instance of the same table must not inherit a guarded instance's
+	// properties.
 	present := map[uint32]*presence{}
 	res := &instanceResolver{}
-	if cat != nil {
-		for _, rel := range maxTree.Relations() {
-			if isGuarded(maxR, rel.Loc) || rel.Table == "" {
-				continue
-			}
-			t := cat.LookupQualified(rel.Schema, rel.Table)
-			if t == nil {
-				continue
-			}
-			p := present[t.OID]
-			if p == nil {
-				p = &presence{}
-				present[t.OID] = p
-			}
-			if rel.NullableSide {
-				p.nullExtended = true
-			}
-			// A plain-inheritance parent's NOT NULL is not enforced
-			// on its children (PG 16, proven by the adversarial
-			// suite) — unless the reference is FROM ONLY, its scan
-			// can return NULL where the catalog says otherwise.
-			if t.HasChildren && !rel.Only {
-				p.inherited = true
-			}
-			res.add(rel, t)
-		}
+	if trustSrc && cat != nil {
+		collectPresence(maxTree, nil, maxR, cat, false, present, res, true)
 	}
 
 	// Skeleton `col IS NOT NULL` conjuncts narrow the filtered column
@@ -144,7 +126,9 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	// (guarded-predicate narrowing stays forbidden — F1a). The
 	// (SrcRel, SrcAtt) key cannot tell two instances of the same
 	// table apart, so narrowing additionally requires the table to
-	// have exactly ONE skeleton instance.
+	// have exactly ONE instance ACROSS ALL LEVELS and no poisoned
+	// exposure (a hazardous subquery mentioning the table shares its
+	// attribution key).
 	filtered := map[srcKey]bool{}
 	if trustSrc && cat != nil {
 		for _, cr := range maxTree.NotNullConjuncts() {
@@ -152,7 +136,10 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 				continue
 			}
 			inst, c, ok := res.resolve(cr.Fields)
-			if !ok || res.instances[inst.table.OID] != 1 {
+			if !ok {
+				continue
+			}
+			if p := present[inst.table.OID]; p == nil || p.count != 1 || p.poisoned {
 				continue
 			}
 			filtered[srcKey{rel: inst.table.OID, att: c.Att}] = true
@@ -230,20 +217,18 @@ type instance struct {
 	table *cache.Table
 }
 
-// instanceResolver answers "which skeleton relation instance and
+// instanceResolver answers "which TOP-LEVEL relation instance and
 // catalog column does this (possibly qualified) column path name?" —
 // alias-first for qualified paths, unique-candidate for bare names.
+// Only top-level relations enter it: aggregate arguments and WHERE
+// conjuncts belong to the outer scope. Cross-level instance COUNTS
+// live in the presence map instead.
 type instanceResolver struct {
-	rels      []instance
-	instances map[uint32]int // catalog OID -> skeleton instance count
+	rels []instance
 }
 
 func (r *instanceResolver) add(rel dialect.RelRef, t *cache.Table) {
 	r.rels = append(r.rels, instance{RelRef: rel, table: t})
-	if r.instances == nil {
-		r.instances = map[uint32]int{}
-	}
-	r.instances[t.OID]++
 }
 
 func (r *instanceResolver) resolve(fields []string) (instance, *cache.Column, bool) {
@@ -308,6 +293,10 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 		return Verdict{Nullable: false,
 			Reason: qual + " is filtered by an unconditional IS NOT NULL"}
 	}
+	if p.poisoned {
+		return Verdict{Nullable: true,
+			Reason: qual + " is exposed through a hazardous subquery (set operation, grouping sets, or a recursive CTE)"}
+	}
 	if p.inherited {
 		return Verdict{Nullable: true,
 			Reason: qual + "'s table has inheritance children, which may drop NOT NULL"}
@@ -339,12 +328,116 @@ func inSkeleton(maxR ast.Rendering, loc int) bool {
 	return true
 }
 
-// presence is one accounted-for source OID: seen in the skeleton FROM
-// list, with its aggregated hazards (null-extension; a non-ONLY scan
-// of a plain-inheritance parent).
+// presence is one accounted-for source OID with its aggregated
+// hazards across every path that exposes it: null-extension (its own
+// side OR any enclosing derived/CTE's side), a non-ONLY scan of a
+// plain-inheritance parent, and poisoning by a hazardous subquery.
+// count is the number of relation instances across all levels.
 type presence struct {
 	nullExtended bool
 	inherited    bool
+	poisoned     bool
+	count        int
+}
+
+// collectPresence walks one statement level: catalog relations join
+// the presence map (hazards merged), CTE references and derived
+// tables recurse with the enclosing null-extension compounded, and
+// hazardous sub-levels poison instead of contributing (design 05
+// §2b). env carries the CTE definitions visible at this level; a
+// definition's own name is removed while inside its body (a
+// non-recursive CTE cannot legally self-reference, and WITH RECURSIVE
+// is poisoned before recursion).
+func collectPresence(t dialect.Tree, env map[string]dialect.CTEDef,
+	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
+	present map[uint32]*presence, res *instanceResolver, top bool) {
+
+	ctes := t.CTEs()
+	if len(ctes) > 0 {
+		env2 := make(map[string]dialect.CTEDef, len(env)+len(ctes))
+		for k, v := range env {
+			env2[k] = v
+		}
+		for _, def := range ctes {
+			env2[def.Name] = def
+		}
+		env = env2
+	}
+
+	for _, rel := range t.Relations() {
+		if isGuarded(maxR, rel.Loc) || rel.Table == "" {
+			continue
+		}
+		if def, ok := env[rel.Table]; ok && rel.Schema == "" {
+			sub := make(map[string]dialect.CTEDef, len(env))
+			for k, v := range env {
+				if k != def.Name {
+					sub[k] = v
+				}
+			}
+			descend(def.Tree, def.Recursive, sub, maxR, cat,
+				nullExt || rel.NullableSide, present, res)
+			continue
+		}
+		tbl := cat.LookupQualified(rel.Schema, rel.Table)
+		if tbl == nil {
+			continue
+		}
+		p := present[tbl.OID]
+		if p == nil {
+			p = &presence{}
+			present[tbl.OID] = p
+		}
+		p.count++
+		if nullExt || rel.NullableSide {
+			p.nullExtended = true
+		}
+		// A plain-inheritance parent's NOT NULL is not enforced on
+		// its children (PG 16, proven by the adversarial suite) —
+		// unless the reference is FROM ONLY, its scan can return NULL
+		// where the catalog says otherwise.
+		if tbl.HasChildren && !rel.Only {
+			p.inherited = true
+		}
+		if top {
+			res.add(rel, tbl)
+		}
+	}
+
+	for _, d := range t.DerivedRels() {
+		descend(d.Tree, false, env, maxR, cat, nullExt || d.NullableSide, present, res)
+	}
+}
+
+// descend enters one subquery. A nil tree is a data-modifying CTE:
+// it exposes only RETURNING rows of its target table, whose
+// constraints were enforced at write time — grant nothing, poison
+// nothing. A hazardous body (recursive CTE, set operation, grouping
+// sets) poisons every table it mentions: its output can carry those
+// tables' attribution while breaking their declared constraints
+// (SQLite attributes compound output to the FIRST branch's table;
+// grouping sets null grouping columns).
+func descend(sub dialect.Tree, recursive bool, env map[string]dialect.CTEDef,
+	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
+	present map[uint32]*presence, res *instanceResolver) {
+
+	if sub == nil {
+		return
+	}
+	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() {
+		for _, tr := range sub.DeepTables() {
+			if tbl := cat.LookupQualified(tr.Schema, tr.Name); tbl != nil {
+				p := present[tbl.OID]
+				if p == nil {
+					p = &presence{}
+					present[tbl.OID] = p
+				}
+				p.poisoned = true
+			}
+		}
+		return
+	}
+	collectPresence(sub, env, maxR, cat, nullExt, present, res, false)
 }
 
 // AnalyzeAll runs Analyze over every verified rendering and unions the

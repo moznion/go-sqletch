@@ -143,13 +143,18 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   intentionally ignores guarded joins/predicates (review
   counterexamples F1a/F1b are permanent must-stay-nullable tests).
   "Guarded INNER join implies non-null FK" is per-shape UNSOUND.
-- **Nullability narrows only under provenance trust** (design 05 §2a):
-  a SrcRel OID must be accounted for by a schema-aware-resolved
-  skeleton FROM relation, and derived tables/CTEs/set ops/grouping
-  sets (plus db-qualified names on MySQL/SQLite) disable SrcRel
-  narrowing wholesale — engines attribute columns THROUGH those
-  constructs. Proven counterexamples live in the devdb adversarial
-  suite (nullability_soundness_devdb_test.go); extend it first.
+- **Nullability narrows only under provenance trust** (design 05
+  §2a/§2b): a SrcRel OID must be accounted for by a
+  schema-aware-resolved FROM relation — engines attribute columns
+  THROUGH derived tables/CTEs/views to base tables. Derived tables
+  and CTEs are analyzed recursively with hazards merged across ALL
+  exposing paths; set ops, grouping sets, and recursive CTEs POISON
+  every table their subquery mentions (SQLite attributes compound
+  output to a branch's table even one level down); statement-level
+  set ops/grouping sets (plus db-qualified names on MySQL/SQLite)
+  still disable narrowing wholesale. Proven counterexamples live in
+  the devdb adversarial suite (nullability_soundness_devdb_test.go);
+  extend it first.
   go-mysql result strings are zero-copy over pooled buffers: anything
   retained past res.Close() must strings.Clone (a corrupted catalog
   silently un-marks null-extended tables).

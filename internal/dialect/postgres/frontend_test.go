@@ -209,32 +209,47 @@ func mustParse(t *testing.T, sql string) dialect.Tree {
 	return tree
 }
 
-func TestHasOpaqueProvenance(t *testing.T) {
-	opaque := []string{
-		"SELECT s.a FROM t1 LEFT JOIN (SELECT a FROM t2) s ON s.a = t1.a",
-		"SELECT s.a FROM (SELECT a FROM t2) s",
-		"WITH s AS (SELECT a FROM t2) SELECT s.a FROM s",
-		"SELECT a FROM t1 UNION ALL SELECT b FROM t2",
-		"UPDATE t SET a = s.a FROM (SELECT a FROM t2) s RETURNING t.a",
-		"WITH s AS (SELECT a FROM t2) DELETE FROM t USING s WHERE t.a = s.a RETURNING t.a",
+func TestProvenanceFacades(t *testing.T) {
+	tr := mustParse(t, "WITH s AS (SELECT a FROM t2) SELECT s.a, d.b FROM s LEFT JOIN (SELECT b FROM t3) d ON TRUE")
+	ctes := tr.CTEs()
+	if len(ctes) != 1 || ctes[0].Name != "s" || ctes[0].Recursive || ctes[0].Tree == nil {
+		t.Fatalf("CTEs = %+v", ctes)
 	}
-	for _, sql := range opaque {
-		if !mustParse(t, sql).HasOpaqueProvenance() {
-			t.Errorf("HasOpaqueProvenance(%q) = false, want true", sql)
-		}
+	if rels := ctes[0].Tree.Relations(); len(rels) != 1 || rels[0].Table != "t2" {
+		t.Errorf("cte body relations = %+v, want t2", rels)
 	}
-	transparent := []string{
-		"SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a",
-		"SELECT t1.a FROM t1 TABLESAMPLE SYSTEM (50)",
-		// A sublink is not FROM-reachable: its columns carry no origin.
-		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) s)",
-		"INSERT INTO t (a) SELECT a FROM (SELECT a FROM t2) s RETURNING t.a",
-		"UPDATE t SET a = $1 RETURNING t.a",
+	dr := tr.DerivedRels()
+	if len(dr) != 1 || dr[0].Alias != "d" || !dr[0].NullableSide || dr[0].Tree == nil {
+		t.Fatalf("DerivedRels = %+v", dr)
 	}
-	for _, sql := range transparent {
-		if mustParse(t, sql).HasOpaqueProvenance() {
-			t.Errorf("HasOpaqueProvenance(%q) = true, want false", sql)
-		}
+	if rels := dr[0].Tree.Relations(); len(rels) != 1 || rels[0].Table != "t3" {
+		t.Errorf("derived body relations = %+v, want t3", rels)
+	}
+
+	rec := mustParse(t, "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM r) SELECT n FROM r").CTEs()
+	if len(rec) != 1 || !rec[0].Recursive {
+		t.Errorf("recursive CTE = %+v", rec)
+	}
+	dml := mustParse(t, "WITH ins AS (INSERT INTO t (a) VALUES (1) RETURNING a) SELECT ins.a FROM ins").CTEs()
+	if len(dml) != 1 || dml[0].Tree != nil {
+		t.Errorf("data-modifying CTE must have a nil Tree: %+v", dml)
+	}
+
+	if !mustParse(t, "SELECT a FROM t1 UNION ALL SELECT b FROM t2").HasSetOperation() {
+		t.Error("set operation not reported")
+	}
+	if mustParse(t, "SELECT a FROM t1").HasSetOperation() {
+		t.Error("plain select reported as set operation")
+	}
+	if mustParse(t, "SELECT a FROM aux.t1").HasUnresolvableProvenance() {
+		t.Error("PostgreSQL attribution is OID-based; qualified names must not distrust")
+	}
+	// A sublink is not FROM-reachable: no derived rel to report.
+	if dr := mustParse(t, "SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) x)").DerivedRels(); len(dr) != 0 {
+		t.Errorf("sublink-internal derived leaked: %+v", dr)
+	}
+	if dr := mustParse(t, "UPDATE t SET a = s.a FROM (SELECT a FROM t2) s RETURNING t.a").DerivedRels(); len(dr) != 1 {
+		t.Errorf("UPDATE...FROM derived = %+v", dr)
 	}
 }
 

@@ -25,6 +25,12 @@ func (Frontend) Parse(sql string) (dialect.Tree, error) {
 	return &tree{res: res}, nil
 }
 
+// subTree wraps a subquery node (a RangeSubselect body or a CTE body)
+// in its own facade for recursive analysis. Node locations stay
+// absolute offsets into the ORIGINAL sql string, so fragment-range
+// checks keep working at any depth.
+func subTree(node *pgquery.Node) *tree { return &tree{node: node} }
+
 func toParseError(err error) error {
 	pos := 0
 	msg := err.Error()
@@ -182,12 +188,21 @@ func singleSelect(res *pgquery.ParseResult) *pgquery.SelectStmt {
 // ---- Tree facade -----------------------------------------------------------
 
 type tree struct {
-	res *pgquery.ParseResult
+	res  *pgquery.ParseResult // top-level parse; nil for subtrees
+	node *pgquery.Node        // subtree root when res is nil
 }
 
-func (t *tree) StmtCount() int { return len(t.res.Stmts) }
+func (t *tree) StmtCount() int {
+	if t.res == nil {
+		return 1
+	}
+	return len(t.res.Stmts)
+}
 
 func (t *tree) stmt() *pgquery.Node {
+	if t.res == nil {
+		return t.node
+	}
 	if len(t.res.Stmts) == 0 {
 		return nil
 	}
@@ -331,52 +346,106 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, o
 	}
 }
 
-// HasOpaqueProvenance reports FROM-reachable constructs the wire
-// protocol resolves column origins through (resorigtbl propagates
-// through subquery and CTE levels): derived tables anywhere in the
-// FROM tree, a WITH clause, or a set operation. INSERT is exempt —
-// RETURNING columns are attributed to the target relation only.
-func (t *tree) HasOpaqueProvenance() bool {
+// HasSetOperation reports a statement-level UNION/INTERSECT/EXCEPT.
+func (t *tree) HasSetOperation() bool {
+	sel := t.sel()
+	return sel != nil && sel.Op != pgquery.SetOperation_SETOP_NONE
+}
+
+// HasUnresolvableProvenance is always false: PostgreSQL attributes
+// result columns by OID (resorigtbl), immune to name collisions.
+func (t *tree) HasUnresolvableProvenance() bool { return false }
+
+// fromItems returns the statement's FROM-position item list.
+func (t *tree) fromItems() []*pgquery.Node {
 	n := t.stmt()
 	switch {
 	case n == nil:
-		return false
+		return nil
 	case n.GetSelectStmt() != nil:
-		s := n.GetSelectStmt()
-		return s.Op != pgquery.SetOperation_SETOP_NONE || s.WithClause != nil ||
-			anyOpaqueFromItem(s.FromClause)
+		return n.GetSelectStmt().FromClause
 	case n.GetUpdateStmt() != nil:
-		u := n.GetUpdateStmt()
-		return u.WithClause != nil || anyOpaqueFromItem(u.FromClause)
+		return n.GetUpdateStmt().FromClause
 	case n.GetDeleteStmt() != nil:
-		d := n.GetDeleteStmt()
-		return d.WithClause != nil || anyOpaqueFromItem(d.UsingClause)
+		return n.GetDeleteStmt().UsingClause
 	}
-	return false
+	return nil
 }
 
-func anyOpaqueFromItem(items []*pgquery.Node) bool {
-	for _, it := range items {
-		if opaqueFromItem(it) {
-			return true
-		}
+// DerivedRels collects FROM-reachable derived tables with sub-facades,
+// tracking null-extension exactly like collectFromItem.
+func (t *tree) DerivedRels() []dialect.SubRel {
+	var out []dialect.SubRel
+	for _, item := range t.fromItems() {
+		collectDerived(item, false, &out)
 	}
-	return false
+	return out
 }
 
-func opaqueFromItem(node *pgquery.Node) bool {
+func collectDerived(node *pgquery.Node, nullable bool, out *[]dialect.SubRel) {
 	switch {
 	case node == nil:
-		return false
+		return
 	case node.GetRangeSubselect() != nil:
-		return true
+		rs := node.GetRangeSubselect()
+		alias := ""
+		if rs.Alias != nil {
+			alias = rs.Alias.Aliasname
+		}
+		*out = append(*out, dialect.SubRel{
+			Alias: alias, NullableSide: nullable, Tree: subTree(rs.Subquery),
+		})
 	case node.GetJoinExpr() != nil:
 		je := node.GetJoinExpr()
-		return opaqueFromItem(je.Larg) || opaqueFromItem(je.Rarg)
+		leftNullable, rightNullable := nullable, nullable
+		switch je.Jointype {
+		case pgquery.JoinType_JOIN_LEFT:
+			rightNullable = true
+		case pgquery.JoinType_JOIN_RIGHT:
+			leftNullable = true
+		case pgquery.JoinType_JOIN_FULL:
+			leftNullable, rightNullable = true, true
+		}
+		collectDerived(je.Larg, leftNullable, out)
+		collectDerived(je.Rarg, rightNullable, out)
 	case node.GetRangeTableSample() != nil:
-		return opaqueFromItem(node.GetRangeTableSample().Relation)
+		collectDerived(node.GetRangeTableSample().Relation, nullable, out)
 	}
-	return false
+}
+
+// CTEs returns the statement's WITH-list definitions; a
+// data-modifying body yields a nil Tree.
+func (t *tree) CTEs() []dialect.CTEDef {
+	var wc *pgquery.WithClause
+	n := t.stmt()
+	switch {
+	case n == nil:
+		return nil
+	case n.GetSelectStmt() != nil:
+		wc = n.GetSelectStmt().WithClause
+	case n.GetUpdateStmt() != nil:
+		wc = n.GetUpdateStmt().WithClause
+	case n.GetDeleteStmt() != nil:
+		wc = n.GetDeleteStmt().WithClause
+	case n.GetInsertStmt() != nil:
+		wc = n.GetInsertStmt().WithClause
+	}
+	if wc == nil {
+		return nil
+	}
+	var out []dialect.CTEDef
+	for _, c := range wc.Ctes {
+		cte := c.GetCommonTableExpr()
+		if cte == nil {
+			continue
+		}
+		def := dialect.CTEDef{Name: cte.Ctename, Recursive: wc.Recursive}
+		if cte.Ctequery != nil && cte.Ctequery.GetSelectStmt() != nil {
+			def.Tree = subTree(cte.Ctequery)
+		}
+		out = append(out, def)
+	}
+	return out
 }
 
 func (t *tree) HasGroupingSets() bool {
@@ -407,7 +476,9 @@ func (t *tree) DeepTables() []dialect.TableRef {
 
 func collectRangeVars(m protoreflect.Message, out *[]dialect.TableRef) {
 	if rv, ok := m.Interface().(*pgquery.RangeVar); ok {
-		*out = append(*out, dialect.TableRef{Name: rv.Relname, Loc: int(rv.Location)})
+		*out = append(*out, dialect.TableRef{
+			Name: rv.Relname, Schema: rv.Schemaname, Loc: int(rv.Location),
+		})
 		return
 	}
 	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {

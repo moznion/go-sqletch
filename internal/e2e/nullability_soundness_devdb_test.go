@@ -199,6 +199,58 @@ SELECT p.x FROM ONLY inh_parent AS p ORDER BY p.x;
 `,
 		note: "positive: FROM ONLY excludes children — attnotnull holds and narrowing is allowed",
 	},
+	// ---- recursive provenance (design 05 §2b) ----
+	{
+		name: "derived_inner_join_narrows",
+		src: `-- name: DerivedInner :many
+SELECT m.email, s.name AS org_name
+FROM members AS m JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "positive: recursion narrows a clean INNER-joined derived table — execution must agree",
+	},
+	{
+		name: "derived_body_left_join",
+		src: `-- name: DerivedBodyLeft :many
+SELECT s.org_name FROM members AS m
+JOIN (SELECT m2.id, o.name AS org_name
+      FROM members AS m2 LEFT JOIN orgs AS o ON o.id = m2.org_id) AS s
+  ON s.id = m.id
+ORDER BY m.id;
+`,
+		note: "null extension INSIDE the derived body must survive the recursion",
+	},
+	{
+		name: "union_in_derived_with_direct_instance",
+		src: `-- name: UnionInDerived :many
+SELECT o1.name AS n1, s.v FROM orgs AS o1
+JOIN (SELECT o.id AS v FROM orgs AS o UNION ALL SELECT m.org_id FROM members AS m) AS s ON TRUE
+ORDER BY o1.id, s.v NULLS LAST;
+`,
+		note: "empirical: sub-level set-op attribution — poisoning must cover whatever the engine reports",
+	},
+	{
+		name: "recursive_cte",
+		src: `-- name: RecCTE :many
+WITH RECURSIVE r AS (
+  SELECT m.id, m.org_id FROM members AS m
+  UNION ALL
+  SELECT r.id + 100, r.org_id FROM r WHERE r.id < 100
+)
+SELECT r.org_id FROM r ORDER BY r.org_id NULLS LAST;
+`,
+		note: "recursive CTE output must stay conservative",
+	},
+	{
+		name: "cte_inner_join_narrows",
+		src: `-- name: CTEInner :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT m.email, s.name AS org_name
+FROM members AS m JOIN s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "positive: recursion narrows a clean INNER-joined CTE — execution must agree",
+	},
 }
 
 func TestNullabilitySoundnessAdversarial(t *testing.T) {
@@ -526,6 +578,58 @@ UNION ALL
 SELECT m2.org_id AS v FROM members AS m2;
 `,
 		note: "compound-select output attribution",
+	},
+	// ---- recursive provenance (design 05 §2b) ----
+	{
+		name: "derived_inner_join_narrows",
+		src: `-- name: DerivedInner :many
+SELECT m.email, s.name AS org_name
+FROM members AS m JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "positive: recursion narrows a clean INNER-joined derived table — execution must agree",
+	},
+	{
+		name: "derived_body_left_join",
+		src: `-- name: DerivedBodyLeft :many
+SELECT s.org_name FROM members AS m
+JOIN (SELECT m2.id, o.name AS org_name
+      FROM members AS m2 LEFT JOIN orgs AS o ON o.id = m2.org_id) AS s
+  ON s.id = m.id
+ORDER BY m.id;
+`,
+		note: "null extension INSIDE the derived body must survive the recursion",
+	},
+	{
+		name: "union_in_derived_with_direct_instance",
+		src: `-- name: UnionInDerived :many
+SELECT o1.name AS n1, s.v FROM orgs AS o1
+JOIN (SELECT o.id AS v FROM orgs AS o UNION ALL SELECT m.org_id FROM members AS m) AS s ON 1
+ORDER BY o1.id, s.v NULLS LAST;
+`,
+		note: "SQLite attributes compound output to the FIRST branch — poisoning must cover it even one level down",
+	},
+	{
+		name: "recursive_cte",
+		src: `-- name: RecCTE :many
+WITH RECURSIVE r AS (
+  SELECT m.id, m.org_id FROM members AS m
+  UNION ALL
+  SELECT r.id + 100, r.org_id FROM r WHERE r.id < 100
+)
+SELECT r.org_id FROM r ORDER BY r.org_id NULLS LAST;
+`,
+		note: "recursive CTE output must stay conservative",
+	},
+	{
+		name: "cte_inner_join_narrows",
+		src: `-- name: CTEInner :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT m.email, s.name AS org_name
+FROM members AS m JOIN s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "positive: recursion narrows a clean INNER-joined CTE — execution must agree",
 	},
 }
 
