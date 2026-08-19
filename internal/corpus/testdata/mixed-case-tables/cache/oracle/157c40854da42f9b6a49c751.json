@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "schema_fp": "359ecd9941d5e34cfbd00bd12804097a1c344201ec9afe5e234741f5f1c4df59",
+  "rendered_sql": "SELECT id, name FROM `apple`",
+  "params": null,
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 3,
+      "src_att": 1
+    },
+    {
+      "name": "name",
+      "oid": 253,
+      "type_name": "varchar",
+      "src_rel": 3,
+      "src_att": 2
+    }
+  ]
+}

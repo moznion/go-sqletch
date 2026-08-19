@@ -1,0 +1,67 @@
+{
+  "format": 1,
+  "schema_fp": "359ecd9941d5e34cfbd00bd12804097a1c344201ec9afe5e234741f5f1c4df59",
+  "tables": [
+    {
+      "schema": "sqletch",
+      "name": "Mango",
+      "oid": 1,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        }
+      ]
+    },
+    {
+      "schema": "sqletch",
+      "name": "Zebra",
+      "oid": 2,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "stripes",
+          "att": 2,
+          "type_oid": 3,
+          "type_name": "int",
+          "not_null": true,
+          "has_default": false
+        }
+      ]
+    },
+    {
+      "schema": "sqletch",
+      "name": "apple",
+      "oid": 3,
+      "cols": [
+        {
+          "name": "id",
+          "att": 1,
+          "type_oid": 8,
+          "type_name": "bigint",
+          "not_null": true,
+          "has_default": false
+        },
+        {
+          "name": "name",
+          "att": 2,
+          "type_oid": 253,
+          "type_name": "varchar(64)",
+          "not_null": true,
+          "has_default": false
+        }
+      ]
+    }
+  ]
+}

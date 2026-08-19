@@ -120,11 +120,20 @@ production form of the differential test (§7), the same way
 Concretely, `Snapshot` must reproduce the server snapshot's synthetic
 numbering exactly: table OIDs 1-based in table-name order, column att
 numbers = ordinal positions, `Schema` = the database name
-(`internal/dialect/mysql/oracle.go:130`, and the `ORDER BY
-table_name, ordinal_position` in `snapshotQuery`). Note the server
-orders by information_schema's collation — the catalog builder must
-match that ordering rule (byte-wise on the stored names is the
-proposal; verified by the differential gate).
+(`internal/dialect/mysql/oracle.go`, and the `ORDER BY BINARY
+table_name, ordinal_position` in `snapshotQuery`). The two backends
+agree on ordering by **byte order**, not information_schema's default
+collation: the native builder sorts names with Go's `sort.Strings`
+(a byte-wise comparison), and the server query sorts `table_name` as
+`BINARY` to match it. Ordering under the case-insensitive collation
+default instead silently disagreed for mixed-case schemas (e.g.
+`Zebra` vs `apple`: collation → `apple`, `Zebra`; bytes → `Zebra`,
+`apple`), assigning different OIDs — and hence different `SrcRel`
+values — under the two backends. `BINARY` is used rather than a
+`COLLATE` clause because `table_name` may be utf8mb3 on some servers,
+for which a utf8mb4 collation name is rejected. The `mixed-case-tables`
+corpus case pins the agreement; the differential gate re-derives it
+against a real server.
 
 ## 4. Scope of inference in v1 — resolution, not typing
 
