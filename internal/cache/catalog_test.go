@@ -42,3 +42,21 @@ func TestCatalogLookup_NonPublicOnly(t *testing.T) {
 		t.Fatalf("Lookup must fall back to non-public schema, got %+v", l)
 	}
 }
+
+func TestCatalogLookupQualified(t *testing.T) {
+	cat := &Catalog{Tables: []Table{
+		{Schema: "public", Name: "orgs", OID: 1},
+		{Schema: "aux", Name: "orgs", OID: 2},
+	}}
+	if l := cat.LookupQualified("aux", "orgs"); l == nil || l.OID != 2 {
+		t.Fatalf("qualified lookup = %+v, want aux.orgs", l)
+	}
+	if l := cat.LookupQualified("", "orgs"); l == nil || l.OID != 1 {
+		t.Fatalf("unqualified lookup = %+v, want public preference", l)
+	}
+	// An explicit qualifier never falls back to a same-named table of
+	// another schema.
+	if l := cat.LookupQualified("missing", "orgs"); l != nil {
+		t.Fatalf("qualified lookup of absent schema = %+v, want nil", l)
+	}
+}

@@ -281,3 +281,46 @@ func asParseErr(err error, out **dialect.ParseError) bool {
 	}
 	return ok
 }
+
+func TestHasOpaqueProvenance(t *testing.T) {
+	opaque := []string{
+		"SELECT s.a FROM t1 LEFT JOIN (SELECT a FROM t2) AS s ON s.a = t1.a",
+		"SELECT s.a FROM (SELECT a FROM t2) AS s",
+		"WITH s AS (SELECT a FROM t2) SELECT s.a FROM s",
+		"SELECT a FROM t1 UNION ALL SELECT b FROM t2",
+		// org_table carries no database qualifier: cross-database
+		// references must not be trusted.
+		"SELECT t1.a FROM otherdb.t1",
+		"SELECT t1.a, t2.b FROM t1 LEFT JOIN otherdb.t2 ON t2.a = t1.a",
+	}
+	for _, sql := range opaque {
+		if !parse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = false, want true", sql)
+		}
+	}
+	transparent := []string{
+		"SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a",
+		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) AS s)",
+	}
+	for _, sql := range transparent {
+		if parse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = true, want false", sql)
+		}
+	}
+}
+
+func TestHasGroupingSets(t *testing.T) {
+	if !parse(t, "SELECT a, count(*) FROM t GROUP BY a WITH ROLLUP").HasGroupingSets() {
+		t.Error("WITH ROLLUP not reported")
+	}
+	if parse(t, "SELECT a, count(*) FROM t GROUP BY a").HasGroupingSets() {
+		t.Error("plain GROUP BY reported as grouping sets")
+	}
+}
+
+func TestRelations_SchemaQualifier(t *testing.T) {
+	rels := parse(t, "SELECT t1.a FROM otherdb.t1").Relations()
+	if len(rels) != 1 || rels[0].Table != "t1" || rels[0].Schema != "otherdb" {
+		t.Fatalf("relations = %+v, want db-qualified t1", rels)
+	}
+}

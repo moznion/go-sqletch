@@ -199,3 +199,70 @@ func TestFrontend_ProbeOrderBy(t *testing.T) {
 		}
 	}
 }
+
+func mustParse(t *testing.T, sql string) dialect.Tree {
+	t.Helper()
+	tree, err := Frontend{}.Parse(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func TestHasOpaqueProvenance(t *testing.T) {
+	opaque := []string{
+		"SELECT s.a FROM t1 LEFT JOIN (SELECT a FROM t2) s ON s.a = t1.a",
+		"SELECT s.a FROM (SELECT a FROM t2) s",
+		"WITH s AS (SELECT a FROM t2) SELECT s.a FROM s",
+		"SELECT a FROM t1 UNION ALL SELECT b FROM t2",
+		"UPDATE t SET a = s.a FROM (SELECT a FROM t2) s RETURNING t.a",
+		"WITH s AS (SELECT a FROM t2) DELETE FROM t USING s WHERE t.a = s.a RETURNING t.a",
+	}
+	for _, sql := range opaque {
+		if !mustParse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = false, want true", sql)
+		}
+	}
+	transparent := []string{
+		"SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a",
+		"SELECT t1.a FROM t1 TABLESAMPLE SYSTEM (50)",
+		// A sublink is not FROM-reachable: its columns carry no origin.
+		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) s)",
+		"INSERT INTO t (a) SELECT a FROM (SELECT a FROM t2) s RETURNING t.a",
+		"UPDATE t SET a = $1 RETURNING t.a",
+	}
+	for _, sql := range transparent {
+		if mustParse(t, sql).HasOpaqueProvenance() {
+			t.Errorf("HasOpaqueProvenance(%q) = true, want false", sql)
+		}
+	}
+}
+
+func TestHasGroupingSets(t *testing.T) {
+	grouping := []string{
+		"SELECT a, count(*) FROM t GROUP BY ROLLUP(a)",
+		"SELECT a, count(*) FROM t GROUP BY CUBE(a)",
+		"SELECT a, count(*) FROM t GROUP BY GROUPING SETS ((a), ())",
+	}
+	for _, sql := range grouping {
+		if !mustParse(t, sql).HasGroupingSets() {
+			t.Errorf("HasGroupingSets(%q) = false, want true", sql)
+		}
+	}
+	if mustParse(t, "SELECT a, count(*) FROM t GROUP BY a").HasGroupingSets() {
+		t.Error("plain GROUP BY reported as grouping sets")
+	}
+}
+
+func TestRelations_SchemaAndTablesample(t *testing.T) {
+	rels := mustParse(t, "SELECT * FROM aux.t1 LEFT JOIN t2 TABLESAMPLE SYSTEM (10) ON TRUE").Relations()
+	if len(rels) != 2 {
+		t.Fatalf("relations = %+v", rels)
+	}
+	if rels[0].Table != "t1" || rels[0].Schema != "aux" {
+		t.Errorf("rels[0] = %+v, want schema-qualified t1", rels[0])
+	}
+	if rels[1].Table != "t2" || rels[1].Schema != "" || !rels[1].NullableSide {
+		t.Errorf("rels[1] = %+v, want null-extended t2 through TABLESAMPLE", rels[1])
+	}
+}

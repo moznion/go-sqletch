@@ -35,10 +35,11 @@ func (j JoinType) String() string {
 
 // RelRef is one relation of the statement's FROM/target clauses.
 type RelRef struct {
-	Alias string // alias if present, else ""
-	Table string // relation name ("" for subselects etc.)
-	Loc   int    // byte offset of the relation in the parsed SQL
-	Join  JoinType
+	Alias  string // alias if present, else ""
+	Table  string // relation name ("" for subselects etc.)
+	Schema string // explicit schema/database qualifier, "" when unqualified
+	Loc    int    // byte offset of the relation in the parsed SQL
+	Join   JoinType
 	// NullableSide reports whether this relation sits on a
 	// null-extended side of an outer join in this statement (right of
 	// LEFT, left of RIGHT, either side of FULL) — the nullability
@@ -114,6 +115,19 @@ type Tree interface {
 	// HasFetchWithTies reports FETCH FIRST … WITH TIES, which makes
 	// the ORDER BY clause mandatory (@order-by then needs a @default).
 	HasFetchWithTies() bool
+	// HasOpaqueProvenance reports whether a result column's
+	// source-relation identity (Desc.Columns[].SrcRel) may have been
+	// attributed through a construct Relations() cannot model: a
+	// derived table in FROM, a CTE, or a set operation. Engines
+	// resolve column origins THROUGH those constructs to base tables,
+	// so when this is true, SrcRel-based nullability narrowing is
+	// unsound and must be disabled (design 05 §2a).
+	HasOpaqueProvenance() bool
+	// HasGroupingSets reports ROLLUP / CUBE / GROUPING SETS in the
+	// statement-level GROUP BY: super-aggregate rows null out grouping
+	// columns regardless of catalog NOT NULL, so SrcRel-based
+	// narrowing is unsound while one is present (design 05 §2a).
+	HasGroupingSets() bool
 }
 
 // ParseError reports a dialect parse failure at a byte offset into the

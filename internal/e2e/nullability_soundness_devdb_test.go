@@ -1,0 +1,526 @@
+//go:build devdb
+
+package e2e_test
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	gomysqlclient "github.com/go-mysql-org/go-mysql/client"
+	"github.com/jackc/pgx/v5"
+	sqlite3 "github.com/ncruces/go-sqlite3"
+
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
+	"github.com/moznion/go-sqletch/internal/nullability"
+)
+
+// TestNullabilitySoundnessAdversarial is the deterministic soundness
+// oracle for the nullability analyzer (design 05 §1): if Analyze
+// reports a column non-nullable, no execution may return NULL there.
+//
+// Each case pairs a template with seed data engineered to force NULL
+// into the suspect column. The check is one-directional and exact:
+// a NULL observed in a claimed-non-nullable column is a proven
+// soundness violation (never a flake — schema, data, and queries are
+// fixed). The reverse (nullable verdict, no NULL observed) is fine:
+// false positives cost a pointer, not a panic.
+//
+// The adversarial cases target the seam between null-extension
+// detection (name-based, over the parse tree's FROM list) and column
+// provenance (OID-based, from the wire protocol's resorigtbl, which
+// resolves THROUGH views, derived tables, and CTEs to base tables).
+const nullSoundSchemaSQL = `
+DROP SCHEMA IF EXISTS aux CASCADE;
+CREATE SCHEMA aux;
+CREATE TABLE orgs (
+    id   bigint PRIMARY KEY,
+    name text NOT NULL
+);
+CREATE TABLE members (
+    id     bigint PRIMARY KEY,
+    email  text NOT NULL,
+    org_id bigint
+);
+CREATE VIEW members_orgs AS
+  SELECT m.id AS member_id, m.email, o.name AS org_name
+  FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id;
+CREATE TABLE aux.orgs (
+    id   bigint PRIMARY KEY,
+    name text NOT NULL
+);
+`
+
+const nullSoundSeedSQL = `
+INSERT INTO orgs VALUES (1, 'acme');
+INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
+-- aux.orgs stays empty: every LEFT JOIN against it misses.
+`
+
+var nullSoundCases = []struct {
+	name string
+	src  string
+	note string
+}{
+	{
+		name: "control_plain_left_join",
+		src: `-- name: ControlLeftJoin :many
+SELECT m.email, o.name AS org_name
+FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "sanity: direct LEFT JOIN must already be handled (org_name nullable)",
+	},
+	{
+		name: "view_with_internal_left_join",
+		src: `-- name: ViaView :many
+SELECT v.member_id, v.email, v.org_name
+FROM members_orgs AS v
+ORDER BY v.member_id;
+`,
+		note: "provenance resolves through the view to orgs.name (NOT NULL); the view's internal LEFT JOIN is invisible to Relations()",
+	},
+	{
+		name: "derived_table_on_null_side",
+		src: `-- name: ViaDerived :many
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "RangeSubselect yields RelRef{Table:\"\"} — never enters nullableSideOIDs; provenance resolves through to orgs.name",
+	},
+	{
+		name: "cte_on_null_side",
+		src: `-- name: ViaCTE :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "CTE name resolves to no catalog table — never enters nullableSideOIDs; provenance may resolve through the CTE",
+	},
+	{
+		name: "schema_qualified_name_collision",
+		src: `-- name: ViaOtherSchema :many
+SELECT m.email, o.name AS org_name
+FROM members AS m LEFT JOIN aux.orgs AS o ON o.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "RelRef.Table drops the schema; Lookup(\"orgs\") prefers public.orgs, marking the wrong OID as null-extended",
+	},
+	{
+		name: "group_by_rollup",
+		src: `-- name: Rollup :many
+SELECT m.email, count(*) AS n
+FROM members AS m
+GROUP BY ROLLUP(m.email)
+ORDER BY m.email NULLS LAST;
+`,
+		note: "super-aggregate rows null the grouping column even though members.email is NOT NULL",
+	},
+	{
+		name: "union_all_branch_provenance",
+		src: `-- name: UnionBranches :many
+SELECT m.id AS v FROM members AS m
+UNION ALL
+SELECT m2.org_id AS v FROM members AS m2
+ORDER BY v NULLS LAST;
+`,
+		note: "empirical: does the wire protocol attribute UNION output to the first branch's members.id (NOT NULL)?",
+	},
+}
+
+func TestNullabilitySoundnessAdversarial(t *testing.T) {
+	conn, ctx := acquireWithSchema(t, nullSoundSchemaSQL)
+	oracle := postgres.NewOracle(conn)
+	if _, err := conn.Exec(ctx, nullSoundSeedSQL); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cat, err := oracle.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range nullSoundCases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := compile(t, tc.src)
+			rs, err := ast.Renderings(postgres.Profile{}, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desc, err := oracle.Describe(ctx, rs[0].SQL)
+			if err != nil {
+				t.Fatalf("describe: %v", err)
+			}
+			tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict := nullability.Analyze(tree, rs[0], desc, cat, nil)
+
+			for i, c := range desc.Columns {
+				t.Logf("column %d %q: SrcRel=%d SrcAtt=%d -> nullable=%v",
+					i, c.Name, c.SrcRel, c.SrcAtt, verdict[i])
+			}
+
+			// Execute and record, per column, whether any NULL appears.
+			rows, err := conn.Query(ctx, rs[0].SQL)
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			sawNull := make([]bool, len(desc.Columns))
+			nRows := 0
+			for rows.Next() {
+				vals, err := rows.Values()
+				if err != nil {
+					t.Fatal(err)
+				}
+				nRows++
+				for i, v := range vals {
+					if v == nil {
+						sawNull[i] = true
+					}
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if nRows == 0 {
+				t.Fatal("seed data produced no rows; the case proves nothing")
+			}
+
+			for i := range verdict {
+				if !verdict[i] && sawNull[i] {
+					t.Errorf("SOUNDNESS VIOLATION: column %d %q claimed non-nullable but execution returned NULL (%s)",
+						i, desc.Columns[i].Name, tc.note)
+				}
+			}
+		})
+	}
+}
+
+// ---- MySQL ----------------------------------------------------------------
+
+const mysqlNullSoundSchemaSQL = `
+DROP VIEW IF EXISTS members_orgs;
+CREATE TABLE orgs (
+    id   BIGINT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL
+);
+CREATE TABLE members (
+    id     BIGINT PRIMARY KEY,
+    email  VARCHAR(255) NOT NULL,
+    org_id BIGINT
+);
+CREATE VIEW members_orgs AS
+  SELECT m.id AS member_id, m.email, o.name AS org_name
+  FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id;
+`
+
+var mysqlNullSoundCases = []struct {
+	name string
+	src  string
+	note string
+}{
+	{
+		name: "control_plain_left_join",
+		src: `-- name: ControlLeftJoin :many
+SELECT m.email, o.name AS org_name
+FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "sanity: direct LEFT JOIN handling",
+	},
+	{
+		name: "view_with_internal_left_join",
+		src: `-- name: ViaView :many
+SELECT v.member_id, v.email, v.org_name
+FROM members_orgs AS v
+ORDER BY v.member_id;
+`,
+		note: "MERGE views report base tables in org_table",
+	},
+	{
+		name: "derived_table_on_null_side",
+		src: `-- name: ViaDerived :many
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "derived-table org_table attribution",
+	},
+	{
+		name: "cte_on_null_side",
+		src: `-- name: ViaCTE :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "CTE org_table attribution",
+	},
+	{
+		name: "group_by_with_rollup",
+		src: `-- name: Rollup :many
+SELECT m.email, count(*) AS n
+FROM members AS m
+GROUP BY m.email WITH ROLLUP;
+`,
+		note: "WITH ROLLUP nulls the grouping column",
+	},
+	// No union case: the MySQL dialect maps TiDB's SetOprStmt to
+	// StmtOther, so R1 (SQLETCH103) rejects top-level set operations
+	// outright — the vector cannot occur.
+}
+
+func TestMySQLNullabilitySoundnessAdversarial(t *testing.T) {
+	conn, ctx := acquireMySQLWithSchema(t, mysqlNullSoundSchemaSQL)
+	oracle := mysql.NewOracle(conn)
+	for _, stmt := range []string{
+		"INSERT INTO orgs VALUES (1, 'acme')",
+		"INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL)",
+	} {
+		if _, err := conn.Execute(stmt); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	cat, err := oracle.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range mysqlNullSoundCases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := compileMySQL(t, tc.src)
+			rs, err := ast.Renderings(mysql.Profile{}, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desc, err := oracle.Describe(ctx, rs[0].SQL)
+			if err != nil {
+				t.Fatalf("describe: %v", err)
+			}
+			tree, err := mysql.Frontend{}.Parse(rs[0].SQL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict := nullability.Analyze(tree, rs[0], desc, cat, nil)
+			for i, c := range desc.Columns {
+				t.Logf("column %d %q: SrcRel=%d SrcAtt=%d -> nullable=%v",
+					i, c.Name, c.SrcRel, c.SrcAtt, verdict[i])
+			}
+
+			res, err := conn.Execute(rs[0].SQL)
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			defer res.Close()
+			if len(res.Values) == 0 {
+				t.Fatal("seed data produced no rows; the case proves nothing")
+			}
+			sawNull := make([]bool, len(desc.Columns))
+			for _, row := range res.Values {
+				for i := range row {
+					if i < len(sawNull) && row[i].Value() == nil {
+						sawNull[i] = true
+					}
+				}
+			}
+			for i := range verdict {
+				if !verdict[i] && sawNull[i] {
+					t.Errorf("SOUNDNESS VIOLATION: column %d %q claimed non-nullable but execution returned NULL (%s)",
+						i, desc.Columns[i].Name, tc.note)
+				}
+			}
+		})
+	}
+}
+
+func acquireMySQLWithSchema(t *testing.T, schema string) (*gomysqlclient.Conn, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+	conn, cleanup, err := devdb.AcquireMySQL(ctx, devdb.Config{
+		DSN:           os.Getenv("SQLETCH_TEST_MYSQL_DSN"),
+		ServerVersion: "8.4",
+		SchemaSQL:     []string{schema},
+	})
+	if err != nil {
+		t.Fatalf("acquire MySQL dev database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return conn, ctx
+}
+
+// ---- SQLite ----------------------------------------------------------------
+
+const sqliteNullSoundSchemaSQL = `
+CREATE TABLE orgs (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+CREATE TABLE members (
+    id     INTEGER PRIMARY KEY,
+    email  TEXT NOT NULL,
+    org_id INTEGER
+);
+CREATE VIEW members_orgs AS
+  SELECT m.id AS member_id, m.email, o.name AS org_name
+  FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id;
+`
+
+var sqliteNullSoundCases = []struct {
+	name string
+	src  string
+	note string
+}{
+	{
+		name: "control_plain_left_join",
+		src: `-- name: ControlLeftJoin :many
+SELECT m.email, o.name AS org_name
+FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "sanity: direct LEFT JOIN handling",
+	},
+	{
+		name: "view_with_internal_left_join",
+		src: `-- name: ViaView :many
+SELECT v.member_id, v.email, v.org_name
+FROM members_orgs AS v
+ORDER BY v.member_id;
+`,
+		note: "column-origin attribution resolves through views",
+	},
+	{
+		name: "derived_table_on_null_side",
+		src: `-- name: ViaDerived :many
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "flattened-subquery origin attribution",
+	},
+	{
+		name: "cte_on_null_side",
+		src: `-- name: ViaCTE :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT m.email, s.name AS org_name
+FROM members AS m LEFT JOIN s ON s.id = m.org_id
+ORDER BY m.id;
+`,
+		note: "CTE origin attribution",
+	},
+	{
+		name: "union_all_branch_provenance",
+		src: `-- name: UnionBranches :many
+SELECT m.id AS v FROM members AS m
+UNION ALL
+SELECT m2.org_id AS v FROM members AS m2;
+`,
+		note: "compound-select output attribution",
+	},
+}
+
+func TestSQLiteNullabilitySoundnessAdversarial(t *testing.T) {
+	conn, ctx := acquireSQLiteWithSchema(t, sqliteNullSoundSchemaSQL)
+	oracle := sqlite.NewOracle(conn)
+	if err := conn.Exec(`
+INSERT INTO orgs VALUES (1, 'acme');
+INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
+`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cat, err := oracle.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range sqliteNullSoundCases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := compileSQLite(t, tc.src)
+			rs, err := ast.Renderings(sqlite.Profile{}, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desc, err := oracle.Describe(ctx, rs[0].SQL)
+			if err != nil {
+				t.Fatalf("describe: %v", err)
+			}
+			tree, err := sqlite.Frontend{}.Parse(rs[0].SQL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict := nullability.Analyze(tree, rs[0], desc, cat, nil)
+			for i, c := range desc.Columns {
+				t.Logf("column %d %q: SrcRel=%d SrcAtt=%d -> nullable=%v",
+					i, c.Name, c.SrcRel, c.SrcAtt, verdict[i])
+			}
+
+			stmt, _, err := conn.Prepare(rs[0].SQL)
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			defer func() { _ = stmt.Close() }()
+			sawNull := make([]bool, len(desc.Columns))
+			nRows := 0
+			for stmt.Step() {
+				nRows++
+				for i := range sawNull {
+					if stmt.ColumnType(i) == sqlite3.NULL {
+						sawNull[i] = true
+					}
+				}
+			}
+			if err := stmt.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if nRows == 0 {
+				t.Fatal("seed data produced no rows; the case proves nothing")
+			}
+			for i := range verdict {
+				if !verdict[i] && sawNull[i] {
+					t.Errorf("SOUNDNESS VIOLATION: column %d %q claimed non-nullable but execution returned NULL (%s)",
+						i, desc.Columns[i].Name, tc.note)
+				}
+			}
+		})
+	}
+}
+
+func acquireSQLiteWithSchema(t *testing.T, schema string) (*sqlite3.Conn, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+	conn, cleanup, err := devdb.AcquireSQLite(ctx, devdb.Config{
+		ServerVersion: "3",
+		SchemaSQL:     []string{schema},
+	})
+	if err != nil {
+		t.Fatalf("acquire SQLite dev database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return conn, ctx
+}
+
+// acquireWithSchema is acquire with a case-specific schema.
+func acquireWithSchema(t *testing.T, schema string) (*pgx.Conn, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+	conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
+		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
+		ServerVersion: "16",
+		SchemaSQL:     []string{schema},
+	})
+	if err != nil {
+		t.Fatalf("acquire dev database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return conn, ctx
+}

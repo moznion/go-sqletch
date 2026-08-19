@@ -41,46 +41,85 @@ var funcWhitelist = map[string]bool{
 //     never sound, F1a).
 //   - Skeleton outer joins null-extend their side (RelRef.NullableSide,
 //     computed by the frontend for LEFT/RIGHT/FULL).
+//   - SrcRel provenance is trusted only when the source relation is
+//     visibly PRESENT in the statement's own FROM list (schema-aware)
+//     and no construct can smuggle provenance past Relations():
+//     engines attribute columns THROUGH derived tables, CTEs, and
+//     (on some engines) views to base tables, and grouping sets null
+//     out grouping columns outright. Every one of those was a proven
+//     NULL-into-value counterexample before this check — see
+//     TestNullabilitySoundnessAdversarial. An unrecognized or
+//     unresolvable source OID therefore fails SAFE to nullable.
 func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 	cat *cache.Catalog, overrides map[string]bool) []bool {
 
-	// Table OIDs that appear on a null-extended side of a SKELETON
-	// outer join. Guarded relations are excluded: their instance never
-	// supplies result columns (R2), and a skeleton instance of the
-	// same table must not inherit a guarded instance's properties.
-	nullableSideOIDs := map[uint32]bool{}
-	for _, rel := range maxTree.Relations() {
-		if isGuarded(maxR, rel.Loc) {
-			continue
-		}
-		if rel.NullableSide && cat != nil {
-			if t := cat.Lookup(rel.Table); t != nil {
-				nullableSideOIDs[t.OID] = true
+	// trustSrc: with a derived table/CTE/set operation or a grouping
+	// set anywhere relevant, no SrcRel narrowing at all — even a
+	// directly-present table can be re-attributed through the opaque
+	// construct (e.g. the same table both joined directly and wrapped
+	// in a null-extended derived table).
+	trustSrc := !maxTree.HasOpaqueProvenance() && !maxTree.HasGroupingSets()
+
+	// present: source OIDs accounted for by SKELETON FROM relations,
+	// with their aggregated null-extension. Guarded relations are
+	// excluded: their instance never supplies result columns (R2), and
+	// a skeleton instance of the same table must not inherit a guarded
+	// instance's properties.
+	type presence struct{ nullExtended bool }
+	present := map[uint32]*presence{}
+	if cat != nil {
+		for _, rel := range maxTree.Relations() {
+			if isGuarded(maxR, rel.Loc) || rel.Table == "" {
+				continue
+			}
+			t := cat.LookupQualified(rel.Schema, rel.Table)
+			if t == nil {
+				continue
+			}
+			p := present[t.OID]
+			if p == nil {
+				p = &presence{}
+				present[t.OID] = p
+			}
+			if rel.NullableSide {
+				p.nullExtended = true
 			}
 		}
 	}
 
+	// The expression-column whitelist matches desc columns to target
+	// items by index, which only holds without star expansion and with
+	// equal lengths.
 	targets := maxTree.TargetItems()
+	aligned := len(targets) == len(desc.Columns)
+	for _, ti := range targets {
+		if ti.Star {
+			aligned = false
+		}
+	}
+
 	out := make([]bool, len(desc.Columns))
 	for i, col := range desc.Columns {
 		if v, ok := overrides[col.Name]; ok {
 			out[i] = v
 			continue
 		}
-		// Direct column reference: catalog NOT NULL minus outer-join
-		// null extension.
+		// Direct column reference: catalog NOT NULL, provided the
+		// source relation is trusted, present, and not null-extended.
 		if col.SrcRel != 0 && cat != nil {
 			nonNull := false
-			if t := cat.LookupOID(col.SrcRel); t != nil {
-				if c := t.ColByAtt(col.SrcAtt); c != nil {
-					nonNull = c.NotNull && !nullableSideOIDs[col.SrcRel]
+			if p := present[col.SrcRel]; trustSrc && p != nil && !p.nullExtended {
+				if t := cat.LookupOID(col.SrcRel); t != nil {
+					if c := t.ColByAtt(col.SrcAtt); c != nil {
+						nonNull = c.NotNull
+					}
 				}
 			}
 			out[i] = !nonNull
 			continue
 		}
 		// Expression column: nullable unless whitelisted total function.
-		if i < len(targets) && funcWhitelist[targets[i].FuncName] {
+		if aligned && funcWhitelist[targets[i].FuncName] {
 			out[i] = false
 			continue
 		}

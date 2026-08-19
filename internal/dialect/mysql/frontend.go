@@ -313,7 +313,7 @@ func collectJoin(node ast.ResultSetNode, join dialect.JoinType, nullable bool, o
 		switch s := v.Source.(type) {
 		case *ast.TableName:
 			*out = append(*out, dialect.RelRef{
-				Alias: v.AsName.O, Table: s.Name.O, Loc: -1,
+				Alias: v.AsName.O, Table: s.Name.O, Schema: s.Schema.O, Loc: -1,
 				Join: join, NullableSide: nullable,
 			})
 		case *ast.Join: // parenthesized join
@@ -325,9 +325,68 @@ func collectJoin(node ast.ResultSetNode, join dialect.JoinType, nullable bool, o
 		}
 	case *ast.TableName:
 		*out = append(*out, dialect.RelRef{
-			Table: v.Name.O, Loc: -1, Join: join, NullableSide: nullable,
+			Table: v.Name.O, Schema: v.Schema.O, Loc: -1, Join: join, NullableSide: nullable,
 		})
 	}
+}
+
+// HasOpaqueProvenance reports FROM-reachable derived tables, a WITH
+// clause, or a set operation — constructs the protocol's
+// org_table/org_name column attribution resolves through (merged
+// derived tables and views report their base tables), which
+// Relations() cannot model.
+func (t *tree) HasOpaqueProvenance() bool {
+	switch s := t.first().(type) {
+	case *ast.SelectStmt:
+		if s.With != nil {
+			return true
+		}
+		return s.From != nil && opaqueResultSet(s.From.TableRefs)
+	case *ast.SetOprStmt:
+		return true
+	case *ast.UpdateStmt:
+		if s.With != nil {
+			return true
+		}
+		return s.TableRefs != nil && opaqueResultSet(s.TableRefs.TableRefs)
+	case *ast.DeleteStmt:
+		if s.With != nil {
+			return true
+		}
+		return s.TableRefs != nil && opaqueResultSet(s.TableRefs.TableRefs)
+	}
+	return false
+}
+
+func opaqueResultSet(node ast.ResultSetNode) bool {
+	switch v := node.(type) {
+	case *ast.Join:
+		return (v.Left != nil && opaqueResultSet(v.Left)) ||
+			(v.Right != nil && opaqueResultSet(v.Right))
+	case *ast.TableSource:
+		switch s := v.Source.(type) {
+		case *ast.TableName:
+			// The wire protocol's org_table carries no database
+			// qualifier, so a cross-database reference would be
+			// attributed to a same-named table of the connected
+			// database. Treat any explicit qualifier as opaque.
+			return s.Schema.O != ""
+		case *ast.Join: // parenthesized join
+			return opaqueResultSet(s)
+		default: // derived table (SELECT …) AS alias
+			return true
+		}
+	case *ast.TableName:
+		return v.Schema.O != ""
+	}
+	return false
+}
+
+// HasGroupingSets reports MySQL's GROUP BY … WITH ROLLUP, which nulls
+// grouping columns in super-aggregate rows.
+func (t *tree) HasGroupingSets() bool {
+	s := t.sel()
+	return s != nil && s.GroupBy != nil && s.GroupBy.Rollup
 }
 
 // locateRelations assigns Loc to each named relation by scanning the

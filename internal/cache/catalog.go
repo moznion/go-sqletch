@@ -47,6 +47,24 @@ func (c *Catalog) Lookup(name string) *Table {
 	return found
 }
 
+// LookupQualified finds a table by an explicit schema qualifier, or
+// falls back to Lookup's unqualified resolution when schema is empty.
+// An explicitly qualified name never falls back: resolving it to a
+// same-named table of another schema is exactly the confusion the
+// nullability analysis must not inherit.
+func (c *Catalog) LookupQualified(schema, name string) *Table {
+	if schema == "" {
+		return c.Lookup(name)
+	}
+	for i := range c.Tables {
+		t := &c.Tables[i]
+		if t.Schema == schema && t.Name == name {
+			return t
+		}
+	}
+	return nil
+}
+
 // LookupOID finds a table by OID. Returns nil when absent.
 func (c *Catalog) LookupOID(oid uint32) *Table {
 	for i := range c.Tables {
