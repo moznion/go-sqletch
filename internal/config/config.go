@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 
@@ -133,9 +132,15 @@ func (c Config) Expanded(query string) bool {
 	return slices.Contains(c.Expansion.Queries, query)
 }
 
-var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-
-// Load reads, env-expands, and validates the configuration.
+// Load reads and validates the configuration. Config values are
+// literal: there is deliberately no ${VAR} environment-variable
+// expansion (removed as a secret-exfiltration / SSRF vector — a cloned
+// repo could otherwise splice the caller's environment, including
+// secrets, into database.dsn and point it at an attacker host). An
+// operator who wants the dev-database DSN to come from the environment
+// should leave database.dsn empty and let the driver's own libpq/DSN
+// environment variables (PGHOST, MYSQL_DSN, …) take effect, or template
+// the config outside sqletch.
 func Load(path string) (Config, []diagnostics.Diagnostic) {
 	span := diagnostics.Span{File: path}
 	raw, err := os.ReadFile(path)
@@ -143,10 +148,6 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
 	}
-	raw = envRe.ReplaceAllFunc(raw, func(m []byte) []byte {
-		name := envRe.FindSubmatch(m)[1]
-		return []byte(os.Getenv(string(name)))
-	})
 
 	var cfg Config
 	// DisallowUnknownField reproduces yaml.v3's KnownFields(true);

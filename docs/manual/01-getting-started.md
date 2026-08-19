@@ -29,7 +29,7 @@ version: 1
 dialect: postgres          # postgres | mysql | sqlite
 server_version: "16"
 database:
-  dsn: ${SQLETCH_DEV_DSN}  # optional; empty = auto-managed disposable DB
+  # dsn: postgres://…      # optional, LITERAL (no ${VAR}); empty = auto-managed disposable DB
 schema:
   files: [db/schema.sql]
 queries: [queries/*.sql]

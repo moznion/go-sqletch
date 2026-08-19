@@ -13,7 +13,8 @@ version: 1
 dialect: postgres            # required; v0.1: postgres only
 server_version: "16.4"       # required; cache-key + container tag + pin
 database:
-  dsn: ${SQLETCH_DSN}        # optional; env expansion supported
+  # dsn: postgres://…        # optional, LITERAL only (no ${VAR} expansion);
+                             # empty = auto-managed disposable container.
                              # SQLite: a FILE PATH, resolved against the
                              # config dir like every other path (":memory:"
                              # and "file:…" URIs pass through)
@@ -43,9 +44,15 @@ overrides:                   # per-query escape hatches
 `internal/config.Load` performs strict decoding (unknown keys and
 duplicate keys are `SQLETCH300`; goccy/go-yaml with
 `DisallowUnknownField` — migrated off the archived gopkg.in/yaml.v3,
-2026-08), env expansion (`${VAR}` only, no shell), and validation
-(`SQLETCH301`: mutually exclusive/required combinations named in the
-message). The loaded config carries its own canonical hash — a config
+2026-08) and validation (`SQLETCH301`: mutually exclusive/required
+combinations named in the message). Config values are **literal**:
+there is deliberately no `${VAR}` environment expansion (removed
+2026-08 as a secret-exfiltration / SSRF vector — a cloned repo could
+otherwise splice the caller's environment, including secrets, into
+`database.dsn` and point it at an attacker host). An operator who
+wants the DSN from the environment leaves `database.dsn` empty and
+relies on the driver's own DSN environment variables, or templates the
+config file outside sqletch. The loaded config carries its own canonical hash — a config
 change that affects renderings or keys (dialect, server_version,
 schema) invalidates cache naturally through the fingerprint.
 
@@ -168,7 +175,8 @@ documentation, the e2e CI fixture, and the sqlc-coexistence smoke
 ## 6. Testing & acceptance criteria
 
 - Config: golden valid/invalid fixtures → exact `SQLETCH30x`
-  diagnostics; env expansion; unknown-key strictness.
+  diagnostics; literal-value handling (a `${VAR}` in the DSN is NOT
+  expanded — `TestLoad_NoEnvExpansion`); unknown-key strictness.
 - CLI: table-driven command tests over `examples/` using the in-proc
   entry points; the `--json` key set and value semantics pinned in
   `jsondiag_test.go`, including the exit-code mapping for SQLETCH200
