@@ -727,7 +727,20 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 				}
 			case *rsql.Call:
 				item.FuncName = strings.ToLower(e.Name.Name)
+				// A plain aggregate over one bare column: no FILTER,
+				// no OVER, not the star form.
+				if e.Filter == nil && e.Over == nil && !e.Star.IsValid() && len(e.Args) == 1 {
+					switch a := e.Args[0].(type) {
+					case *rsql.Ident:
+						item.AggArg = []string{a.Name}
+					case *rsql.QualifiedRef:
+						if !a.Star.IsValid() && a.Table != nil && a.Column != nil {
+							item.AggArg = []string{a.Table.Name, a.Column.Name}
+						}
+					}
+				}
 			}
+			item.Total = totalExpr(rc.Expr)
 		}
 		out = append(out, item)
 	}
@@ -757,6 +770,95 @@ func (t *tree) HavingConjunctLocs() []int {
 	var locs []int
 	flattenConjuncts(sel.HavingExpr, &locs)
 	return locs
+}
+
+func (t *tree) HasGroupBy() bool {
+	s := t.sel()
+	return s != nil && len(s.GroupByExprs) > 0
+}
+
+// NotNullConjuncts finds depth-0 WHERE conjuncts of the exact form
+// `col IS NOT NULL` (or SQLite's `col NOTNULL`).
+func (t *tree) NotNullConjuncts() []dialect.ColRef {
+	var where rsql.Expr
+	switch s := t.first().(type) {
+	case *rsql.SelectStatement:
+		where = s.WhereExpr
+	case *rsql.UpdateStatement:
+		where = s.WhereExpr
+	case *rsql.DeleteStatement:
+		where = s.WhereExpr
+	}
+	var nodes []rsql.Expr
+	flattenConjunctNodes(where, &nodes)
+	var out []dialect.ColRef
+	for _, c := range nodes {
+		nt, ok := c.(*rsql.Null)
+		if !ok || nt.Op != rsql.NOTNULL {
+			continue
+		}
+		ref := dialect.ColRef{Loc: exprPos(c)}
+		switch x := nt.X.(type) {
+		case *rsql.Ident:
+			ref.Fields = []string{x.Name}
+		case *rsql.QualifiedRef:
+			if x.Star.IsValid() || x.Table == nil || x.Column == nil {
+				continue
+			}
+			ref.Fields = []string{x.Table.Name, x.Column.Name}
+		default:
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func flattenConjunctNodes(e rsql.Expr, out *[]rsql.Expr) {
+	switch v := e.(type) {
+	case nil:
+		return
+	case *rsql.ParenExpr:
+		flattenConjunctNodes(v.X, out)
+	case *rsql.BinaryExpr:
+		if v.Op == rsql.AND {
+			flattenConjunctNodes(v.X, out)
+			flattenConjunctNodes(v.Y, out)
+			return
+		}
+		*out = append(*out, v)
+	default:
+		*out = append(*out, e)
+	}
+}
+
+// totalExpr reports a data-independent never-NULL expression (see
+// dialect.TargetItem.Total).
+func totalExpr(e rsql.Expr) bool {
+	switch v := e.(type) {
+	case *rsql.StringLit, *rsql.NumberLit, *rsql.BoolLit, *rsql.BlobLit:
+		return true
+	case *rsql.Exists:
+		return true
+	case *rsql.Null: // IS NULL / NOTNULL tests yield 0/1
+		return true
+	case *rsql.ParenExpr:
+		return totalExpr(v.X)
+	case *rsql.CastExpr:
+		// SQLite CAST coerces rather than fails; NULL only from a
+		// NULL operand.
+		return totalExpr(v.X)
+	case *rsql.Call:
+		if v.Name != nil && strings.EqualFold(v.Name.Name, "coalesce") {
+			for _, arg := range v.Args {
+				if totalExpr(arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // flattenConjuncts mirrors the other facades: parens are transparent

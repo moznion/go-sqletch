@@ -277,6 +277,33 @@ func TestHasOpaqueProvenance(t *testing.T) {
 	}
 }
 
+func TestPrecisionFacades(t *testing.T) {
+	tr := parse(t, "SELECT sum(u.org_id) AS s, coalesce(u.nickname, 'anon') AS c, sum(u.id) FILTER (WHERE u.id > 3) AS sf FROM users AS u WHERE u.org_id IS NOT NULL AND (u.bio IS NOT NULL OR u.id = 1) GROUP BY u.status")
+	if !tr.HasGroupBy() {
+		t.Error("HasGroupBy = false")
+	}
+	items := tr.TargetItems()
+	if len(items) != 3 {
+		t.Fatalf("items = %+v", items)
+	}
+	if got := items[0].AggArg; len(got) != 2 || got[0] != "u" || got[1] != "org_id" {
+		t.Errorf("sum AggArg = %v", got)
+	}
+	if !items[1].Total {
+		t.Error("coalesce with a literal fallback must be Total")
+	}
+	if items[2].AggArg != nil {
+		t.Error("FILTER clause must clear AggArg")
+	}
+	nn := tr.NotNullConjuncts()
+	if len(nn) != 1 || len(nn[0].Fields) != 2 || nn[0].Fields[1] != "org_id" {
+		t.Errorf("NotNullConjuncts = %+v, want only the depth-0 u.org_id", nn)
+	}
+	if parse(t, "SELECT a FROM t").HasGroupBy() {
+		t.Error("HasGroupBy without GROUP BY")
+	}
+}
+
 func TestRelations_SchemaQualifier(t *testing.T) {
 	rels := parse(t, "SELECT t1.a FROM aux.t1").Relations()
 	if len(rels) != 1 || rels[0].Table != "t1" || rels[0].Schema != "aux" {

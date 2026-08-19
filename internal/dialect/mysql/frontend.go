@@ -597,10 +597,110 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 			item.FuncName = e.FnName.L
 		case *ast.AggregateFuncExpr:
 			item.FuncName = strings.ToLower(e.F)
+			// MySQL has no FILTER clause, and window functions parse
+			// as WindowFuncExpr — a plain aggregate over one bare
+			// column qualifies.
+			if len(e.Args) == 1 {
+				if cn, ok := e.Args[0].(*ast.ColumnNameExpr); ok {
+					item.AggArg = columnPath(cn.Name)
+				}
+			}
 		}
+		item.Total = totalExpr(f.Expr)
 		out = append(out, item)
 	}
 	return out
+}
+
+func columnPath(n *ast.ColumnName) []string {
+	var out []string
+	if n.Table.O != "" {
+		out = append(out, n.Table.O)
+	}
+	out = append(out, n.Name.O)
+	return out
+}
+
+// totalExpr reports a data-independent never-NULL expression (see
+// dialect.TargetItem.Total).
+func totalExpr(e ast.ExprNode) bool {
+	switch v := e.(type) {
+	case ast.ValueExpr:
+		return v.GetValue() != nil
+	case *ast.ExistsSubqueryExpr:
+		return true
+	case *ast.IsNullExpr, *ast.IsTruthExpr:
+		return true
+	case *ast.ParenthesesExpr:
+		return totalExpr(v.Expr)
+	case *ast.FuncCastExpr:
+		// MySQL CAST returns NULL on conversion failure — never total.
+		return false
+	case *ast.FuncCallExpr:
+		if v.FnName.L == "coalesce" {
+			for _, arg := range v.Args {
+				if totalExpr(arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func (t *tree) HasGroupBy() bool {
+	s := t.sel()
+	return s != nil && s.GroupBy != nil && len(s.GroupBy.Items) > 0
+}
+
+// NotNullConjuncts finds depth-0 WHERE conjuncts of the exact form
+// `col IS NOT NULL`.
+func (t *tree) NotNullConjuncts() []dialect.ColRef {
+	var where ast.ExprNode
+	switch s := t.first().(type) {
+	case *ast.SelectStmt:
+		where = s.Where
+	case *ast.UpdateStmt:
+		where = s.Where
+	case *ast.DeleteStmt:
+		where = s.Where
+	}
+	var nodes []ast.ExprNode
+	flattenConjunctNodes(where, &nodes)
+	var out []dialect.ColRef
+	for _, c := range nodes {
+		nt, ok := c.(*ast.IsNullExpr)
+		if !ok || !nt.Not {
+			continue
+		}
+		cn, ok := nt.Expr.(*ast.ColumnNameExpr)
+		if !ok {
+			continue
+		}
+		out = append(out, dialect.ColRef{
+			Fields: columnPath(cn.Name), Loc: nt.OriginTextPosition(),
+		})
+	}
+	return out
+}
+
+func flattenConjunctNodes(e ast.ExprNode, out *[]ast.ExprNode) {
+	switch v := e.(type) {
+	case nil:
+		return
+	case *ast.ParenthesesExpr:
+		flattenConjunctNodes(v.Expr, out)
+	case *ast.BinaryOperationExpr:
+		if v.Op == opcode.LogicAnd {
+			flattenConjunctNodes(v.L, out)
+			flattenConjunctNodes(v.R, out)
+			return
+		}
+		*out = append(*out, v)
+	default:
+		*out = append(*out, e)
+	}
 }
 
 func (t *tree) TopConjunctLocs() []int {

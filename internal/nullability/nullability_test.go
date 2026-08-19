@@ -308,6 +308,99 @@ SELECT u.*, count(*) AS n FROM users AS u GROUP BY u.id, u.email, u.org_id;
 	assertNullable(t, got, []bool{false, false, true, true})
 }
 
+// ---- precision pack (design 05 §3a) ----------------------------------------
+
+// A skeleton depth-0 `IS NOT NULL` conjunct narrows past both catalog
+// nullability and outer-join null-extension: WHERE runs after joins
+// and the conjunct is present in every shape.
+func TestAnalyze_SkeletonIsNotNullNarrows(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u.org_id, o.name FROM users AS u
+LEFT JOIN orgs AS o ON o.id = u.org_id
+WHERE u.org_id IS NOT NULL AND o.name IS NOT NULL;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_id", 100, 3), col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{false, false})
+}
+
+// The (SrcRel, SrcAtt) key cannot tell two instances of one table
+// apart: with a self join, filtering ONE instance must not narrow —
+// the described column could come from the other.
+func TestAnalyze_IsNotNullSelfJoinNeverNarrows(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u2.org_id FROM users AS u1
+JOIN users AS u2 ON u2.id = u1.id
+WHERE u1.org_id IS NOT NULL;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_id", 100, 3),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// An OR-nested IS NOT NULL is not a depth-0 conjunct and must not
+// narrow.
+func TestAnalyze_IsNotNullInsideOrNeverNarrows(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u.org_id FROM users AS u
+WHERE u.org_id IS NOT NULL OR u.email = 'x';
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_id", 100, 3),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// Total expressions: data-independent never-NULL forms narrow; a
+// coalesce whose fallback is a column does not (F-doc counterexample:
+// NULL when all args are null).
+func TestAnalyze_TotalExpressions(t *testing.T) {
+	src := `-- name: Q :many
+SELECT
+  1 AS one,
+  EXISTS (SELECT 1 FROM orgs AS o WHERE o.id = u.org_id) AS has_org,
+  u.org_id IS NOT NULL AS tested,
+  coalesce(u.nickname, 'anon') AS nick,
+  coalesce(u.nickname, u.bio) AS both_cols,
+  NULL AS n
+FROM users AS u;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		{Name: "one"}, {Name: "has_org"}, {Name: "tested"},
+		{Name: "nick"}, {Name: "both_cols"}, {Name: "n"},
+	}}, nil)
+	assertNullable(t, got, []bool{false, false, false, false, true, true})
+}
+
+// Strict aggregates narrow only under a plain GROUP BY over a
+// provably non-null argument; every escape (no GROUP BY, nullable
+// argument, FILTER clause, window form) stays nullable.
+func TestAnalyze_StrictAggregates(t *testing.T) {
+	grouped := `-- name: Q :many
+SELECT u.status, sum(u.id) AS s, max(u.org_id) AS m,
+       sum(u.id) FILTER (WHERE u.id > 3) AS sf,
+       sum(u.id) OVER () AS sw
+FROM users AS u GROUP BY u.status, u.id;
+`
+	got := analyze(t, grouped, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("status", 100, 2), {Name: "s"}, {Name: "m"}, {Name: "sf"}, {Name: "sw"},
+	}}, nil)
+	// sum(id): non-null column + GROUP BY -> non-null.
+	// max(org_id): nullable argument -> nullable.
+	// FILTER can empty the aggregated input -> nullable.
+	// window form -> nullable.
+	assertNullable(t, got, []bool{false, false, true, true, true})
+
+	ungrouped := `-- name: Q :many
+SELECT sum(u.id) AS s FROM users AS u;
+`
+	got = analyze(t, ungrouped, dialect.Desc{Columns: []dialect.ColumnDesc{{Name: "s"}}}, nil)
+	// Empty input yields one NULL row without GROUP BY.
+	assertNullable(t, got, []bool{true})
+}
+
 // Reasons are part of the explain contract: each verdict names the
 // gate that produced it, so a conservative verdict is auditable.
 func TestAnalyzeVerdicts_Reasons(t *testing.T) {

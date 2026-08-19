@@ -84,7 +84,22 @@ type TargetItem struct {
 	Star      bool   // item is * or qualifier.*
 	Qualifier string // "u" for u.*; "" for bare *
 	FuncName  string // lowercased function name when the item is a bare call
-	Loc       int
+	// Total marks an expression that can never evaluate to NULL
+	// regardless of data: a non-NULL literal, EXISTS, an IS [NOT]
+	// NULL / boolean test, a non-null value function, a cast of a
+	// total expression, or coalesce with at least one total argument.
+	// Data-INDEPENDENT only — a column reference never makes an
+	// expression total (its nullability is the analyzer's job).
+	Total bool
+	// AggArg is the qualified path of the call's single bare-column
+	// argument (["u","org_id"] or ["org_id"]) when the item is a
+	// plain aggregate call over exactly one column with no FILTER
+	// clause and no OVER clause; nil otherwise. The nullability
+	// analyzer combines it with GROUP BY presence: an aggregate over
+	// a non-nullable column of a non-null-extended relation is
+	// non-null when every output row's group is non-empty.
+	AggArg []string
+	Loc    int
 }
 
 // Tree is the narrow dialect-AST facade the rules engine consumes.
@@ -128,6 +143,17 @@ type Tree interface {
 	// columns regardless of catalog NOT NULL, so SrcRel-based
 	// narrowing is unsound while one is present (design 05 §2a).
 	HasGroupingSets() bool
+	// HasGroupBy reports a statement-level GROUP BY clause (of any
+	// form). With one present — and no grouping sets — every output
+	// row aggregates a NON-EMPTY group, which is what lets strict
+	// aggregates over non-nullable columns narrow (design 05 §3a).
+	HasGroupBy() bool
+	// NotNullConjuncts returns the bare column reference of every
+	// depth-0 statement-level WHERE conjunct of the exact form
+	// `col IS NOT NULL`. Loc is the conjunct's byte offset in the
+	// parsed SQL — the analyzer uses it to require the conjunct to be
+	// SKELETON text (present in every shape) before narrowing.
+	NotNullConjuncts() []ColRef
 }
 
 // ParseError reports a dialect parse failure at a byte offset into the
