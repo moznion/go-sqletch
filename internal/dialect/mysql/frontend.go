@@ -600,6 +600,12 @@ type colRefVisitor struct {
 	// top-level select's FROM is never pushed (n == root).
 	scopes []string
 	marks  []int
+	// hidden stacks the FROM frames temporarily removed while a WITH
+	// clause's CTE bodies are walked: a non-lateral CTE body cannot see
+	// the FROM items of the select that defines it, so its own select's
+	// frame (pushed on Enter) is set aside for the duration of the WITH
+	// clause and restored on Leave.
+	hidden [][]string
 }
 
 func (v *colRefVisitor) Enter(n ast.Node) (ast.Node, bool) {
@@ -611,6 +617,19 @@ func (v *colRefVisitor) Enter(n ast.Node) (ast.Node, bool) {
 			v.subDepth++
 			v.marks = append(v.marks, len(v.scopes))
 			v.scopes = append(v.scopes, selectFromNames(x)...)
+		}
+	case *ast.WithClause:
+		// CTE bodies see only the enclosing scope, never the FROM names
+		// of the select that defines the WITH. Set aside that select's
+		// own frame (the current top frame) while its CTE bodies are
+		// walked; Leave(*ast.WithClause) restores it. The root select
+		// pushes no frame, so a top-level WITH has nothing to hide.
+		if len(v.marks) > 0 {
+			m := v.marks[len(v.marks)-1]
+			v.hidden = append(v.hidden, append([]string(nil), v.scopes[m:]...))
+			v.scopes = v.scopes[:m]
+		} else {
+			v.hidden = append(v.hidden, nil)
 		}
 	case *ast.ColumnNameExpr:
 		cr := dialect.ColRef{Loc: x.OriginTextPosition(), InSubquery: v.subDepth > 0}
@@ -648,6 +667,10 @@ func (v *colRefVisitor) Leave(n ast.Node) (ast.Node, bool) {
 			v.scopes = v.scopes[:v.marks[last]]
 			v.marks = v.marks[:last]
 		}
+	case *ast.WithClause:
+		last := len(v.hidden) - 1
+		v.scopes = append(v.scopes, v.hidden[last]...)
+		v.hidden = v.hidden[:last]
 	}
 	return n, true
 }

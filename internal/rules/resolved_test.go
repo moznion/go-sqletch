@@ -297,6 +297,56 @@ WHERE TRUE
 	}
 }
 
+// A join alias hides the inner relation names (PostgreSQL §7.2.1.2), so
+// an inner alias must NOT enter ScopeAliases: a reference through that
+// name inside the subquery is correlated to the same-named guarded
+// top-level relation and must still raise SQLETCH115. Over-collecting the
+// hidden inner names (the pre-fix behaviour) silently dropped the guard
+// demand and shipped a guard-off shape that only fails at runtime.
+func TestCheckResolved_R3_AliasedJoinHidesInnerNames(t *testing.T) {
+	src := `-- name: Bad :many
+SELECT u.id FROM users AS u
+@if-present(organization_id)
+JOIN orgs AS o ON o.id = u.org_id
+ AND o.id = :organization_id
+@endif
+WHERE TRUE
+  AND EXISTS (
+    SELECT 1 FROM (audits AS o JOIN users AS y ON y.id = o.user_id) AS j
+    WHERE o.id = u.id
+  )
+;
+`
+	diags := checkResolved(t, src)
+	if !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("join alias j hides inner audits o; correlated o.id must raise SQLETCH115, got %+v", diags)
+	}
+}
+
+// A schema-qualified reference (schema.table.column) can never be
+// alias-shadowed: a bare FROM alias carries no schema. So a three-field
+// correlated reference to a guarded top-level relation must raise
+// SQLETCH115 even when an inner subquery introduces a same-named alias.
+func TestCheckResolved_R3_SchemaQualifiedCorrelatedRef(t *testing.T) {
+	src := `-- name: Bad :many
+SELECT u.id FROM users AS u
+@if-present(organization_id)
+JOIN organization_users ON organization_users.user_id = u.id
+ AND organization_users.organization_id = :organization_id
+@endif
+WHERE TRUE
+  AND EXISTS (
+    SELECT 1 FROM audits AS organization_users
+    WHERE public.organization_users.user_id = u.id
+  )
+;
+`
+	diags := checkResolved(t, src)
+	if !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("schema-qualified public.organization_users.user_id cannot be alias-shadowed; want SQLETCH115, got %+v", diags)
+	}
+}
+
 // Two-level shadowing: the reference's qualifier is introduced by the
 // innermost subquery, so the union of enclosing subquery FROMs must
 // suppress the top-level guard demand.
