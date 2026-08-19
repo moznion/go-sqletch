@@ -20,17 +20,53 @@ type Frontend struct{}
 var _ dialect.Frontend = Frontend{}
 
 func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
+	r2b := runeToByteTable(sqlText)
 	p := rsql.NewParser(strings.NewReader(sqlText))
 	stmts, err := p.ParseStatements()
 	if err != nil {
-		return nil, toParseError(err)
+		return nil, toParseError(err, r2b)
 	}
-	return &tree{stmts: stmts}, nil
+	return &tree{stmts: stmts, r2b: r2b}, nil
 }
 
-func toParseError(err error) error {
+// runeToByteTable maps a rune index to its byte offset in s. rqlite/sql
+// reports positions as rune counts (its scanner advances the offset once
+// per ReadRune), but the dialect contract — dialect.RelRef.Loc and the
+// other Loc fields are documented byte offsets — and every downstream
+// fragment-range check (nullability skeleton/guard tests, R1/R3 spans,
+// the policy weaver) work in bytes against ast.FragRange. Without this
+// translation, a relation or conjunct that follows a multibyte rune is
+// reported left of its true byte position, so a guarded predicate can
+// read as skeleton text and silently narrow a nullable column. The
+// table has one entry per rune plus a trailing len(s), so a
+// one-past-the-end position maps to EOF.
+func runeToByteTable(s string) []int {
+	tbl := make([]int, 0, len(s)+1)
+	for i := range s { // range over a string yields each rune's start byte
+		tbl = append(tbl, i)
+	}
+	return append(tbl, len(s))
+}
+
+// runeToByte translates a single rqlite rune offset into a byte offset.
+// The -1 "no position" sentinel passes through unchanged; out-of-range
+// indices clamp to EOF (and a nil table degrades to identity so a
+// directly-constructed tree cannot panic).
+func runeToByte(r2b []int, off int) int {
+	if off < 0 || len(r2b) == 0 {
+		return off
+	}
+	if off >= len(r2b) {
+		return r2b[len(r2b)-1]
+	}
+	return r2b[off]
+}
+
+func (t *tree) b(off int) int { return runeToByte(t.r2b, off) }
+
+func toParseError(err error, r2b []int) error {
 	if pe, ok := errors.AsType[*rsql.Error](err); ok {
-		return &dialect.ParseError{Pos: pe.Pos.Offset, Msg: pe.Msg}
+		return &dialect.ParseError{Pos: runeToByte(r2b, pe.Pos.Offset), Msg: pe.Msg}
 	}
 	return &dialect.ParseError{Pos: 0, Msg: err.Error()}
 }
@@ -177,6 +213,10 @@ func (f Frontend) ProbeInsertValue(expr string) error {
 
 type tree struct {
 	stmts []rsql.Statement
+	// r2b maps a rune index (as rqlite reports positions) to a byte
+	// offset in the parsed SQL. Sub-facades share the parent's table
+	// because rqlite offsets stay absolute into the original SQL.
+	r2b []int
 }
 
 func (t *tree) StmtCount() int { return len(t.stmts) }
@@ -229,6 +269,9 @@ func (t *tree) Relations() []dialect.RelRef {
 				Table: s.Table.Name, Loc: s.Table.NamePos.Offset, Join: dialect.JoinBase,
 			})
 		}
+	}
+	for i := range out {
+		out[i].Loc = t.b(out[i].Loc)
 	}
 	return out
 }
@@ -292,9 +335,10 @@ func collectSource(src rsql.Source, join dialect.JoinType, nullable bool, out *[
 
 // subTree wraps a subquery (a derived-table body or a CTE body) in
 // its own facade for recursive analysis. rqlite offsets stay absolute
-// into the original sql, so fragment-range checks keep working.
-func subTree(sel *rsql.SelectStatement) *tree {
-	return &tree{stmts: []rsql.Statement{sel}}
+// into the original sql, so the sub-facade shares the parent's
+// rune→byte table and fragment-range checks keep working.
+func subTree(sel *rsql.SelectStatement, r2b []int) *tree {
+	return &tree{stmts: []rsql.Statement{sel}, r2b: r2b}
 }
 
 // HasSetOperation reports a compound select (UNION/INTERSECT/EXCEPT).
@@ -321,18 +365,18 @@ func (t *tree) HasUnresolvableProvenance() bool {
 func (t *tree) DerivedRels() []dialect.SubRel {
 	var out []dialect.SubRel
 	if s := t.sel(); s != nil && s.Source != nil {
-		collectDerivedSource(s.Source, false, &out)
+		collectDerivedSource(s.Source, false, t.r2b, &out)
 	}
 	return out
 }
 
-func collectDerivedSource(src rsql.Source, nullable bool, out *[]dialect.SubRel) {
+func collectDerivedSource(src rsql.Source, nullable bool, r2b []int, out *[]dialect.SubRel) {
 	switch v := src.(type) {
 	case *rsql.JoinClause:
 		jt := joinType(v.Operator)
 		rightNullable := nullable || jt == dialect.JoinLeft
-		collectDerivedSource(v.X, nullable, out)
-		collectDerivedSource(v.Y, rightNullable, out)
+		collectDerivedSource(v.X, nullable, r2b, out)
+		collectDerivedSource(v.Y, rightNullable, r2b, out)
 	case *rsql.ParenSource:
 		if sub, ok := v.X.(*rsql.SelectStatement); ok {
 			alias := ""
@@ -340,13 +384,13 @@ func collectDerivedSource(src rsql.Source, nullable bool, out *[]dialect.SubRel)
 				alias = v.Alias.Name
 			}
 			*out = append(*out, dialect.SubRel{
-				Alias: alias, NullableSide: nullable, Tree: subTree(sub),
+				Alias: alias, NullableSide: nullable, Tree: subTree(sub, r2b),
 			})
 			return
 		}
-		collectDerivedSource(v.X, nullable, out)
+		collectDerivedSource(v.X, nullable, r2b, out)
 	case *rsql.SelectStatement:
-		*out = append(*out, dialect.SubRel{NullableSide: nullable, Tree: subTree(v)})
+		*out = append(*out, dialect.SubRel{NullableSide: nullable, Tree: subTree(v, r2b)})
 	}
 }
 
@@ -365,7 +409,7 @@ func (t *tree) CTEs() []dialect.CTEDef {
 			def.Name = c.TableName.Name
 		}
 		if c.Select != nil {
-			def.Tree = subTree(c.Select)
+			def.Tree = subTree(c.Select, t.r2b)
 		}
 		out = append(out, def)
 	}
@@ -415,6 +459,9 @@ func (t *tree) DeepTables() []dialect.TableRef {
 		}
 		w.walkSelect(s.Select)
 		w.walkReturning(s.ReturningClause)
+	}
+	for i := range w.out {
+		w.out[i].Loc = t.b(w.out[i].Loc)
 	}
 	return w.out
 }
@@ -567,6 +614,9 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 				w.walkResultColumn(rc, false)
 			}
 		}
+	}
+	for i := range w.out {
+		w.out[i].Loc = t.b(w.out[i].Loc)
 	}
 	return w.out
 }
@@ -791,6 +841,9 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 		}
 		out = append(out, item)
 	}
+	for i := range out {
+		out[i].Loc = t.b(out[i].Loc)
+	}
 	return out
 }
 
@@ -806,7 +859,7 @@ func (t *tree) TopConjunctLocs() []int {
 	}
 	var locs []int
 	flattenConjuncts(where, &locs)
-	return locs
+	return t.bLocs(locs)
 }
 
 func (t *tree) HavingConjunctLocs() []int {
@@ -816,6 +869,15 @@ func (t *tree) HavingConjunctLocs() []int {
 	}
 	var locs []int
 	flattenConjuncts(sel.HavingExpr, &locs)
+	return t.bLocs(locs)
+}
+
+// bLocs translates a slice of rqlite rune offsets to byte offsets
+// in place and returns it.
+func (t *tree) bLocs(locs []int) []int {
+	for i := range locs {
+		locs[i] = t.b(locs[i])
+	}
 	return locs
 }
 
@@ -856,6 +918,7 @@ func (t *tree) NotNullConjuncts() []dialect.ColRef {
 		default:
 			continue
 		}
+		ref.Loc = t.b(ref.Loc)
 		out = append(out, ref)
 	}
 	return out
@@ -941,7 +1004,7 @@ func (t *tree) OrderByLocs() []int {
 		}
 		locs = append(locs, exprPos(e))
 	}
-	return locs
+	return t.bLocs(locs)
 }
 
 // HasDistinctOn: SQLite has no DISTINCT ON.
