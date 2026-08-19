@@ -64,6 +64,13 @@ func FuzzScan(f *testing.F) {
 	f.Add("-- name: Q :many\nSELECT 1 FROM t\n@order-by(s)\n@key(a)\nt.a\n@default\nORDER BY t.id\n@end;")
 	f.Add("-- name: R :many\nSELECT 1 FROM t WHERE TRUE\n@when(f = false)\n  AND t.v\n@end;")
 
+	// Line-ending and byte-order-mark edges: a CR-only file must not
+	// swallow the whole source into one line comment, and a leading BOM
+	// must be skipped rather than lexed as stray content.
+	f.Add("-- name: S :one\rSELECT 1;\r")
+	f.Add("-- name: T :one\r\nSELECT 1;\r\n")
+	f.Add("\xef\xbb\xbf-- name: U :one\nSELECT 1;")
+
 	f.Fuzz(func(t *testing.T, src string) {
 		for _, p := range fuzzProfiles {
 			file, diags := NewScanner(p.profile).ScanFile("fuzz.sql", []byte(src))

@@ -64,7 +64,7 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 	// SQLite line comments need no whitespace after the dashes.
 	case c == '-' && pos+1 < len(src) && src[pos+1] == '-':
 		i := pos + 2
-		for i < len(src) && src[i] != '\n' {
+		for i < len(src) && src[i] != '\n' && src[i] != '\r' {
 			i++
 		}
 		return mk(dialect.KindLineComment, i)

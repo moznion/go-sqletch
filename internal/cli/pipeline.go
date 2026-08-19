@@ -703,9 +703,23 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 // PrintDiags renders diagnostics in text or JSON to w.
 func PrintDiags(w io.Writer, res *Result, jsonFormat bool) {
 	diagnostics.Sort(res.Diags)
+	// One line index per source file, reused across all of that file's
+	// diagnostics: byte offset → (line, col) is then O(log lines) rather
+	// than an O(offset) rescan per diagnostic (a file with many
+	// diagnostics would otherwise be O(n·d) to render).
+	lineMaps := map[string]*diagnostics.LineMap{}
+	lineMapFor := func(file string) *diagnostics.LineMap {
+		lm, ok := lineMaps[file]
+		if !ok {
+			lm = diagnostics.NewLineMap(res.Sources[file])
+			lineMaps[file] = lm
+		}
+		return lm
+	}
 	for _, d := range res.Diags {
+		lm := lineMapFor(d.Span.File)
 		if jsonFormat {
-			line, col := diagnostics.LineCol(res.Sources[d.Span.File], d.Span.Start)
+			line, col := lm.LineCol(d.Span.Start)
 			enc, _ := json.Marshal(map[string]any{
 				"code": d.Code, "severity": d.Severity.String(),
 				"file": d.Span.File, "line": line, "col": col,
@@ -714,6 +728,6 @@ func PrintDiags(w io.Writer, res *Result, jsonFormat bool) {
 			fmt.Fprintln(w, string(enc))
 			continue
 		}
-		fmt.Fprintln(w, d.RenderExcerpt(res.Sources[d.Span.File]))
+		fmt.Fprintln(w, d.RenderExcerptWith(res.Sources[d.Span.File], lm))
 	}
 }
