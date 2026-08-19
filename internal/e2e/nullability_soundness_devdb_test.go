@@ -209,6 +209,9 @@ func TestNullabilitySoundnessAdversarial(t *testing.T) {
 
 const mysqlNullSoundSchemaSQL = `
 DROP VIEW IF EXISTS members_orgs;
+DROP VIEW IF EXISTS members_rollup;
+DROP VIEW IF EXISTS members_union;
+DROP VIEW IF EXISTS members_empty_max;
 CREATE TABLE orgs (
     id   BIGINT PRIMARY KEY,
     name VARCHAR(64) NOT NULL
@@ -221,6 +224,15 @@ CREATE TABLE members (
 CREATE VIEW members_orgs AS
   SELECT m.id AS member_id, m.email, o.name AS org_name
   FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id;
+CREATE VIEW members_rollup AS
+  SELECT m.email, count(*) AS n
+  FROM members AS m GROUP BY m.email WITH ROLLUP;
+CREATE VIEW members_union AS
+  SELECT m.id AS v FROM members AS m
+  UNION ALL
+  SELECT m2.org_id FROM members AS m2;
+CREATE VIEW members_empty_max AS
+  SELECT max(m.id) AS m FROM members AS m WHERE m.id > 1000000;
 `
 
 var mysqlNullSoundCases = []struct {
@@ -277,6 +289,30 @@ GROUP BY m.email WITH ROLLUP;
 	// No union case: the MySQL dialect maps TiDB's SetOprStmt to
 	// StmtOther, so R1 (SQLETCH103) rejects top-level set operations
 	// outright — the vector cannot occur.
+	{
+		name: "view_body_with_rollup",
+		src: `-- name: ViaRollupView :many
+SELECT v.email, v.n
+FROM members_rollup AS v;
+`,
+		note: "the view's WITH ROLLUP nulls email in super-aggregate rows; is information_schema is_nullable trustworthy?",
+	},
+	{
+		name: "view_body_with_union",
+		src: `-- name: ViaUnionView :many
+SELECT v.v
+FROM members_union AS v;
+`,
+		note: "the view's second UNION branch supplies nullable org_id; is information_schema is_nullable trustworthy?",
+	},
+	{
+		name: "view_body_empty_aggregate",
+		src: `-- name: ViaEmptyMaxView :many
+SELECT v.m
+FROM members_empty_max AS v;
+`,
+		note: "max() over an empty input yields one NULL row; is information_schema is_nullable trustworthy?",
+	},
 }
 
 func TestMySQLNullabilitySoundnessAdversarial(t *testing.T) {

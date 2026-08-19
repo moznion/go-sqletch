@@ -79,7 +79,12 @@ SrcRel narrowing is therefore gated on **provenance trust**:
 Views need no special case under this rule: PostgreSQL and MySQL
 report the *view's own* identity (whose catalog rows carry the
 engine's per-view nullability), and SQLite resolves through to a base
-table that then fails the presence check.
+table that then fails the presence check. MySQL's engine-computed
+view-column nullability is the one place the analysis trusts a value
+the engine derived rather than declared; the adversarial suite pins
+that trust with view bodies containing WITH ROLLUP, UNION, and an
+empty-input aggregate (all correctly reported nullable by
+information_schema).
 
 The index-based expression whitelist (rule 3) is likewise gated on
 exact alignment: any star target item, or a length mismatch between
