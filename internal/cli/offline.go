@@ -34,6 +34,70 @@ type OfflineChecker struct {
 	// catalog), so the LSP runs it too.
 	pols     []policy.Policy
 	polDiags []diagnostics.Diagnostic
+
+	// catMemo caches the loaded catalog across Checks so a keystroke
+	// does not re-glob, re-read, and re-hash every schema file (and
+	// re-parse the catalog JSON) when nothing changed. It is validated
+	// by a cheap stat signature of the schema files plus the catalog
+	// file, so a schema edit or a `generate` run (which rewrites the
+	// catalog) refreshes it; the per-query oracle Descs are still read
+	// fresh every Check, so a cold→warm cache transition is picked up
+	// with no stale-diagnostic risk.
+	catMemo *catalogMemo
+	// schemaReads counts full schema-file reads (test seam for the
+	// memo: an unchanged Check must not read schema files again).
+	schemaReads int
+}
+
+// statSig is a file's cheap change signature: size + mod time, or
+// absent. Used only for in-process memo invalidation, never emitted.
+type statSig struct {
+	size   int64
+	modNs  int64
+	exists bool
+}
+
+func statOf(path string) statSig {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return statSig{}
+	}
+	return statSig{size: fi.Size(), modNs: fi.ModTime().UnixNano(), exists: true}
+}
+
+type schemaStat struct {
+	path string
+	sig  statSig
+}
+
+type catalogMemo struct {
+	schema  []schemaStat
+	catPath string
+	catSig  statSig
+	cat     *cache.Catalog
+	store   *cache.Store
+	fp      string
+	ok      bool
+}
+
+func statSchema(paths []string) []schemaStat {
+	out := make([]schemaStat, len(paths))
+	for i, p := range paths {
+		out[i] = schemaStat{path: p, sig: statOf(p)}
+	}
+	return out
+}
+
+func sameSchemaStat(a, b []schemaStat) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type fileMemo struct {
@@ -215,6 +279,19 @@ func (c *OfflineChecker) loadCatalog() (*cache.Catalog, *cache.Store, string, bo
 	if err != nil {
 		return nil, nil, "", false
 	}
+	schema := statSchema(schemaPaths)
+	// Fast path: schema files unchanged AND the catalog file's presence
+	// and content are unchanged (a `generate` run rewrites it, and a
+	// cold→warm transition makes it appear). Neither reads any schema
+	// file nor re-parses the catalog JSON.
+	if m := c.catMemo; m != nil && sameSchemaStat(m.schema, schema) && statOf(m.catPath) == m.catSig {
+		if !m.ok {
+			return nil, nil, "", false
+		}
+		return m.cat, m.store, m.fp, true
+	}
+
+	c.schemaReads += len(schemaPaths)
 	var schemaFiles []cache.SchemaFile
 	for _, p := range schemaPaths {
 		content, err := os.ReadFile(p)
@@ -225,8 +302,21 @@ func (c *OfflineChecker) loadCatalog() (*cache.Catalog, *cache.Store, string, bo
 		schemaFiles = append(schemaFiles, cache.SchemaFile{Path: rel, Content: content})
 	}
 	fp := cache.Fingerprint(c.cfg.Dialect, c.cfg.ServerVersion, schemaFiles)
-	store := cache.NewStore(c.cfg.Abs(c.cfg.Cache.Path))
+	cacheDir := c.cfg.Abs(c.cfg.Cache.Path)
+	store := cache.NewStore(cacheDir)
+	catPath := filepath.Join(cacheDir, cache.CatalogFileName(fp))
 	cat, ok := store.LoadCatalog(fp)
+	// Record the memo AFTER the load so catSig reflects the file we just
+	// read (present or absent); a later appearance/rewrite invalidates.
+	c.catMemo = &catalogMemo{
+		schema:  schema,
+		catPath: catPath,
+		catSig:  statOf(catPath),
+		cat:     cat,
+		store:   store,
+		fp:      fp,
+		ok:      ok,
+	}
 	if !ok {
 		return nil, nil, "", false
 	}

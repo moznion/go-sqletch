@@ -68,14 +68,52 @@ func newConn(r io.Reader, w io.Writer) *conn {
 // will send and far below a size that threatens the process.
 const maxContentLength = 64 << 20
 
+// maxHeaderBytes bounds the whole header block (all lines up to the
+// blank separator) of one inbound message, and maxHeaderLines bounds
+// the line count. The body already has maxContentLength; without these
+// the header phase does not, so a peer streaming bytes that never
+// contain '\n' would grow the read buffer until an out-of-memory abort
+// — the exact failure the body ceiling prevents. Real LSP headers are
+// two short lines, so 8 KiB / 64 lines is far above any legitimate
+// frame and far below a size that threatens the process.
+const (
+	maxHeaderBytes = 8 << 10
+	maxHeaderLines = 64
+)
+
+// readHeaderLine reads one header line (through the terminating '\n',
+// which it discards) while consuming at most *budget bytes across the
+// whole header block. It errors instead of accumulating without bound.
+func (c *conn) readHeaderLine(budget *int) (string, error) {
+	var sb strings.Builder
+	for {
+		if *budget <= 0 {
+			return "", fmt.Errorf("lsp: header block exceeds the %d-byte limit", maxHeaderBytes)
+		}
+		b, err := c.r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		*budget--
+		if b == '\n' {
+			return sb.String(), nil
+		}
+		sb.WriteByte(b)
+	}
+}
+
 func (c *conn) read() (*Message, error) {
 	length := -1
-	for {
-		line, err := c.r.ReadString('\n')
+	budget := maxHeaderBytes
+	for lines := 0; ; lines++ {
+		if lines >= maxHeaderLines {
+			return nil, fmt.Errorf("lsp: header block exceeds the %d-line limit", maxHeaderLines)
+		}
+		line, err := c.readHeaderLine(&budget)
 		if err != nil {
 			return nil, err
 		}
-		line = strings.TrimRight(line, "\r\n")
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			break
 		}
