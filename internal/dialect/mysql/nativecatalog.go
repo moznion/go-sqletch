@@ -106,7 +106,12 @@ func BuildCatalog(schema []cache.SchemaFile) (*cache.Catalog, error) {
 	for name := range tables {
 		names = append(names, name)
 	}
-	sort.Strings(names) // information_schema ORDER BY table_name
+	// Byte-order table names to assign synthetic OIDs. This must match
+	// the server snapshot's ordering exactly (design 15 §3, byte-identity
+	// across backends); the server query orders by BINARY table_name, so
+	// a byte-wise sort here — not a case-insensitive collation — is what
+	// keeps mixed-case schemas ("Zebra" vs "apple") agreeing.
+	sort.Strings(names)
 	cat := &cache.Catalog{}
 	for i, name := range names {
 		t := tables[name]

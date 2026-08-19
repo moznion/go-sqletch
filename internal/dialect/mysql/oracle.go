@@ -125,11 +125,23 @@ SELECT c.table_name,
         OR c.extra LIKE '%DEFAULT_GENERATED%') AS has_default
 FROM information_schema.columns AS c
 WHERE c.table_schema = DATABASE()
-ORDER BY c.table_name, c.ordinal_position`
+ORDER BY BINARY c.table_name, c.ordinal_position`
 
 // Snapshot dumps the current database's columns. MySQL has no OIDs;
 // tables get stable synthetic ones (1-based in table-name order, the
 // query's ORDER BY), and column att numbers are ordinal positions.
+//
+// The ORDER BY sorts table_name as BINARY (raw byte order) rather than
+// under information_schema's default case-insensitive collation. That
+// makes the synthetic OID assignment byte-identical to the native
+// catalog builder (internal/dialect/mysql/nativecatalog.go), which
+// orders names with Go's sort.Strings — a byte-wise comparison. Under
+// the collation default the two backends assigned different OIDs to
+// mixed-case schemas (e.g. "Zebra" vs "apple": collation → apple,
+// Zebra; bytes → Zebra, apple), silently violating the hard
+// byte-identity-across-backends invariant (design 15 §3). BINARY is
+// used instead of a COLLATE clause because table_name may be utf8mb3
+// on some servers, for which a utf8mb4 collation name is rejected.
 func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
