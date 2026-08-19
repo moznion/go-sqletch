@@ -4,6 +4,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -49,16 +50,23 @@ func FilterUsersUnscoped() runtime.Tree { return runtime.Unscoped() }
 func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams) ([]FilterUsersRow, error) {
 	var key runtime.ShapeKey
 	if scope.IsZero() {
+		q.observeReject(ctx, "FilterUsers", runtime.ErrFilterRequired)
 		return nil, runtime.ErrFilterRequired
 	}
 	sqlText, binds, err := q.cache.GetTree("FilterUsers", filterUsersFrags, key, scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
 	if err != nil {
+		q.observeReject(ctx, "FilterUsers", err)
 		return nil, err
 	}
 	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
 	q.hookTree(key, scope, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -66,9 +74,11 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	for rows.Next() {
 		var i FilterUsersRow
 		if err := rows.Scan(&i.ID, &i.Email); err != nil {
+			q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

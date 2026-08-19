@@ -248,6 +248,39 @@ func BenchmarkGeneratedCallParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkGeneratedCallParallelObserved is BenchmarkGeneratedCallParallel
+// with metrics enabled: the delta is the price of observability — the
+// per-entry hit counter's exclusive cache-line store plus the observer
+// call — paid only once SetObserver/Stats has been used (doc 18 D4).
+func BenchmarkGeneratedCallParallelObserved(b *testing.B) {
+	frags := benchFrags()
+	cache := NewComposedCache(256)
+	cache.SetObserver(&countingObserver{})
+	orgID := int64(42)
+	status := "active"
+	limit := int64(100)
+	for g := uint64(0); g < 4; g++ {
+		cache.Get("SearchUsers", frags, ShapeKey{Guards: g, Choices: []uint8{1}})
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		var localSQL string
+		var localArgs []any
+		var g uint64
+		for pb.Next() {
+			key := ShapeKey{Guards: g % 4, Choices: []uint8{1}}
+			sqlText, argIdx := cache.Get("SearchUsers", frags, key)
+			args := BuildArgs(argIdx, []any{&orgID, &status, nil, nil, limit})
+			localSQL = sqlText
+			localArgs = args
+			g++
+		}
+		goruntime.KeepAlive(localSQL)
+		goruntime.KeepAlive(localArgs)
+	})
+}
+
 // BenchmarkCacheGet isolates the cache lookup from key construction and
 // arg materialization.
 func BenchmarkCacheGet(b *testing.B) {

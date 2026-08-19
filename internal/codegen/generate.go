@@ -3,12 +3,14 @@ package codegen
 import (
 	"fmt"
 	"go/format"
+	"math"
 	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -73,6 +75,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	fileStems := map[string]string{}        // generated file stem -> query
 	policyTypes := map[string]*policyType{} // named type -> policy parameter
 	var querier []string
+	var shapeSpaces []string // rendered ShapeSpace entries, in query order
 	sigImports := map[string]bool{}
 
 	for _, in := range sorted {
@@ -99,6 +102,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		fileStems[stem] = in.Q.Name
 		files[stem+".sql.gen.go"] = src
 		querier = append(querier, sig)
+		shapeSpaces = append(shapeSpaces, shapeSpaceEntry(in.Q, opts.Style))
 	}
 
 	// A policy type is declared once for the package, so a per-query
@@ -121,10 +125,11 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		if anyFilterTree(sorted) {
 			treeHook = treeHookFunc
 		}
+		space := shapeSpaceVar(shapeSpaces)
 		if opts.Style == runtime.StyleQuestion {
-			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package, treeHook))
+			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package, treeHook, space))
 		} else {
-			files["db.gen.go"] = []byte(dbFile(opts.Package, treeHook))
+			files["db.gen.go"] = []byte(dbFile(opts.Package, treeHook, space))
 		}
 		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier, sigImports))
 		if len(policyTypes) > 0 {
@@ -426,11 +431,13 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 
 	// ---- render ----------------------------------------------------------
 	// Imports must be complete before the header is written: the
-	// choose/order error paths use fmt, and :maybe-one's no-row branch
-	// needs the Option package plus the driver's no-rows sentinel.
+	// choose/order error paths use fmt, the observer's exec clock uses
+	// time in every method body, and :maybe-one's no-row branch needs
+	// the Option package plus the driver's no-rows sentinel.
 	if len(chooses) > 0 || len(orders) > 0 {
 		g.imports["fmt"] = true
 	}
+	g.imports["time"] = true
 	if q.Annotation == template.AnnotationMaybeOne {
 		g.addImport(optionalImport)
 		g.sigImports[optionalImport] = true
@@ -863,7 +870,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			ords = append(ords, ord)
 			fmt.Fprintf(w, "\t%s, err := runtime.ChooseOrdinal(int(arg.%s), %d, %v)\n",
 				ord, GoName(cm.c.Param), cm.numNamed, cm.c.Default != nil)
-			fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
+			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
+				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
 		}
 		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
 	}
@@ -875,7 +883,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			seqs = append(seqs, seq)
 			fmt.Fprintf(w, "\t%s, err := runtime.OrderSeq(arg.%s, %d)\n",
 				seq, GoName(om.o.Param), len(om.o.Keys))
-			fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
+			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
+				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
 		}
 		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
 	}
@@ -924,7 +933,8 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		if filter.Required {
 			// The argument's type keeps `nil` from compiling; this
 			// refuses the one zero that still can, `runtime.Tree{}`.
-			fmt.Fprintf(w, "\tif %s.IsZero() {\n\t\t%s\n\t}\n", treeField, errRet("runtime.ErrFilterRequired"))
+			fmt.Fprintf(w, "\tif %s.IsZero() {\n\t\tq.observeReject(ctx, %q, runtime.ErrFilterRequired)\n\t\t%s\n\t}\n",
+				treeField, q.Name, errRet("runtime.ErrFilterRequired"))
 		}
 		// The tree's `;t=` key segment is NOT derived here: the cache
 		// derives it authoritatively, and deriving it a second time for
@@ -936,17 +946,17 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		}
 		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.%s(%s%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
 			method, styleArg, q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
 			strings.Join(vals, ", "), treeField)
 	case g.in.ExpandedShapes != nil:
 		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
-		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
 	case g.style == runtime.StyleQuestion:
 		// The binds path covers slice-element expansion (@in).
 		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, %q, %s, key)\n", q.Name, fragsVar)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
 		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, nil)\n", strings.Join(vals, ", "))
 	default:
 		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
@@ -957,15 +967,20 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	// not pay for the canonical encoding on every call. A filter tree
 	// goes through hookTree, which folds in the `;t=` segment there for
 	// the same reason.
+	filterField := ""
 	if filter != nil {
-		treeField := "arg." + GoName(filter.Param)
+		filterField = "arg." + GoName(filter.Param)
 		if e := argExpr[filter.Param]; e != "" {
-			treeField = e
+			filterField = e
 		}
-		fmt.Fprintf(w, "\tq.hookTree(key, %s, sqlText)\n", treeField)
+		fmt.Fprintf(w, "\tq.hookTree(key, %s, sqlText)\n", filterField)
 	} else {
 		fmt.Fprint(w, "\tq.hook(key, sqlText)\n")
 	}
+	// The exec clock starts only for observed calls: time.Now is pure
+	// waste ahead of an unobserved query. (The time import is declared
+	// in emit, ahead of the header.)
+	fmt.Fprint(w, "\tvar execStart time.Time\n\tif q.obs != nil {\n\t\texecStart = time.Now()\n\t}\n")
 
 	// Nullable columns scan through a *T temporary and convert with
 	// optional.FromNillable afterwards: the driver keeps seeing exactly
@@ -1008,29 +1023,44 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		return strings.Join(refs, ", ")
 	}
 
-	query, queryRow, exec := "Query", "QueryRow", "Exec"
+	query, queryRow := "Query", "QueryRow"
 	if g.style == runtime.StyleQuestion {
-		query, queryRow, exec = "QueryContext", "QueryRowContext", "ExecContext"
+		query, queryRow = "QueryContext", "QueryRowContext"
+	}
+	// A @filter-tree query's exec event routes through observeExecTree,
+	// which folds the `;t=` key segment in under the observer guard —
+	// the call site itself must not re-derive it (same discipline as
+	// hookTree, and the test that pins it).
+	observe := func(indent, rows, errExpr string) string {
+		if filter != nil {
+			return fmt.Sprintf("%sq.observeExecTree(ctx, %q, key, %s, execStart, %s, %s)\n",
+				indent, q.Name, filterField, rows, errExpr)
+		}
+		return fmt.Sprintf("%sq.observeExec(ctx, %q, key, execStart, %s, %s)\n", indent, q.Name, rows, errExpr)
 	}
 	switch q.Annotation {
 	case template.AnnotationMany:
 		fmt.Fprintf(w, "\trows, err := q.db.%s(ctx, sqlText, args...)\n", query)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\t%s\n\t}\n", errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n%s\t\t%s\n\t}\n", observe("\t\t", "-1", "err"), errRet("err"))
 		fmt.Fprint(w, "\tdefer rows.Close()\n")
 		fmt.Fprintf(w, "\tvar items []%s\n", rowName)
 		fmt.Fprint(w, "\tfor rows.Next() {\n")
 		fmt.Fprintf(w, "\t\tvar i %s\n", rowName)
 		fmt.Fprint(w, declTemps("\t\t"))
-		fmt.Fprintf(w, "\t\tif err := rows.Scan(%s); err != nil {\n\t\t\treturn nil, err\n\t\t}\n", scanList())
+		fmt.Fprintf(w, "\t\tif err := rows.Scan(%s); err != nil {\n%s\t\t\treturn nil, err\n\t\t}\n",
+			scanList(), observe("\t\t\t", "-1", "err"))
 		fmt.Fprint(w, assignTemps("\t\t"))
 		fmt.Fprint(w, "\t\titems = append(items, i)\n\t}\n")
+		fmt.Fprint(w, observe("\t", "int64(len(items))", "rows.Err()"))
 		fmt.Fprint(w, "\treturn items, rows.Err()\n")
 	case template.AnnotationOne:
 		fmt.Fprintf(w, "\trow := q.db.%s(ctx, sqlText, args...)\n", queryRow)
 		fmt.Fprint(w, "\tvar i "+rowName+"\n")
 		fmt.Fprint(w, declTemps("\t"))
-		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n\t\treturn zero, err\n\t}\n", scanList())
+		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n%s\t\treturn zero, err\n\t}\n",
+			scanList(), observe("\t\t", "-1", "err"))
 		fmt.Fprint(w, assignTemps("\t"))
+		fmt.Fprint(w, observe("\t", "1", "nil"))
 		fmt.Fprint(w, "\treturn i, nil\n")
 	case template.AnnotationMaybeOne:
 		noRows := "pgx.ErrNoRows"
@@ -1041,23 +1071,42 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		fmt.Fprint(w, "\tvar i "+rowName+"\n")
 		fmt.Fprint(w, declTemps("\t"))
 		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n", scanList())
-		fmt.Fprintf(w, "\t\tif errors.Is(err, %s) {\n\t\t\treturn zero, nil\n\t\t}\n", noRows)
-		fmt.Fprint(w, "\t\treturn zero, err\n\t}\n")
+		// The no-row branch is a successful zero-row execution, not an
+		// error: the exec event reports rows 0 with a nil error.
+		fmt.Fprintf(w, "\t\tif errors.Is(err, %s) {\n%s\t\t\treturn zero, nil\n\t\t}\n",
+			noRows, observe("\t\t\t", "0", "nil"))
+		fmt.Fprintf(w, "%s\t\treturn zero, err\n\t}\n", observe("\t\t", "-1", "err"))
 		fmt.Fprint(w, assignTemps("\t"))
+		fmt.Fprint(w, observe("\t", "1", "nil"))
 		fmt.Fprint(w, "\treturn optional.Some(i), nil\n")
 	case template.AnnotationExecRows:
 		if g.style == runtime.StyleQuestion {
 			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
-			fmt.Fprint(w, "\tif err != nil {\n\t\treturn 0, err\n\t}\n")
-			fmt.Fprint(w, "\treturn res.RowsAffected()\n")
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tn, rerr := res.RowsAffected()\n\tif rerr != nil {\n%s\t\treturn 0, rerr\n\t}\n",
+				observe("\t\t", "-1", "rerr"))
+			fmt.Fprint(w, observe("\t", "n", "nil"))
+			fmt.Fprint(w, "\treturn n, nil\n")
 		} else {
 			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
-			fmt.Fprint(w, "\tif err != nil {\n\t\treturn 0, err\n\t}\n")
-			fmt.Fprint(w, "\treturn tag.RowsAffected(), nil\n")
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprint(w, "\tn := tag.RowsAffected()\n")
+			fmt.Fprint(w, observe("\t", "n", "nil"))
+			fmt.Fprint(w, "\treturn n, nil\n")
 		}
 	default: // exec
-		fmt.Fprintf(w, "\t_, err := q.db.%s(ctx, sqlText, args...)\n", exec)
-		fmt.Fprint(w, "\treturn err\n")
+		if g.style == runtime.StyleQuestion {
+			// res.RowsAffected can round-trip on exotic drivers, so the
+			// helper consults it only when an observer is installed.
+			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tq.observeExecResult(ctx, %q, key, execStart, res)\n", q.Name)
+		} else {
+			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprint(w, observe("\t", "tag.RowsAffected()", "nil"))
+		}
+		fmt.Fprint(w, "\treturn nil\n")
 	}
 	fmt.Fprint(w, "}\n")
 	return sig
@@ -1076,7 +1125,66 @@ func (q *Queries) hookTree(key runtime.ShapeKey, t runtime.Tree, sql string) {
 		q.onQuery(key.String(), sql)
 	}
 }
+
+// observeExecTree is observeExec for a @filter-tree query: the tree's
+// key segment is folded in here, under the observer guard, so an
+// unobserved call never encodes its tree a second time (the same
+// trade hookTree makes).
+func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime.ShapeKey, t runtime.Tree, start time.Time, rows int64, err error) {
+	if q.obs != nil {
+		key.Trees = []string{t.Encode()}
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
+	}
+}
 `
+
+// shapeSpaceEntry renders one query's ShapeSpace registry line. The
+// enumerable count is internal/shape.Count — guard sets × @choose
+// ordinals × @order-by selections, the PostgreSQL view in which @in
+// adds no dimension — saturated to uint64. Unbounded dimensions
+// (@filter-tree structure always; @in arity on expanding dialects)
+// are flagged, never folded into the number.
+func shapeSpaceEntry(q *template.QueryTemplate, style runtime.Style) string {
+	cnt := shape.Count(q)
+	enumerable := uint64(math.MaxUint64)
+	exact := cnt.IsUint64()
+	if exact {
+		enumerable = cnt.Uint64()
+	}
+	unbounded := false
+	for _, it := range q.Items {
+		switch it.(type) {
+		case *template.FilterTree:
+			unbounded = true
+		case *template.InExpr:
+			if style == runtime.StyleQuestion {
+				unbounded = true
+			}
+		}
+	}
+	return fmt.Sprintf("\t%q: {Enumerable: %d, Exact: %v, Unbounded: %v},",
+		q.Name, enumerable, exact, unbounded)
+}
+
+// shapeSpaceVar assembles the registry (entries arrive in sorted query
+// order — the caller iterates the sorted inputs).
+func shapeSpaceVar(entries []string) string {
+	var b strings.Builder
+	b.WriteString(`// ShapeSpace describes each query's reachable shape space, computed
+// at generate time (design doc 18): the enumerable dimensions' shape
+// count, whether that count is exact (large @order-by permutation
+// spaces saturate at MaxUint64), and whether unbounded dimensions
+// exist (@filter-tree structure; @in arity on expanding dialects) —
+// under which used-vs-reachable coverage is a floor, never a ratio.
+var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
+`)
+	for _, e := range entries {
+		b.WriteString(e)
+		b.WriteString("\n")
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
 
 func anyFilterTree(queries []QueryInput) bool {
 	for _, in := range queries {
@@ -1089,13 +1197,14 @@ func anyFilterTree(queries []QueryInput) bool {
 	return false
 }
 
-func dbFile(pkg string, treeHook string) string {
+func dbFile(pkg string, treeHook string, shapeSpace string) string {
 	return fmt.Sprintf(`// Code generated by sqletch. DO NOT EDIT.
 
 package %s
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -1115,6 +1224,7 @@ type Queries struct {
 	db      DBTX
 	cache   *runtime.ComposedCache
 	onQuery func(shapeKey, sql string)
+	obs     runtime.Observer
 }
 
 func New(db DBTX) *Queries {
@@ -1122,18 +1232,48 @@ func New(db DBTX) *Queries {
 }
 
 func (q *Queries) WithTx(tx pgx.Tx) *Queries {
-	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery}
+	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery, obs: q.obs}
 }
 
 // OnQuery installs an observability hook receiving the shape key and
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
+// SetObserver installs a runtime observer receiving compose, exec,
+// and reject events for every query on this Queries value and any
+// WithTx derivative (design doc 18). Install it before serving
+// traffic; Cache() exposes the same cache for scrape-time Stats and
+// TopShapes.
+func (q *Queries) SetObserver(o runtime.Observer) {
+	q.obs = o
+	q.cache.SetObserver(o)
+}
+
+// Cache exposes the composed-SQL cache for scrape-time inspection
+// (Stats, TopShapes). Mutating it is the generated code's business,
+// not the caller's.
+func (q *Queries) Cache() *runtime.ComposedCache { return q.cache }
+
 func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
 		q.onQuery(key.String(), sql)
 	}
 }
+
+// observeExec encodes the key only when an observer is installed: an
+// unobserved call must not pay for the canonical encoding.
+func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+	if q.obs != nil {
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
+	}
+}
+
+func (q *Queries) observeReject(ctx context.Context, query string, err error) {
+	if q.obs != nil {
+		q.obs.ObserveReject(ctx, query, err)
+	}
+}
+%s
 %s
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.
@@ -1141,10 +1281,10 @@ var (
 	And = runtime.And
 	Or  = runtime.Or
 )
-`, pkg, treeHook)
+`, pkg, treeHook, shapeSpace)
 }
 
-func dbFileQuestion(pkg string, treeHook string) string {
+func dbFileQuestion(pkg string, treeHook string, shapeSpace string) string {
 	return fmt.Sprintf(`// Code generated by sqletch. DO NOT EDIT.
 
 package %s
@@ -1152,6 +1292,7 @@ package %s
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -1168,6 +1309,7 @@ type Queries struct {
 	db      DBTX
 	cache   *runtime.ComposedCache
 	onQuery func(shapeKey, sql string)
+	obs     runtime.Observer
 }
 
 func New(db DBTX) *Queries {
@@ -1175,18 +1317,61 @@ func New(db DBTX) *Queries {
 }
 
 func (q *Queries) WithTx(tx *sql.Tx) *Queries {
-	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery}
+	return &Queries{db: tx, cache: q.cache, onQuery: q.onQuery, obs: q.obs}
 }
 
 // OnQuery installs an observability hook receiving the shape key and
 // the composed SQL of every call.
 func (q *Queries) OnQuery(fn func(shapeKey, sql string)) { q.onQuery = fn }
 
+// SetObserver installs a runtime observer receiving compose, exec,
+// and reject events for every query on this Queries value and any
+// WithTx derivative (design doc 18). Install it before serving
+// traffic; Cache() exposes the same cache for scrape-time Stats and
+// TopShapes.
+func (q *Queries) SetObserver(o runtime.Observer) {
+	q.obs = o
+	q.cache.SetObserver(o)
+}
+
+// Cache exposes the composed-SQL cache for scrape-time inspection
+// (Stats, TopShapes). Mutating it is the generated code's business,
+// not the caller's.
+func (q *Queries) Cache() *runtime.ComposedCache { return q.cache }
+
 func (q *Queries) hook(key runtime.ShapeKey, sql string) {
 	if q.onQuery != nil {
 		q.onQuery(key.String(), sql)
 	}
 }
+
+// observeExec encodes the key only when an observer is installed: an
+// unobserved call must not pay for the canonical encoding.
+func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error) {
+	if q.obs != nil {
+		q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
+	}
+}
+
+func (q *Queries) observeReject(ctx context.Context, query string, err error) {
+	if q.obs != nil {
+		q.obs.ObserveReject(ctx, query, err)
+	}
+}
+
+// observeExecResult consults RowsAffected only when an observer is
+// installed: some drivers make it a round-trip.
+func (q *Queries) observeExecResult(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, res sql.Result) {
+	if q.obs == nil {
+		return
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		n = -1
+	}
+	q.obs.ObserveExec(ctx, query, key.String(), time.Since(start), n, nil)
+}
+%s
 %s
 // And / Or combine @filter-tree predicates built with the generated
 // per-query constructors.
@@ -1194,7 +1379,7 @@ var (
 	And = runtime.And
 	Or  = runtime.Or
 )
-`, pkg, treeHook)
+`, pkg, treeHook, shapeSpace)
 }
 
 func querierFile(pkg string, sigs []string, extraImports map[string]bool) string {

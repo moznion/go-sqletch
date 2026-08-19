@@ -5,6 +5,7 @@ package gen
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/moznion/go-optional"
@@ -31,15 +32,22 @@ func (q *Queries) FindUserByEmail(ctx context.Context, arg FindUserByEmailParams
 	sqlText, argIdx := q.cache.Get("FindUserByEmail", findUserByEmailFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.Email})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	row := q.db.QueryRow(ctx, sqlText, args...)
 	var i FindUserByEmailRow
 	var nul0 *string
 	if err := row.Scan(&i.ID, &i.Email, &nul0); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			q.observeExec(ctx, "FindUserByEmail", key, execStart, 0, nil)
 			return zero, nil
 		}
+		q.observeExec(ctx, "FindUserByEmail", key, execStart, -1, err)
 		return zero, err
 	}
 	i.Nickname = optional.FromNillable(nul0)
+	q.observeExec(ctx, "FindUserByEmail", key, execStart, 1, nil)
 	return optional.Some(i), nil
 }

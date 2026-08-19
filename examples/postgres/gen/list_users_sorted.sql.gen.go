@@ -49,14 +49,20 @@ func (q *Queries) ListUsersSorted(ctx context.Context, arg ListUsersSortedParams
 	}
 	oseq0, err := runtime.OrderSeq(arg.Sort, 2)
 	if err != nil {
+		q.observeReject(ctx, "ListUsersSorted", err)
 		return nil, fmt.Errorf("ListUsersSorted: %w", err)
 	}
 	key.Orders = [][]uint8{oseq0}
 	sqlText, argIdx := q.cache.Get("ListUsersSorted", listUsersSortedFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{arg.Limit, arg.IncludeBanned})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec(ctx, "ListUsersSorted", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -64,9 +70,11 @@ func (q *Queries) ListUsersSorted(ctx context.Context, arg ListUsersSortedParams
 	for rows.Next() {
 		var i ListUsersSortedRow
 		if err := rows.Scan(&i.ID, &i.Email, &i.CreatedAt); err != nil {
+			q.observeExec(ctx, "ListUsersSorted", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExec(ctx, "ListUsersSorted", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

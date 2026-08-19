@@ -4,6 +4,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -25,8 +26,13 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	sqlText, argIdx := q.cache.Get("AllAuditActions", allAuditActionsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{})
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	rows, err := q.db.Query(ctx, sqlText, args...)
 	if err != nil {
+		q.observeExec(ctx, "AllAuditActions", key, execStart, -1, err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -34,9 +40,11 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	for rows.Next() {
 		var i AllAuditActionsRow
 		if err := rows.Scan(&i.Action, &i.Occurrences); err != nil {
+			q.observeExec(ctx, "AllAuditActions", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
+	q.observeExec(ctx, "AllAuditActions", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }

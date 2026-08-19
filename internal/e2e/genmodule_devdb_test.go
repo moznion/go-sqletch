@@ -212,6 +212,31 @@ func expect(cond bool, msg string) {
 	}
 }
 
+// obs records doc-18 observer events; the assertions at the end pin
+// the 1:1 relationship this fixture has between cache accesses and
+// executions, and the reject count of its deliberate misuses.
+type obs struct {
+	composeHits, composeMisses, execs, rejects int
+	emptyKey                                   bool
+}
+
+func (o *obs) ObserveCompose(query string, key sqletchruntime.ShapeKey, hit bool) {
+	if hit {
+		o.composeHits++
+	} else {
+		o.composeMisses++
+	}
+}
+
+func (o *obs) ObserveExec(_ context.Context, query, shapeKey string, _ time.Duration, _ int64, _ error) {
+	o.execs++
+	if shapeKey == "" {
+		o.emptyKey = true
+	}
+}
+
+func (o *obs) ObserveReject(_ context.Context, _ string, _ error) { o.rejects++ }
+
 func main() {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, os.Getenv("SQLETCH_TEST_DSN"))
@@ -233,6 +258,8 @@ func main() {
 	q := gen.New(conn)
 	shapes := 0
 	q.OnQuery(func(key, sql string) { shapes++ })
+	ob := &obs{}
+	q.SetObserver(ob)
 
 	all, err := q.SearchUsers(ctx, gen.SearchUsersParams{Limit: 100})
 	die(err)
@@ -436,6 +463,27 @@ func main() {
 	expect(page1[1].ActorID.IsNone() || page2[0].ActorID.IsNone(), "NULL actor scans somewhere")
 
 	expect(shapes >= 7, "OnQuery hook observed the calls")
+
+	// Doc-17 observability: every cache access in this fixture is
+	// followed by exactly one execution, the three deliberate misuses
+	// (zero @choose, duplicate order key, zero tree) are rejects that
+	// never reach compose or the DB, and the scrape surface coheres.
+	expect(ob.execs > 20 && ob.execs == ob.composeHits+ob.composeMisses,
+		"one exec event per cache access")
+	expect(ob.composeHits > 0, "repeated shapes hit the cache")
+	expect(ob.rejects == 3, "the three deliberate misuses are rejects")
+	expect(!ob.emptyKey, "exec events carry the canonical shape key")
+	stats := q.Cache().Stats()
+	expect(stats.Hits+stats.Misses == uint64(ob.composeHits+ob.composeMisses),
+		"cache stats agree with observer events")
+	expect(stats.Entries > 0 && stats.SQLBytes > 0, "resident entries accounted")
+	top := q.Cache().TopShapes(5)
+	expect(len(top) > 0 && top[0].Hits >= 1, "TopShapes ranks the repeated shape")
+	expect(len(gen.ShapeSpace) >= 10, "ShapeSpace registry covers the fixture queries")
+	expect(gen.ShapeSpace["SearchUsers"].Enumerable == 64 && gen.ShapeSpace["SearchUsers"].Exact,
+		"SearchUsers enumerable count")
+	expect(gen.ShapeSpace["FilterUsers"].Unbounded, "@filter-tree marks its query unbounded")
+
 	fmt.Println("E2E-OK")
 }
 `

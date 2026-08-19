@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/moznion/go-optional"
 	"github.com/moznion/go-sqletch/runtime"
@@ -30,19 +31,27 @@ func (q *Queries) FindUserByEmail(ctx context.Context, arg FindUserByEmailParams
 	var key runtime.ShapeKey
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "FindUserByEmail", findUserByEmailFrags, key)
 	if err != nil {
+		q.observeReject(ctx, "FindUserByEmail", err)
 		return zero, err
 	}
 	args := runtime.ResolveArgs(binds, []any{arg.Email}, nil)
 	q.hook(key, sqlText)
+	var execStart time.Time
+	if q.obs != nil {
+		execStart = time.Now()
+	}
 	row := q.db.QueryRowContext(ctx, sqlText, args...)
 	var i FindUserByEmailRow
 	var nul0 *string
 	if err := row.Scan(&i.ID, &i.Email, &nul0); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			q.observeExec(ctx, "FindUserByEmail", key, execStart, 0, nil)
 			return zero, nil
 		}
+		q.observeExec(ctx, "FindUserByEmail", key, execStart, -1, err)
 		return zero, err
 	}
 	i.Nickname = optional.FromNillable(nul0)
+	q.observeExec(ctx, "FindUserByEmail", key, execStart, 1, nil)
 	return optional.Some(i), nil
 }

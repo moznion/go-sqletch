@@ -12,6 +12,7 @@
 10. [Coming from sqlc](10-sqlc-migration.md)
 11. [Compatibility and versioning](11-compatibility.md)
 12. [Cross-query policies](12-policies.md)
+13. [Runtime metrics](13-runtime-metrics.md)
 
 The language specification (rules R1–R9 with their soundness argument)
 is [docs/spec.md](../spec.md); the

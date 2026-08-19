@@ -461,7 +461,7 @@ func TestComposedCache_FullKeyOnHit(t *testing.T) {
 	// Publish an entry whose stored key disagrees with the one callers
 	// will ask for, under the map key the caller's request derives.
 	mapKey := "Q|" + key.String()
-	bogus := newCacheEntry(mapKey, ShapeKey{Guards: 999, Choices: []uint8{0}}, "SELECT 'wrong'", nil)
+	bogus := newCacheEntry(mapKey, "Q", ShapeKey{Guards: 999, Choices: []uint8{0}}, "SELECT 'wrong'", nil)
 	c.mu.Lock()
 	bogus.el = c.order.PushFront(bogus)
 	c.m[mapKey] = bogus
