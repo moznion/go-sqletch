@@ -213,22 +213,31 @@ func (fs *fileScan) span(start, end int) diagnostics.Span {
 }
 
 func (fs *fileScan) errorf(code diagnostics.Code, span diagnostics.Span, format string, args ...any) {
-	if fs.emitted[code] >= maxDiagsPerCode {
+	fs.emit(diagnostics.Errorf(code, span, format, args...))
+}
+
+// emit records a diagnostic, enforcing the per-code cap so that
+// adversarial input producing O(input) same-code errors cannot build an
+// unbounded slab of diagnostic structs. Every emission site — errorf
+// and the direct-append callers that attach a hint — must go through
+// here; the cap belongs to the code, not to a particular call shape.
+func (fs *fileScan) emit(d diagnostics.Diagnostic) {
+	if fs.emitted[d.Code] >= maxDiagsPerCode {
 		if fs.overflow == nil {
 			fs.overflow = map[diagnostics.Code]int{}
 			fs.firstOver = map[diagnostics.Code]diagnostics.Span{}
 		}
-		if fs.overflow[code] == 0 {
-			fs.firstOver[code] = span
+		if fs.overflow[d.Code] == 0 {
+			fs.firstOver[d.Code] = d.Span
 		}
-		fs.overflow[code]++
+		fs.overflow[d.Code]++
 		return
 	}
 	if fs.emitted == nil {
 		fs.emitted = map[diagnostics.Code]int{}
 	}
-	fs.emitted[code]++
-	fs.diags = append(fs.diags, diagnostics.Errorf(code, span, format, args...))
+	fs.emitted[d.Code]++
+	fs.diags = append(fs.diags, d)
 }
 
 // flushOverflow appends one summary diagnostic per code whose emission
@@ -606,7 +615,7 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 			if name, nameEnd := matchConstruct(fs.src, pos); name != "" {
 				switch name {
 				case "if-present", "choose", "when":
-					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
+					fs.emit(diagnostics.Errorf(diagnostics.CodeConstructNesting,
 						fs.span(pos, nameEnd), "constructs do not nest (R5)").
 						WithHint("use a multi-parameter guard: @if-present(a, b)"))
 					if name == "if-present" {
@@ -631,7 +640,7 @@ func (fs *fileScan) consumeBody(pos int, terminators map[string]bool,
 					pos = nameEnd
 					continue
 				case "order-by", "filter-tree":
-					fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConstructNesting,
+					fs.emit(diagnostics.Errorf(diagnostics.CodeConstructNesting,
 						fs.span(pos, nameEnd), "constructs do not nest (R5)"))
 					stack = append(stack, "end")
 					pos = nameEnd
@@ -727,7 +736,7 @@ func (fs *fileScan) parseWhen(pos, nameEnd int) int {
 		atom.Value = unquoteSQLString(lit.Text)
 	case lit.Kind == dialect.KindNumber && !strings.ContainsAny(lit.Text, ".eE"):
 		if msg, hint := whenIntError(lit.Text); msg != "" {
-			fs.diags = append(fs.diags, diagnostics.Errorf(
+			fs.emit(diagnostics.Errorf(
 				diagnostics.CodeWhenIntLiteral, fs.span(lit.Start, lit.End), "%s", msg).
 				WithHint("%s", hint))
 			return fs.span(lit.Start, lit.End).End
@@ -837,9 +846,8 @@ func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, mar
 		}
 		stripped, off, hadAnd := fs.stripLeadingToken(body, bodyOff, isAndToken)
 		if !hadAnd {
-			d := diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
-				"an optional conjunct must be written as `AND <predicate>`; sqletch owns the separator")
-			fs.diags = append(fs.diags, d)
+			fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+				"an optional conjunct must be written as `AND <predicate>`; sqletch owns the separator"))
 		} else {
 			item.Sep = SepAnd
 			item.Body = stripped
@@ -849,9 +857,8 @@ func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, mar
 		item.Slot = SlotSetItem
 		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
 		if !hadComma {
-			d := diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
-				"an optional SET item must be written as `, column = <expr>`; sqletch owns the separator")
-			fs.diags = append(fs.diags, d)
+			fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+				"an optional SET item must be written as `, column = <expr>`; sqletch owns the separator"))
 		} else {
 			item.Sep = SepComma
 			item.Body = stripped
@@ -861,7 +868,7 @@ func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, mar
 		item.Slot = SlotInsertColumn
 		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
 		if !hadComma {
-			fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+			fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
 				"an optional INSERT column must be written as `, column_name`; sqletch owns the separator"))
 		} else {
 			item.Sep = SepComma
@@ -879,7 +886,7 @@ func (fs *fileScan) finishGuardBlock(pos, afterArgs int, guards []GuardAtom, mar
 		item.Slot = SlotInsertValue
 		stripped, off, hadComma := fs.stripLeadingToken(body, bodyOff, isCommaToken)
 		if !hadComma {
-			fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
+			fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, item.BodySpan,
 				"an optional VALUES item must be written as `, <expr>`; sqletch owns the separator"))
 		} else {
 			item.Sep = SepComma
@@ -1151,7 +1158,7 @@ func (fs *fileScan) parseFilterTree(pos, nameEnd int) int {
 		// The empty tree renders TRUE, which is only sound when it
 		// substitutes one whole AND-conjunct: under OR or NOT the
 		// filter would silently vanish or change meaning.
-		fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd,
+		fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd,
 			fs.span(pos, afterArgs),
 			"@filter-tree must directly follow an unconditional `AND`; its empty tree renders TRUE, which must substitute one whole conjunct").
 			WithHint("anchor the clause and give the construct its own conjunct: `WHERE TRUE` then `AND @filter-tree(...)`"))
@@ -1574,7 +1581,7 @@ func (fs *fileScan) checkFilterTreeTail(q *QueryTemplate) {
 		if first == "" || filterTreeTailTokens[first] {
 			continue
 		}
-		fs.diags = append(fs.diags, diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, ft.Span,
+		fs.emit(diagnostics.Errorf(diagnostics.CodeConjunctNeedsAnd, ft.Span,
 			"@filter-tree must end its conjunct but is followed by %q; its empty tree renders TRUE, which must substitute one whole conjunct", first).
 			WithHint("continue with `AND`, a clause keyword, or `;` after @end"))
 	}
