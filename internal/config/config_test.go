@@ -134,6 +134,58 @@ func TestLoad_PathEscape(t *testing.T) {
 			t.Fatalf("want SQLETCH306 error for cache.path, got %+v", diags)
 		}
 	})
+
+	// A committed DIRECTORY symlink whose lexical path stays in-tree (no
+	// `..`) but whose real target escapes the project must be refused:
+	// this is the clone-and-run write-redirection the lexical check alone
+	// misses (a cloned repo commits `link -> /outside`, then points
+	// output.path/cache.path at `link/...`).
+	t.Run("symlinked directory component escape is an error", func(t *testing.T) {
+		for _, field := range []string{"output.path", "cache.path"} {
+			t.Run(field, func(t *testing.T) {
+				dir := t.TempDir()
+				outside := t.TempDir()
+				if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+					t.Skipf("symlink unsupported: %v", err)
+				}
+				var y string
+				switch field {
+				case "output.path":
+					y = strings.Replace(validYAML, "path: gen", "path: link/gen", 1)
+				case "cache.path":
+					y = validYAML + "cache:\n  path: link/cache\n"
+				}
+				_, diags := Load(write(t, dir, "sqletch.yaml", y))
+				if !hasCode(diags, diagnostics.Error) {
+					t.Fatalf("want SQLETCH306 error for %s via symlinked dir, got %+v", field, diags)
+				}
+				if !diagnostics.HasErrors(diags) {
+					t.Errorf("a symlinked-dir escape must fail the load")
+				}
+			})
+		}
+	})
+
+	// No false positive when the PROJECT itself is legitimately reached
+	// through a symlinked ancestor (macOS /tmp -> /private/tmp, a repo
+	// under a symlinked home): both sides resolve into the same real
+	// tree, so an in-tree relative path stays contained.
+	t.Run("symlinked project root is not a false positive", func(t *testing.T) {
+		real := t.TempDir()
+		linkParent := t.TempDir()
+		proj := filepath.Join(linkParent, "proj")
+		if err := os.Symlink(real, proj); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		// Config lives in the symlinked project dir; output.path is a
+		// plain in-tree subdir.
+		_, diags := Load(write(t, proj, "sqletch.yaml", validYAML))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("in-tree path under a symlinked project root must not flag: %+v", d)
+			}
+		}
+	})
 }
 
 func TestLoad_UnknownKey(t *testing.T) {

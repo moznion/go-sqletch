@@ -254,6 +254,10 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	// A committed relative path climbing out of the project with `..`
 	// is the clone-and-run write-redirection vector, so it is refused;
 	// an absolute path is a deliberate operator choice and only warns.
+	// The `..` test is purely lexical, so it misses a committed DIRECTORY
+	// symlink whose path stays in-tree but whose real target escapes; the
+	// symlink-aware pass below closes that (a cloned repo can commit
+	// `link -> /outside` and point the field at `link/...`).
 	checkPath := func(field, p string) {
 		if p == "" {
 			return
@@ -270,12 +274,64 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
 				"%s %q escapes the project directory (resolves to %q): a relative path climbing out with `..` is refused because a cloned repository could otherwise redirect writes to arbitrary locations", field, p, resolved).
 				WithHint("keep %s inside the project directory", field))
+			return
+		}
+		if real, outside := resolvesOutsideRoot(cfg.Dir, resolved); outside {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
+				"%s %q escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise commit a directory symlink to redirect writes to arbitrary locations", field, p, real).
+				WithHint("keep %s inside the project directory and remove any symlinked components", field))
 		}
 	}
 	checkPath("cache.path", cfg.Cache.Path)
 	checkPath("output.path", cfg.Output.Path)
 
 	return cfg, diags
+}
+
+// resolvesOutsideRoot reports whether target — after following symlinks in
+// its existing ancestry — lands outside root, and returns the resolved real
+// path. root (the project directory) is itself symlink-resolved so a project
+// legitimately reached through a symlinked ancestor (macOS /tmp ->
+// /private/tmp, a repo under a symlinked home) is not a false positive.
+// Callers must already have ruled out a lexical `..` escape; this adds only
+// the symlinked-directory-component case.
+func resolvesOutsideRoot(root, target string) (string, bool) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = filepath.Clean(root)
+	}
+	real := resolveExistingPrefix(target)
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return real, true
+	}
+	return real, false
+}
+
+// resolveExistingPrefix resolves symlinks over the longest existing prefix
+// of path (the leaf usually does not exist yet — it is what sqletch is about
+// to create) and rejoins the not-yet-existing remainder lexically, so a
+// symlinked directory component anywhere in the existing ancestry is
+// followed while a missing leaf does not defeat resolution.
+func resolveExistingPrefix(path string) string {
+	path = filepath.Clean(path)
+	remainder := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			if remainder == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			// Reached the filesystem root with nothing resolvable; fall
+			// back to the lexical join.
+			return filepath.Join(path, remainder)
+		}
+		remainder = filepath.Join(filepath.Base(path), remainder)
+		path = parent
+	}
 }
 
 // Abs resolves a config-relative path.
