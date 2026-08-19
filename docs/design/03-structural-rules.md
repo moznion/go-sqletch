@@ -125,6 +125,48 @@ with any guarded LEFT join → `SQLETCH116` (planner-sensitive
 combination, per spec's known-list; the list lives in one table in
 `plannerchecks.go`).
 
+### Known limitation — qualified refs and subquery alias shadowing
+
+The resolver keys qualified refs (`a.col`) on **top-level** relation
+names only (`Resolver.rels` comes from `Tree.Relations()`, which does
+not descend into subqueries). This is deliberate and load-bearing:
+a qualified ref inside a subquery that **correlates** to a guarded
+outer join must still be checked — dropping it would be a genuine R3
+soundness hole (regression-pinned by
+`TestCheckResolved_R3_CorrelatedSubqueryRef`: `... EXISTS (SELECT 1
+FROM audits a WHERE a.user_id = ou.user_id)` where `ou` is the guarded
+top-level join must fire `SQLETCH115`).
+
+The cost is a **false positive** (over-rejection, never unsound): when
+a subquery **redefines** an alias that shadows a guarded top-level
+alias, the inner ref is attributed to the outer guarded join and
+wrongly demanded to be guarded. Example — the inner `o` is `audits`,
+but R3 attributes `o.user_id` to the guarded `orgs o`:
+
+```sql
+SELECT u.id,
+  (SELECT count(*) FROM audits AS o WHERE o.user_id = u.id) AS n
+FROM users AS u
+@if-present(org) JOIN orgs AS o ON o.id = u.org_id @endif
+WHERE TRUE;
+```
+
+Resolving this correctly needs **innermost-first** scope resolution:
+bind the qualifier against the relations introduced by the enclosing
+subquery scope before falling back to the outer/top-level scope. The
+facade does not expose what that requires — `SubRel` carries no byte
+range to map a `ColRef.Loc` to its enclosing scope, and non-FROM
+sublinks (scalar/`EXISTS` subqueries, the common shadowing case) are
+not surfaced by `DerivedRels()` at all. Adding per-scope relation sets
+with ranges across all three frontends (pg_query / TiDB / rqlite) is a
+real analysis addition, not a mechanical fix, and any shortcut that
+skips qualified subquery refs would reopen the correlated-ref hole
+above. Until scope-aware resolution is built, the **workaround** is to
+rename the subquery-local alias so it does not shadow a guarded
+top-level alias. The per-shape EXPLAIN property test remains the
+mechanical backstop that the over-rejection is never masking
+unsoundness.
+
 ## 7. R2 — star expansion & shape constancy (catalog-dependent)
 
 - `SELECT *` / `qualifier.*` in the target list: expand against the
