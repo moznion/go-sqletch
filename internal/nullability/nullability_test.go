@@ -281,6 +281,50 @@ SELECT u.id FROM users AS u;
 	assertNullable(t, got, []bool{true})
 }
 
+// Forward CTE-name reference (H5): inside the body of an EARLIER CTE,
+// a name matching a LATER CTE binds to the base relation, not to the
+// forward CTE — PostgreSQL/MySQL resolve a non-recursive body against
+// preceding definitions only. Here `a`'s body LEFT JOINs `orgs`, which
+// (because the CTE `orgs` is defined afterwards) is the base table on a
+// null-extended side; a schema-qualified `public.orgs` supplies a
+// second, clean instance. Analyzing the forward reference as the later
+// CTE would hide the null extension and leave orgs a single clean
+// instance, unsoundly narrowing org_name. Positional scoping records
+// both instances, so org_name stays nullable.
+func TestAnalyze_ForwardCTEReferenceNeverNarrows(t *testing.T) {
+	src := `-- name: Q :many
+WITH a AS (
+  SELECT o.name AS org_name
+  FROM users AS u LEFT JOIN orgs AS o ON o.id = u.org_id
+),
+orgs AS (SELECT 1 AS one)
+SELECT a.org_name FROM a, public.orgs AS po WHERE po.id = 1;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		// The engine attributes a.org_name through CTE `a` to the base
+		// table orgs.name (NOT NULL); it can still be NULL for a member
+		// with no org.
+		col("org_name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// The backward CTE reference (the ordinary case) must still narrow: `b`
+// legitimately references the earlier `a`, whose clean INNER-joined
+// body attributes org name non-null. Positional scoping keeps earlier
+// definitions visible, so precision is preserved.
+func TestAnalyze_BackwardCTEReferenceStillNarrows(t *testing.T) {
+	src := `-- name: Q :many
+WITH a AS (SELECT o.id, o.name FROM orgs AS o),
+     b AS (SELECT u.id, a.name AS org_name FROM users AS u JOIN a ON a.id = u.org_id)
+SELECT b.org_name FROM b;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{false})
+}
+
 // The dual-instance trap: the same table is both directly present
 // (not null-extended) and wrapped in a null-extended derived table.
 // Presence alone would narrow the derived column; the opaque
