@@ -1,6 +1,81 @@
 package lsp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf16"
+	"unicode/utf8"
+)
+
+// linearPosition is an independent O(offset) reference for the position
+// conversion, kept deliberately naive so the prebuilt-index posMapper is
+// checked against a from-scratch computation rather than against itself.
+func linearPosition(src []byte, off int) Position {
+	if off < 0 {
+		off = 0
+	}
+	if off > len(src) {
+		off = len(src)
+	}
+	var line uint32
+	lineStart := 0
+	for i := 0; i < off; i++ {
+		if src[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+	var units uint32
+	for i := lineStart; i < off; {
+		r, size := utf8.DecodeRune(src[i:])
+		i += size
+		units += uint32(utf16.RuneLen(r))
+	}
+	return Position{Line: line, Character: units}
+}
+
+// The indexed posMapper must be byte-identical to the linear reference at
+// every offset of a large multi-line source with multibyte and
+// surrogate-pair content — this is the whole point of PR #55's LineMap
+// twin: converting many positions must not change the answer, only the
+// cost (one index build instead of a from-offset-0 rescan per call).
+func TestPosMapper_MatchesLinearReference(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 500; i++ {
+		b.WriteString("SELECT x FROM t WHERE 名前 = :p -- 😀 comment\n")
+	}
+	src := []byte(b.String())
+	pm := newPosMapper(src)
+	for off := -2; off <= len(src)+2; off++ {
+		if got, want := pm.position(off), linearPosition(src, off); got != want {
+			t.Fatalf("position(%d) = %+v, want %+v", off, got, want)
+			break
+		}
+	}
+	// Stability: mapping a position to an offset and back reproduces the
+	// position (mid-rune offsets round up, so offset(position(off)) may
+	// differ from off, but the position round-trip is a fixed point).
+	for off := 0; off <= len(src); off += 7 {
+		p := pm.position(off)
+		if back := pm.position(pm.offset(p)); back != p {
+			t.Fatalf("position round-trip at off %d unstable: %+v -> %+v", off, p, back)
+		}
+	}
+}
+
+// A single mapper reused across many spans (the server.check hot path)
+// yields the same ranges as building a fresh mapper per span — a
+// regression guard for the "build the index once" refactor.
+func TestPosMapper_ReuseIsConsistent(t *testing.T) {
+	src := []byte(posSrc)
+	pm := newPosMapper(src)
+	for start := 0; start < len(src); start++ {
+		end := start + 3
+		if got, want := pm.spanRange(start, end), spanToRange(src, start, end); got != want {
+			t.Errorf("reused spanRange(%d,%d) = %+v, want %+v", start, end, got, want)
+		}
+	}
+}
 
 // Byte-offset ↔ LSP (line, UTF-16 code unit) conversion over
 // adversarial content: CJK (3 bytes / 1 unit), an emoji (4 bytes /

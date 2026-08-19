@@ -186,6 +186,52 @@ func TestServer_DiagnosticsLifecycle(t *testing.T) {
 	tc.shutdownExit(0)
 }
 
+// floodWS returns a fixed number of diagnostics for the opened file, to
+// exercise the per-file publish cap.
+type floodWS struct{ n int }
+
+func (f *floodWS) Check(overlay map[string][]byte) (WorkspaceResult, error) {
+	res := WorkspaceResult{
+		Diags:   map[string][]diagnostics.Diagnostic{},
+		Files:   map[string]*template.QueryFile{},
+		Sources: map[string][]byte{},
+	}
+	for p, src := range overlay {
+		res.Sources[p] = src
+		ds := make([]diagnostics.Diagnostic, f.n)
+		for i := range ds {
+			ds[i] = diagnostics.Errorf("SQLETCH999",
+				diagnostics.Span{File: p, Start: 0, End: 1}, "d%d", i)
+		}
+		res.Diags[p] = ds
+	}
+	return res, nil
+}
+
+// A pathological file with far more diagnostics than the publish cap must
+// not produce an unbounded frame: the server sends at most the cap plus a
+// single truncation-summary diagnostic.
+func TestServer_DiagnosticPublishCap(t *testing.T) {
+	over := maxPublishedDiagnostics + 137
+	tc := startServer(t, &floodWS{n: over}, "")
+	tc.initialize()
+
+	uri := pathToURI("/ws/queries/flood.sql")
+	tc.notify("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{"uri": uri, "languageId": "sql", "version": 1, "text": "x"},
+	})
+	pub := decodeParams[PublishDiagnosticsParams](t, tc.readNotification())
+	if len(pub.Diagnostics) != maxPublishedDiagnostics+1 {
+		t.Fatalf("published %d diagnostics, want cap %d + 1 summary",
+			len(pub.Diagnostics), maxPublishedDiagnostics)
+	}
+	summary := pub.Diagnostics[len(pub.Diagnostics)-1]
+	if !strings.Contains(summary.Message, "suppressed") {
+		t.Errorf("last diagnostic must be the truncation summary: %q", summary.Message)
+	}
+	tc.shutdownExit(0)
+}
+
 // writeRawBody frames a verbatim body, bypassing Marshal, so tests can
 // send byte sequences a well-formed client never produces.
 func (tc *testClient) writeRawBody(body string) {
