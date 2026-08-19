@@ -1443,7 +1443,12 @@ func goLiteral(g template.GuardAtom) string {
 	if g.Kind == template.ValueString {
 		return fmt.Sprintf("%q", g.Value)
 	}
-	return g.Value // int / bool literals are identical in Go
+	// int / bool value atoms are emitted verbatim. The scanner guarantees
+	// integers are plain decimal digit runs that fit int64 (whenIntError
+	// rejects leading-zero octal ambiguity and overflow), and booleans are
+	// lowercased true/false, so each is a valid Go literal meaning exactly
+	// what the template wrote.
+	return g.Value
 }
 
 func paramSpanOf(q *template.QueryTemplate, name string) diagnostics.Span {

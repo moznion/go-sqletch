@@ -54,6 +54,7 @@ const (
 	CodePositionalParam    Code = "SQLETCH011"
 	CodeConstructNesting   Code = "SQLETCH012" // guard inside guard (R5)
 	CodeTooManyParams      Code = "SQLETCH013" // more parameters than the bind plan's int16 index holds
+	CodeWhenIntLiteral     Code = "SQLETCH014" // @when integer literal is ambiguous (leading zero) or out of int64 range
 )
 
 // Go-source input codes: templates authored in a `//sqletch:query`

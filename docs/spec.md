@@ -449,7 +449,11 @@ Like `@if-present`, but the condition compares a **required** parameter
 against a compile-time literal (`op` is `=` or `!=`; `<>` is accepted
 as an alias), evaluated in Go. Literals are strings (with `''`
 escapes), integers, or booleans — the literal fixes the parameter's Go
-type.
+type. An integer literal must be a plain decimal digit run that fits a
+64-bit signed integer, with no leading zero: the literal is emitted
+verbatim into the generated Go comparison, where a leading zero would
+read as an octal constant (`010` == 8) and silently change which value
+the guard matches, so it is rejected (SQLETCH014).
 The parameter's Go type comes from the literal (it need not bind in
 SQL — a sanctioned pure-control form, cf. R9's closing bullet; if it
 *does* bind, the literal-derived and SQL-inferred types must agree,

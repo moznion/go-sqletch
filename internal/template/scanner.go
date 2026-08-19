@@ -1,7 +1,9 @@
 package template
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
@@ -666,6 +668,12 @@ func (fs *fileScan) parseWhen(pos, nameEnd int) int {
 		atom.Kind = ValueString
 		atom.Value = unquoteSQLString(lit.Text)
 	case lit.Kind == dialect.KindNumber && !strings.ContainsAny(lit.Text, ".eE"):
+		if msg, hint := whenIntError(lit.Text); msg != "" {
+			fs.diags = append(fs.diags, diagnostics.Errorf(
+				diagnostics.CodeWhenIntLiteral, fs.span(lit.Start, lit.End), "%s", msg).
+				WithHint("%s", hint))
+			return fs.span(lit.Start, lit.End).End
+		}
 		atom.Kind = ValueInt
 		atom.Value = lit.Text
 	case lit.Kind == dialect.KindIdent &&
@@ -683,6 +691,39 @@ func (fs *fileScan) parseWhen(pos, nameEnd int) int {
 		return bad(fs.span(rp.Start, rp.End), "@when: expected ')'")
 	}
 	return fs.finishGuardBlock(pos, rp.End, []GuardAtom{atom}, "when", "end")
+}
+
+// whenIntError validates a lexed `@when` integer literal, returning a
+// diagnostic message and compliant-rewrite hint (both empty when the
+// literal is fine). @when integers are non-negative decimal digit runs:
+// the lexer splits off signs, and dots/exponents route to the float
+// rejection above. Two shapes must be refused because codegen emits the
+// literal verbatim into a Go comparison (goLiteral):
+//   - a leading zero would be read as a Go OCTAL literal (010 == 8), so
+//     the generated guard would silently match a different value than
+//     the template names;
+//   - a run past int64 parses here but fails to compile in the consumer
+//     module.
+func whenIntError(text string) (msg, hint string) {
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return fmt.Sprintf("@when integer literal %q must be a plain decimal integer", text),
+				"use decimal digits only — hex/octal/binary prefixes (0x, 0o, 0b) are not allowed"
+		}
+	}
+	if len(text) > 1 && text[0] == '0' {
+		trimmed := strings.TrimLeft(text, "0")
+		if trimmed == "" {
+			trimmed = "0"
+		}
+		return fmt.Sprintf("@when integer literal %q is ambiguous: a leading zero is read as an octal literal in the generated guard, not the decimal value written here", text),
+			fmt.Sprintf("drop the leading zero: write %s", trimmed)
+	}
+	if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+		return fmt.Sprintf("@when integer literal %q does not fit a 64-bit signed integer", text),
+			"use a value in the range [-9223372036854775808, 9223372036854775807]"
+	}
+	return "", ""
 }
 
 // unquoteSQLString converts a lexed SQL string literal ('a”b') to its
