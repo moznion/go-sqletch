@@ -106,7 +106,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d := policy.Enforce(postgres.Profile{}, pols, wq, tree); len(d) != 0 {
+		if d := policy.Enforce(postgres.Profile{}, postgres.Frontend{}, pols, wq, tree); len(d) != 0 {
 			t.Fatalf("%s: enforcement rejects the woven template: %+v", q.Name, d)
 		}
 
