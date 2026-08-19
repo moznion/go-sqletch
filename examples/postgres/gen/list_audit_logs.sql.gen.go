@@ -38,7 +38,7 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.UnwrapAsPtr(), arg.Limit})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	rows, err := q.db.Query(ctx, sqlText, args...)

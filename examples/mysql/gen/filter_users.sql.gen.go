@@ -61,7 +61,7 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
 	q.hookTree(key, scope, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)

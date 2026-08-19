@@ -147,9 +147,11 @@ type Observer interface {
 	ObserveReject(ctx context.Context, query string, err error)
 }
 
-// SetObserver installs an observer on the cache (compose events).
-// Must be called before the cache serves traffic; installing an
-// observer mid-flight is not synchronized with in-progress reads.
+// SetObserver installs an observer on the cache (compose events). The
+// install is atomic (obs is an atomic.Pointer), so installing an
+// observer after the cache has begun serving traffic is safe: an
+// in-flight lock-free read sees either the old observer or the new one,
+// never a torn two-word value. Passing nil removes the observer.
 func (c *ComposedCache) SetObserver(o Observer)
 
 // CacheStats is a point-in-time snapshot, taken under the cache
@@ -205,9 +207,11 @@ argument:
   caller's key through one heap-allocates every generated call
   site's key slices (measured: +1 alloc/op on the hit path).
   `keysEqual` has already proven entry key and caller key identical,
-  so the substitution is observationally invisible. The `nil` check
-  is the only cost when unused; the observer is a plain field set
-  before traffic per the contract above (mirrors `OnQuery`).
+  so the substitution is observationally invisible. When unused the
+  only cost is a single atomic load of the observer pointer; both the
+  cache's `obs` and the generated `obs`/`onQuery` fields are
+  `atomic.Pointer`s, so installing after traffic has started cannot
+  tear a two-word interface/func value (a plain field would).
 - **`ShapeKey` retention hazard** is real (slices share backing
   arrays with the cache entry); the interface comment carries the
   copy rule, and the adapter (§6) only reads scalars/encodes.
@@ -221,7 +225,11 @@ Per-package (`db.gen.go`):
 // and reject events for every query on this Queries value (and any
 // WithTx derivative — the observer travels with the shared cache).
 func (q *Queries) SetObserver(o runtime.Observer) {
-	q.obs = o
+	if o == nil {
+		q.obs.Store(nil)
+	} else {
+		q.obs.Store(&o) // atomic install: safe to call after traffic starts
+	}
 	q.cache.SetObserver(o)
 }
 

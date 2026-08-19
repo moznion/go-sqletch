@@ -42,7 +42,11 @@ func TestGenerate_ObserverSites(t *testing.T) {
 		"func (q *Queries) Cache() *runtime.ComposedCache",
 		"func (q *Queries) observeExec(ctx context.Context, query string, key runtime.ShapeKey, start time.Time, rows int64, err error)",
 		"func (q *Queries) observeReject(ctx context.Context, query string, err error)",
-		"obs: q.obs", // WithTx carries the observer
+		// The observer/hook are atomic pointers so a SetObserver/OnQuery
+		// that races in-flight reads cannot tear a two-word value.
+		"obs     atomic.Pointer[runtime.Observer]",
+		"onQuery atomic.Pointer[func(shapeKey, sql string)]",
+		"nq.obs.Store(p)", // WithTx carries the observer
 	} {
 		if !strings.Contains(db, want) {
 			t.Errorf("db.gen.go missing %q\n----\n%s", want, db)
@@ -54,7 +58,7 @@ func TestGenerate_ObserverSites(t *testing.T) {
 		// ChooseOrdinal's failure is a reject, reported before return.
 		"q.observeReject(ctx, \"SearchUsers\", err)",
 		// The exec clock runs only for observed calls.
-		"var execStart time.Time\n\tif q.obs != nil {\n\t\texecStart = time.Now()\n\t}",
+		"var execStart time.Time\n\tif q.obs.Load() != nil {\n\t\texecStart = time.Now()\n\t}",
 		// :many reports the scanned row count and the terminal error.
 		"q.observeExec(ctx, \"SearchUsers\", key, execStart, int64(len(items)), rows.Err())",
 		// Failure paths report rows -1 with the driver error.

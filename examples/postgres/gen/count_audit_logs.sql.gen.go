@@ -30,7 +30,7 @@ func (q *Queries) CountAuditLogs(ctx context.Context, tenantID TenantID, arg Cou
 	args := runtime.BuildArgs(argIdx, []any{int64(tenantID)})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	row := q.db.QueryRow(ctx, sqlText, args...)

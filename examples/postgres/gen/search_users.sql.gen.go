@@ -79,7 +79,7 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	args := runtime.BuildArgs(argIdx, []any{arg.OrganizationID.UnwrapAsPtr(), arg.Status.UnwrapAsPtr(), arg.EmailPrefix.UnwrapAsPtr(), arg.CreatedAfter.UnwrapAsPtr(), arg.Limit})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	rows, err := q.db.Query(ctx, sqlText, args...)

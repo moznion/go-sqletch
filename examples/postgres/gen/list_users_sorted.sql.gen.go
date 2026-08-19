@@ -57,7 +57,7 @@ func (q *Queries) ListUsersSorted(ctx context.Context, arg ListUsersSortedParams
 	args := runtime.BuildArgs(argIdx, []any{arg.Limit, arg.IncludeBanned})
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	rows, err := q.db.Query(ctx, sqlText, args...)

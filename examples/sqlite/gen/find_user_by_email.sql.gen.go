@@ -37,7 +37,7 @@ func (q *Queries) FindUserByEmail(ctx context.Context, arg FindUserByEmailParams
 	args := runtime.ResolveArgs(binds, []any{arg.Email}, nil)
 	q.hook(key, sqlText)
 	var execStart time.Time
-	if q.obs != nil {
+	if q.obs.Load() != nil {
 		execStart = time.Now()
 	}
 	row := q.db.QueryRowContext(ctx, sqlText, args...)
