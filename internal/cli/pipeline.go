@@ -68,6 +68,28 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 	return d, true
 }
 
+// destructiveResetDiag converts devdb's refusal to reset a
+// user-supplied database into SQLETCH204 against the config's
+// database.dsn. sqletch drops the schema before applying it, so a cold
+// run against a DSN the repo chose could wipe a database the developer
+// cares about — this is a fail-closed safety guard (H1), not an
+// environment failure, so it belongs in the coded diagnostic stream and
+// reaches `--json`/editors. The escape hatch is the --allow-destructive
+// flag, deliberately not a config key: a repo-controlled key could
+// disarm the guard invisibly.
+func destructiveResetDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
+	var dre *devdb.DestructiveResetError
+	if !errors.As(err, &dre) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodeDestructiveReset,
+		diagnostics.Span{File: cfg.Path},
+		"refusing to reset the %s database at database.dsn: sqletch drops the schema before applying it, which destroys data unless the database is disposable",
+		dre.Server)
+	d.Hint = "leave database.dsn empty to use a disposable container, or point it at a throwaway database and pass --allow-destructive to confirm sqletch may drop and recreate its schema"
+	return d, true
+}
+
 // overrideHygieneDiags warns about null_overrides entries that cannot
 // do what the user intended: a key naming no result column is dead
 // config (a typo or a renamed column), and a key matching several
@@ -119,6 +141,14 @@ type RunOptions struct {
 	// server in the record. The result is a cache no single
 	// environment produced — deliberate, and never the default.
 	AllowServerDrift bool
+	// AllowDestructive confirms that the database at a user-supplied
+	// database.dsn is disposable, letting sqletch reset (drop and
+	// recreate) its schema. Without it a cold run against a
+	// user-supplied DSN is refused with SQLETCH204 rather than wiping a
+	// database a cloned repo pointed sqletch at (H1). A database
+	// sqletch provisioned itself (empty dsn → a disposable container or
+	// temp file) is never gated.
+	AllowDestructive bool
 }
 
 type compiledQuery struct {
@@ -229,7 +259,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			return oracle, nil
 		}
 		var det devdb.Detected
-		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq, &det)
+		o, cleanup, err := drv.acquire(ctx, cfg, schemaAcq, opts.AllowDestructive, &det)
 		if err != nil {
 			return nil, err
 		}
@@ -260,6 +290,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	if !haveCat || len(misses) > 0 {
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := destructiveResetDiag(cfg, err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -330,6 +364,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		res.NativePlan = cfg.NativeOracle()
 		o, err := acquireOracle()
 		if d, ok := versionPinDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := destructiveResetDiag(cfg, err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}

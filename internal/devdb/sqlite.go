@@ -53,6 +53,12 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 	}
 
 	if hasSchema(cfg.SchemaSQL) {
+		// `:memory:` holds no persistent data — a reset can destroy
+		// nothing, so it is exempt from the user-supplied-DSN guard.
+		if cfg.DSN != ":memory:" && cfg.guardReset() {
+			closeAll()
+			return nil, func() {}, &DestructiveResetError{Server: "SQLite"}
+		}
 		if err := resetSQLite(conn); err != nil {
 			closeAll()
 			return nil, func() {}, fmt.Errorf("reset dev database schema: %w", err)

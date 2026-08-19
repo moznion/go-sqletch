@@ -19,7 +19,20 @@ type Config struct {
 	// is non-empty, sqletch resets the public schema (DROP SCHEMA
 	// public CASCADE) before applying it, so repeated runs are
 	// idempotent. Never point this at a database you care about.
+	//
+	// Because the DSN comes from sqletch.yaml — repo-controlled, so a
+	// cloned project could aim it at a database the developer cares
+	// about — a user-supplied DSN does NOT reset by default: Acquire
+	// returns *DestructiveResetError unless AllowDestructive is set. A
+	// database sqletch provisioned itself (empty DSN → a fresh
+	// container or temp file) is disposable by construction and always
+	// resets.
 	DSN string
+	// AllowDestructive clears the user-supplied-DSN reset guard above:
+	// the caller (a person passing --allow-destructive on the command
+	// line) has confirmed the database at DSN is disposable, so sqletch
+	// may drop and recreate its schema. It is ignored when DSN is empty.
+	AllowDestructive bool
 	// ServerVersion is the pinned major version (e.g. "16" or
 	// "16.4"); it selects the container image and is validated against
 	// whatever we connect to.
@@ -81,6 +94,35 @@ func (e *VersionMismatchError) Error() string {
 		server += " "
 	}
 	return fmt.Sprintf("connected server is %s%s but sqletch.yaml pins server_version %s", server, e.Actual, e.Pinned)
+}
+
+// DestructiveResetError signals that Acquire declined to reset a
+// user-supplied database's schema because AllowDestructive
+// (--allow-destructive) was not set — the clone-and-run guard
+// (SQLETCH204 at the CLI layer). Like VersionMismatchError it is shared
+// by all three dialects, so Server names the engine actually targeted;
+// the disposable-reset contract is not PostgreSQL-specific. The DSN is
+// deliberately NOT carried here: it may embed credentials, and the
+// diagnostic points at database.dsn in the config rather than echoing
+// the string back.
+type DestructiveResetError struct {
+	Server string // display name, e.g. "PostgreSQL", "MySQL", "SQLite"
+}
+
+func (e *DestructiveResetError) Error() string {
+	server := e.Server
+	if server != "" {
+		server += " "
+	}
+	return fmt.Sprintf("refusing to reset the %sdatabase at the configured dsn: sqletch drops the schema before applying it, which is safe only for a disposable database", server)
+}
+
+// guardReset reports whether Acquire must refuse the disposable schema
+// reset for this config: the DSN is user-supplied (sqletch did not
+// provision the database) and AllowDestructive was not passed. An empty
+// DSN — a container or temp file sqletch created itself — always resets.
+func (c Config) guardReset() bool {
+	return c.DSN != "" && !c.AllowDestructive
 }
 
 // AcquireDSN starts (or reuses) the dev database, verifies the version
@@ -148,6 +190,10 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 	}
 
 	if hasSchema(cfg.SchemaSQL) {
+		if cfg.guardReset() {
+			closeAll()
+			return nil, func() {}, &DestructiveResetError{Server: "PostgreSQL"}
+		}
 		// Dev databases are disposable by contract (see Config.DSN):
 		// reset so schema application is idempotent across runs.
 		if _, err := conn.Exec(ctx,

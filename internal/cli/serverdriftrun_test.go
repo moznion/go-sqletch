@@ -69,7 +69,7 @@ func TestRun_RecordsGenerationEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeSQLiteProject(t, dir, "3", "dev.sqlite3")
 
-	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{})
+	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRun_RecordsGenerationEnvironment(t *testing.T) {
 func TestRun_WarmRunDoesNotTouchTheRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeSQLiteProject(t, dir, "3", "dev.sqlite3")
-	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{}); err != nil {
+	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true}); err != nil {
 		t.Fatal(err)
 	}
 	sidecar := envSidecarPath(t, dir)
@@ -102,7 +102,7 @@ func TestRun_WarmRunDoesNotTouchTheRecord(t *testing.T) {
 	rewriteEnvVersion(t, sidecar, "1.2.3")
 	before := readEnvSidecar(t, sidecar)
 
-	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{})
+	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRun_WarmRunDoesNotTouchTheRecord(t *testing.T) {
 func TestRun_ServerDriftFailsAndLeavesTheCacheAlone(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeSQLiteProject(t, dir, "3", "dev.sqlite3")
-	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{}); err != nil {
+	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true}); err != nil {
 		t.Fatal(err)
 	}
 	sidecar := envSidecarPath(t, dir)
@@ -130,7 +130,7 @@ func TestRun_ServerDriftFailsAndLeavesTheCacheAlone(t *testing.T) {
 
 	// --exhaustive always connects, so it is the lane that can see drift
 	// even when every entry is a cache hit.
-	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheckExhaustive, RunOptions{})
+	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheckExhaustive, RunOptions{AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("drift is a diagnostic, not an environment error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRun_ServerDriftFailsAndLeavesTheCacheAlone(t *testing.T) {
 func TestRun_ServerDriftAcceptedByFlag(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeSQLiteProject(t, dir, "3", "dev.sqlite3")
-	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{}); err != nil {
+	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true}); err != nil {
 		t.Fatal(err)
 	}
 	sidecar := envSidecarPath(t, dir)
@@ -163,7 +163,7 @@ func TestRun_ServerDriftAcceptedByFlag(t *testing.T) {
 	rewriteEnvVersion(t, sidecar, "3.0.0")
 
 	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheckExhaustive,
-		RunOptions{AllowServerDrift: true})
+		RunOptions{AllowServerDrift: true, AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestRun_ServerDriftAcceptedByFlag(t *testing.T) {
 func TestRun_MissingRecordIsAdoptedSilently(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeSQLiteProject(t, dir, "3", "dev.sqlite3")
-	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{}); err != nil {
+	if _, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheck, RunOptions{AllowDestructive: true}); err != nil {
 		t.Fatal(err)
 	}
 	sidecar := envSidecarPath(t, dir)
@@ -192,7 +192,7 @@ func TestRun_MissingRecordIsAdoptedSilently(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheckExhaustive, RunOptions{})
+	res, err := Run(context.Background(), loadDriftConfig(t, cfgPath), ModeCheckExhaustive, RunOptions{AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

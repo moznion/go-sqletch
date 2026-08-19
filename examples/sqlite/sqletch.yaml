@@ -2,7 +2,10 @@ version: 1
 dialect: sqlite
 server_version: "3"
 database:
-  dsn: dev.sqlite3   # disposable file next to this config; no server, no Docker
+  dsn: dev.sqlite3   # disposable file next to this config; no server, no Docker.
+                     # A user-set dsn is reset (schema dropped + re-applied), so a
+                     # cold `generate` needs --allow-destructive; a warm offline
+                     # `check` runs from the committed cache and never touches it.
 schema:
   files: [db/schema.sql]
 queries: [queries/*.sql]

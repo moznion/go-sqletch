@@ -71,8 +71,9 @@ func TestLSPWarmCacheAgreesWithPipeline(t *testing.T) {
 	defer cancel()
 
 	dsn, cleanup, err := devdb.AcquireDSN(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
-		ServerVersion: "16",
+		DSN:              os.Getenv("SQLETCH_TEST_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "16",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +108,7 @@ cache:
 
 	// 1. Cold run against the real server: fills the cache and produces
 	//    the reference diagnostics.
-	res, err := cli.Run(ctx, writeConfig(dsn), cli.ModeCheck, cli.RunOptions{})
+	res, err := cli.Run(ctx, writeConfig(dsn), cli.ModeCheck, cli.RunOptions{AllowDestructive: true})
 	if err != nil {
 		t.Fatalf("cold run: %v", err)
 	}

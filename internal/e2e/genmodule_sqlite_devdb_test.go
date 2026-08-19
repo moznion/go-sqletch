@@ -56,7 +56,7 @@ cache:
 
 	// 1. Cold generate: runs the in-process engine, fills cache and gen/.
 	var out, errW bytes.Buffer
-	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline: no") {
@@ -77,7 +77,7 @@ cache:
 	writeConfig("/nonexistent-sqletch-dir/nope.sqlite3")
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("warm offline check: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(out.String(), "offline: yes") {
@@ -90,7 +90,7 @@ cache:
 		"-- name: Broken :many\nSELECT count(*) AS n FROM users;\n")
 	out.Reset()
 	errW.Reset()
-	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{}, &out, &errW); code != cli.ExitDiagnostics {
+	if code := cli.Check(ctx, configPath, false, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitDiagnostics {
 		t.Fatalf("missing @column: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 	if !strings.Contains(errW.String(), "@column n") {
@@ -102,7 +102,7 @@ cache:
 	// Re-generate so the schema is freshly applied for the module run.
 	out.Reset()
 	errW.Reset()
-	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{}, &out, &errW); code != cli.ExitOK {
+	if code := cli.Generate(ctx, configPath, false, cli.RunOptions{AllowDestructive: true}, &out, &errW); code != cli.ExitOK {
 		t.Fatalf("regenerate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 

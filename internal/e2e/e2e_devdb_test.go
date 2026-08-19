@@ -264,9 +264,10 @@ func acquire(t *testing.T) (*pgx.Conn, context.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
-		ServerVersion: "16",
-		SchemaSQL:     []string{schemaSQL},
+		DSN:              os.Getenv("SQLETCH_TEST_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "16",
+		SchemaSQL:        []string{schemaSQL},
 	})
 	if err != nil {
 		t.Fatalf("acquire dev database: %v", err)

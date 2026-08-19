@@ -67,6 +67,37 @@ func Acquire(ctx context.Context, cfg config.Database)
 `Acquire` is called lazily: only when a cache miss occurs (see §4
 flow). `check` on a warm cache never calls it.
 
+### 2.1 Destructive-reset guard (`SQLETCH204`)
+
+Applying the schema first **resets** it — `DROP SCHEMA public CASCADE`
+on PostgreSQL, drop every table on MySQL, drop every table/view on
+SQLite — so runs are idempotent. That is safe only for a *disposable*
+database, but `database.dsn` comes from `sqletch.yaml`, which is
+repo-controlled: a cloned project could aim it at a database the
+developer cares about, and a cold `generate`/`check`/`explain --analyze`
+would wipe it before printing anything.
+
+So the reset is gated:
+
+- **A database sqletch provisioned itself** (empty `dsn` → a fresh
+  container, temp file, or `:memory:`) is disposable by construction and
+  always resets. This is the common path and is unchanged.
+- **A user-supplied `dsn`** does NOT reset by default: `devdb`'s
+  `Acquire*` returns `*DestructiveResetError` (mapped to `SQLETCH204`
+  against `config.Path` by `cli.destructiveResetDiag`, in both
+  `pipeline.Run` and `explain --analyze`). Nothing is dropped.
+- The escape hatch is **`--allow-destructive`** — a flag, deliberately
+  not a config key (same reasoning as `--allow-server-drift` in §3.1: a
+  repo-controlled key could disarm the guard invisibly). It threads
+  through `RunOptions`/`ExplainOptions` → `devdb.Config.AllowDestructive`
+  and confirms the operator accepts the reset.
+
+The guard sits immediately before the reset, after connecting and the
+version check (both of which write nothing), so a refusal leaves the
+target untouched. `SQLETCH204` reaches `--json`/editors like any coded
+diagnostic. The error carries only the engine name, never the DSN
+(which may embed credentials).
+
 ## 3. `internal/cache` — committed cache
 
 Layout (path from config, default `.sqletch/cache/`, committed to VCS):

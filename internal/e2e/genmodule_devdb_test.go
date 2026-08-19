@@ -48,9 +48,10 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 	defer cancel()
 
 	dsn, cleanup, err := devdb.AcquireDSN(ctx, devdb.Config{
-		DSN:           os.Getenv("SQLETCH_TEST_DSN"),
-		ServerVersion: "16",
-		SchemaSQL:     []string{schemaSQL},
+		DSN:              os.Getenv("SQLETCH_TEST_DSN"),
+		AllowDestructive: true,
+		ServerVersion:    "16",
+		SchemaSQL:        []string{schemaSQL},
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)

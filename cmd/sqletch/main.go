@@ -47,39 +47,47 @@ func main() {
 	// in CI logs), not be disarmed once and forgotten.
 	const driftFlagUsage = "accept a committed cache generated against a different server version (SQLETCH203 becomes a warning)"
 
-	var generateDrift bool
+	// Same reasoning as --allow-server-drift: a repo-controlled config
+	// key could silently arm a destructive reset of a database the
+	// developer pointed sqletch at, so the confirmation is a flag that
+	// stays visible on the command line and in CI logs.
+	const destructiveFlagUsage = "confirm the database at a user-supplied database.dsn is disposable, letting sqletch drop and recreate its schema (required for a cold run against a dsn you set; SQLETCH204 otherwise)"
+
+	var generateDrift, generateDestructive bool
 	generate := &cobra.Command{
 		Use:   "generate",
 		Short: "compile templates, run type extraction, emit Go",
 		Run: func(cmd *cobra.Command, args []string) {
-			opts := cli.RunOptions{AllowServerDrift: generateDrift}
+			opts := cli.RunOptions{AllowServerDrift: generateDrift, AllowDestructive: generateDestructive}
 			os.Exit(cli.Generate(context.Background(), configPath, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
 	}
 	generate.Flags().BoolVar(&generateDrift, "allow-server-drift", false, driftFlagUsage)
+	generate.Flags().BoolVar(&generateDestructive, "allow-destructive", false, destructiveFlagUsage)
 	root.AddCommand(generate)
 
-	var exhaustive, checkDrift bool
+	var exhaustive, checkDrift, checkDestructive bool
 	check := &cobra.Command{
 		Use:   "check",
 		Short: "verify only (offline on cache hit)",
 		Run: func(cmd *cobra.Command, args []string) {
-			opts := cli.RunOptions{AllowServerDrift: checkDrift}
+			opts := cli.RunOptions{AllowServerDrift: checkDrift, AllowDestructive: checkDestructive}
 			os.Exit(cli.Check(context.Background(), configPath, exhaustive, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
 	}
 	check.Flags().BoolVar(&exhaustive, "exhaustive", false,
 		"prepare and EXPLAIN every enumerable shape (needs the dev DB)")
 	check.Flags().BoolVar(&checkDrift, "allow-server-drift", false, driftFlagUsage)
+	check.Flags().BoolVar(&checkDestructive, "allow-destructive", false, destructiveFlagUsage)
 	root.AddCommand(check)
 
-	var enumerate, analyze bool
+	var enumerate, analyze, explainDestructive bool
 	var maxShapes int
 	explain := &cobra.Command{
 		Use:   "explain [query...]",
 		Short: "show guards, cases, types, and shape counts per query",
 		Run: func(cmd *cobra.Command, args []string) {
-			opts := cli.ExplainOptions{Enumerate: enumerate, Analyze: analyze, MaxShapes: maxShapes}
+			opts := cli.ExplainOptions{Enumerate: enumerate, Analyze: analyze, MaxShapes: maxShapes, AllowDestructive: explainDestructive}
 			os.Exit(cli.Explain(context.Background(), configPath, args, opts, os.Stdout, os.Stderr))
 		},
 	}
@@ -90,6 +98,7 @@ func main() {
 	explain.Flags().IntVar(&maxShapes, "max-shapes", 0,
 		"cap shape enumeration for --enumerate/--analyze (0 = the mode's default); "+
 			"--enumerate warns when it stops at the cap, --analyze fails")
+	explain.Flags().BoolVar(&explainDestructive, "allow-destructive", false, destructiveFlagUsage)
 	root.AddCommand(explain)
 
 	var fmtCheck bool
