@@ -236,6 +236,31 @@ func TestNativeDescribeRefusesWithClause(t *testing.T) {
 	}
 }
 
+func TestNativeDescribeRefusesNamedWindow(t *testing.T) {
+	// A statement-level named WINDOW clause is the same sail-through
+	// class as WITH: its body lives only in SelectStmt.WindowSpecs, so a
+	// broken or unused named window used to pass describe with err=nil.
+	// It must be REFUSED (SQLETCH214). An inline OVER(...) in the select
+	// list is walked normally and stays out of this refusal.
+	for _, tt := range []struct{ name, sql string }{
+		// Unused named window whose body references a ghost column:
+		// pre-fix this returned a clean Desc.
+		{"unused named window", "SELECT o.id FROM orgs o WINDOW w AS (ORDER BY ghost)"},
+		{"named window referenced by name", "SELECT COUNT(*) OVER w AS c FROM orgs o WINDOW w AS (ORDER BY o.id)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError for %q, got %T: %v", tt.sql, err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "WINDOW") {
+				t.Errorf("refusal %q/%q should mention WINDOW", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
 func TestNativeDescribeInertInSubquery(t *testing.T) {
 	// The dialect's own arity-0 @in emission must pass: it is pinned
 	// skeleton text (dialect.InEmptySQL), not an authored subquery.
