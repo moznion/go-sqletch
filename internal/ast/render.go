@@ -119,10 +119,46 @@ func caseBody(c *template.Choose, ord int) (body string, tOff int) {
 	return "", c.Span.Start
 }
 
+// RenderingCount reports how many renderings Renderings would produce
+// for q WITHOUT allocating any of them — the count is a linear sum, so
+// a caller can refuse a pathological template (many @choose/@order-by/
+// @filter-tree blocks over a large skeleton, each rendering a fresh
+// full-SQL copy) before the set is materialised and exhausts memory.
+// It MUST stay in lock-step with Renderings below: the maximal
+// rendering, plus one per additional @choose ordinal, one per
+// @order-by @default body, one per @in occurrence (question-style
+// dialects only), and one per @filter-tree.
+func RenderingCount(profile dialect.LexerProfile, q *template.QueryTemplate) int {
+	n := 1 // maximal
+	for _, it := range q.Items {
+		switch c := it.(type) {
+		case *template.Choose:
+			if extra := maxOrdinal(c) - 1; extra > 0 {
+				n += extra
+			}
+		case *template.OrderBy:
+			if c.Default != nil {
+				n++
+			}
+		case *template.FilterTree:
+			n++
+		}
+	}
+	if dialect.StyleOf(profile) == dialect.PlaceholderQuestion {
+		for _, it := range q.Items {
+			if _, ok := it.(*template.InExpr); ok {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // Renderings produces the full verified-rendering set: the maximal
 // rendering first (ordinal 0 everywhere, all @order-by keys listed),
 // then one rendering per remaining @choose ordinal, then one per
-// @order-by @default body.
+// @order-by @default body. RenderingCount above projects len(result)
+// without allocating; keep the two in lock-step.
 func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rendering, error) {
 	max, err := Render(profile, q, nil)
 	if err != nil {

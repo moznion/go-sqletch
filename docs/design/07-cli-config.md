@@ -78,6 +78,20 @@ default 4096; exceeding it is `SQLETCH304` and leaves that query
 unverified, with the key named in the hint) and Describe+EXPLAIN each
 against the dev DB — always requires the DB by definition.
 
+The **verification rendering set** every check builds up front (the
+maximal rendering plus one per additional `@choose` ordinal, per
+`@order-by` `@default`, per `@in` on expanding dialects, and per
+`@filter-tree`) is bounded by the same `verification.max_shapes`
+before it is materialised: each rendering is a full copy of the query,
+so a template with thousands of `@choose` cases over a large skeleton
+would otherwise exhaust memory in `scanChecks` — the shared seam for
+both `pipeline.Run` and the LSP — before any cap downstream had a say.
+`ast.RenderingCount` projects the count without allocating; over budget
+is `SQLETCH302` (a plain error diagnostic, so the LSP degrades rather
+than crashing) and the renderings are never built. The rendering count
+never exceeds the shape space, so a template inside the verification
+budget is never refused here.
+
 The cap is a **config key, not a flag**, because it decides whether a
 CI gate passes: the verification budget must be identical on every
 machine that runs the check, not a property of who typed the command.

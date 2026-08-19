@@ -218,7 +218,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	pols, polDiags := compilePolicies(drv, cfg)
 	res.Diags = append(res.Diags, polDiags...)
 	for _, cq := range queries {
-		wres, rs, d, err := scanChecks(drv, pols, cq.q)
+		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes)
 		if err != nil {
 			return nil, err
 		}

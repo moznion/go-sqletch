@@ -51,10 +51,29 @@ func compilePolicies(drv driver, cfg config.Config) ([]policy.Policy, []diagnost
 // depends on configuration — then policy weaving, then renderings and
 // R1 on the WOVEN result. Every downstream phase must consume the
 // returned Result.Query.
-func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate) (policy.Result, []ast.Rendering, []diagnostics.Diagnostic, error) {
+//
+// maxRenderings bounds the verification rendering set: Renderings
+// materialises one full-SQL copy per rendering, and its count grows
+// with the number of @choose/@order-by/@filter-tree blocks, so a
+// crafted template could otherwise exhaust memory here — before any
+// max_shapes cap downstream. A projected count over the budget is
+// refused with SQLETCH302 (a plain error diagnostic, so the LSP
+// degrades rather than crashing) and the renderings are never built.
+// The bound is verification.max_shapes: the rendering count never
+// exceeds the shape space, so a template inside the verification budget
+// is never refused here. A non-positive budget disables the check.
+func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate, maxRenderings int) (policy.Result, []ast.Rendering, []diagnostics.Diagnostic, error) {
 	diags := rules.CheckLexical(drv.profile, q)
 	wres := policy.Weave(drv.profile, drv.frontend, pols, q)
 	diags = append(diags, wres.Diags...)
+	if n := ast.RenderingCount(drv.profile, wres.Query); maxRenderings > 0 && n > maxRenderings {
+		diags = append(diags, diagnostics.Errorf(diagnostics.CodeExpansionLarge,
+			wres.Query.HeaderSpan,
+			"%s expands to %d verification renderings, over the shape budget of %d; refusing to materialise them (each is a full copy of the query, so the set would exhaust memory)",
+			wres.Query.Name, n, maxRenderings).
+			WithHint("reduce the number of @choose/@order-by/@filter-tree blocks in this query, or raise verification.max_shapes"))
+		return wres, nil, diags, nil
+	}
 	rs, err := ast.Renderings(drv.profile, wres.Query)
 	if err != nil {
 		return wres, nil, diags, err
