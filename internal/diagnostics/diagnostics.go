@@ -182,7 +182,15 @@ func Sort(diags []Diagnostic) {
 // "file:line:col: error[CODE]: message". The full excerpt renderer
 // arrives in P7; this form is enough for tests and early CLI output.
 func (d Diagnostic) Render(src []byte) string {
-	line, col := LineCol(src, d.Span.Start)
+	return d.RenderWith(src, NewLineMap(src))
+}
+
+// RenderWith is Render reusing a precomputed line index. Rendering a
+// batch of diagnostics for one file builds the index once (O(n)) and
+// then locates each diagnostic in O(log lines) instead of O(offset) —
+// see PrintDiags. Output is byte-identical to Render.
+func (d Diagnostic) RenderWith(src []byte, lm *LineMap) string {
+	line, col := lm.LineCol(d.Span.Start)
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s:%d:%d: %s[%s]: %s", d.Span.File, line, col, d.Severity, d.Code, d.Message)
 	if d.Hint != "" {
@@ -200,10 +208,17 @@ func (d Diagnostic) Render(src []byte) string {
 //	   |       ^^^^^^^^^^^^^^^
 //	help: …
 func (d Diagnostic) RenderExcerpt(src []byte) string {
+	return d.RenderExcerptWith(src, NewLineMap(src))
+}
+
+// RenderExcerptWith is RenderExcerpt reusing a precomputed line index
+// (see RenderWith / PrintDiags). Output is byte-identical to
+// RenderExcerpt.
+func (d Diagnostic) RenderExcerptWith(src []byte, lm *LineMap) string {
 	if len(src) == 0 || d.Span.Start >= len(src) {
-		return d.Render(src)
+		return d.RenderWith(src, lm)
 	}
-	line, _ := LineCol(src, d.Span.Start)
+	line, _ := lm.LineCol(d.Span.Start)
 	lineStart := d.Span.Start
 	for lineStart > 0 && src[lineStart-1] != '\n' {
 		lineStart--
@@ -226,7 +241,7 @@ func (d Diagnostic) RenderExcerpt(src []byte) string {
 	gutter := fmt.Sprintf("%d", line)
 	pad := strings.Repeat(" ", len(gutter))
 	var b strings.Builder
-	lineNo, col := LineCol(src, d.Span.Start)
+	lineNo, col := lm.LineCol(d.Span.Start)
 	fmt.Fprintf(&b, "%s:%d:%d: %s[%s]: %s\n", d.Span.File, lineNo, col, d.Severity, d.Code, d.Message)
 	fmt.Fprintf(&b, "%s |\n", pad)
 	fmt.Fprintf(&b, "%s | %s\n", gutter, lineText)
@@ -239,19 +254,46 @@ func (d Diagnostic) RenderExcerpt(src []byte) string {
 
 // LineCol converts a byte offset into 1-based line and column
 // (column counts bytes; rune-aware columns arrive with the P7
-// renderer).
+// renderer). It builds a one-shot line index; callers rendering many
+// diagnostics for the same source should build a LineMap once and reuse
+// it (see PrintDiags) to avoid O(offset) per lookup.
 func LineCol(src []byte, off int) (line, col int) {
-	if off > len(src) {
-		off = len(src)
-	}
-	line, col = 1, 1
-	for i := 0; i < off; i++ {
+	return NewLineMap(src).LineCol(off)
+}
+
+// LineMap is a precomputed index of line-start byte offsets for one
+// source, so byte offset → (line, col) is an O(log lines) binary search
+// instead of an O(offset) rescan. Rendering d diagnostics for an n-byte
+// file drops from O(n·d) to O(n + d·log lines) by building it once.
+type LineMap struct {
+	// starts[k] is the byte offset at which line k+1 begins; starts[0]
+	// is always 0. A '\n' at index j starts a new line at j+1.
+	starts []int
+	n      int // len(src), for clamping an offset past EOF
+}
+
+// NewLineMap builds the line index for src.
+func NewLineMap(src []byte) *LineMap {
+	starts := []int{0}
+	for i := 0; i < len(src); i++ {
 		if src[i] == '\n' {
-			line++
-			col = 1
-		} else {
-			col++
+			starts = append(starts, i+1)
 		}
 	}
-	return line, col
+	return &LineMap{starts: starts, n: len(src)}
+}
+
+// LineCol returns the 1-based line and (byte-)column of off. It is
+// byte-identical to the previous linear implementation: an offset past
+// EOF clamps to EOF, the column counts bytes since the last '\n', and a
+// '\n' byte itself belongs to the line it terminates.
+func (m *LineMap) LineCol(off int) (line, col int) {
+	if off > m.n {
+		off = m.n
+	}
+	if off < 0 {
+		off = 0
+	}
+	idx := sort.Search(len(m.starts), func(i int) bool { return m.starts[i] > off }) - 1
+	return idx + 1, off - m.starts[idx] + 1
 }

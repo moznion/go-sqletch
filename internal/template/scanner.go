@@ -137,6 +137,14 @@ func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.D
 	file := &QueryFile{Path: path}
 
 	pos := 0
+	// A leading UTF-8 BOM (EF BB BF) is editor byte-order noise, not
+	// template content. Skip it as leading trivia WITHOUT rewriting the
+	// buffer, so every span/offset (and the LSP's UTF-16 mapping) still
+	// indexes the original bytes. Otherwise the BOM lexes as an
+	// identifier and trips SQLETCH003 "statement without a query header".
+	if len(src) >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF {
+		pos = 3
+	}
 	for pos <= len(src) {
 		if pos < len(src) && src[pos] == '@' {
 			if name, nameEnd := matchConstruct(src, pos); name != "" {

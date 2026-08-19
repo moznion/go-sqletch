@@ -44,6 +44,18 @@ The profile is intentionally *not* a full SQL lexer: it only needs to
 be correct about token *boundaries* (so constructs, params, and clause
 keywords are never found inside strings/comments/identifiers).
 
+Line comments end at **either** `\n` or a lone `\r`, so a classic-Mac
+(CR-only) file is scanned line-by-line like any other; without this a
+CR-only file would fold its entire content into one `-- name: …`
+comment and silently yield zero queries. CRLF is unaffected (the `\r`
+ends the comment, the trailing `\r\n` is whitespace trivia).
+
+A single leading UTF-8 BOM (`EF BB BF`) is skipped as leading trivia at
+the scan entry point (`ScanFile`) **without rewriting the buffer**, so
+all spans keep indexing the original bytes (the LSP's UTF-16 mapping
+relies on this). Only the first BOM is skipped; a second, or a BOM
+anywhere but the very start, is ordinary content.
+
 ## 2. Construct recognition
 
 Constructs are matched at token boundaries, before the profile's
