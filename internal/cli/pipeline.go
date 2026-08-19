@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
@@ -67,6 +68,46 @@ func versionPinDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool)
 	return d, true
 }
 
+// overrideHygieneDiags warns about null_overrides entries that cannot
+// do what the user intended: a key naming no result column is dead
+// config (a typo or a renamed column), and a key matching several
+// same-named result columns forces ALL of them — overrides are
+// name-keyed, not position-keyed.
+func overrideHygieneDiags(cfg config.Config, query string,
+	overrides map[string]bool, desc dialect.Desc) []diagnostics.Diagnostic {
+
+	if len(overrides) == 0 {
+		return nil
+	}
+	count := map[string]int{}
+	for _, c := range desc.Columns {
+		count[c.Name]++
+	}
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var diags []diagnostics.Diagnostic
+	for _, name := range names {
+		switch {
+		case count[name] == 0:
+			diags = append(diags, diagnostics.Warnf(diagnostics.CodeOverrideUnknownColumn,
+				diagnostics.Span{File: cfg.Path},
+				"null_overrides for query %q names column %q, which is not a result column — the override is dead",
+				query, name).
+				WithHint("check for a typo or a renamed output alias"))
+		case count[name] > 1:
+			diags = append(diags, diagnostics.Warnf(diagnostics.CodeOverrideAmbiguousColumn,
+				diagnostics.Span{File: cfg.Path},
+				"null_overrides for query %q matches %d result columns named %q — overrides are name-keyed and force all of them",
+				query, count[name], name).
+				WithHint("give the columns distinct output aliases and override the intended one"))
+		}
+	}
+	return diags
+}
+
 // RunOptions carries the per-invocation switches that are not
 // sqletch.yaml's business — things a user opts into for one command,
 // which must stay visible on the command line rather than being
@@ -81,12 +122,13 @@ type RunOptions struct {
 }
 
 type compiledQuery struct {
-	q          *template.QueryTemplate // woven: every phase past scanChecks reads this
-	woven      []policy.WovenPolicy    // policy coverage (enforcement, explain)
-	rs         []ast.Rendering
-	descs      []dialect.Desc
-	paramTypes map[string]dialect.TypeRef
-	nullable   []bool
+	q           *template.QueryTemplate // woven: every phase past scanChecks reads this
+	woven       []policy.WovenPolicy    // policy coverage (enforcement, explain)
+	rs          []ast.Rendering
+	descs       []dialect.Desc
+	paramTypes  map[string]dialect.TypeRef
+	nullable    []bool
+	nullReasons []string // parallel to nullable; explain's "why"
 }
 
 // Run executes the pipeline. Diagnostics are user mistakes; the error
@@ -266,11 +308,18 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		}
 		res.Diags = append(res.Diags, d...)
 		cq.paramTypes = types
-		nullable, err := nullability.AnalyzeAll(frontend, cq.rs, cq.descs, cat, cfg.NullOverridesFor(cq.q.Name))
+		overrides := cfg.NullOverridesFor(cq.q.Name)
+		verdicts, err := nullability.AnalyzeAllVerdicts(frontend, cq.rs, cq.descs, cat, overrides)
 		if err != nil {
 			return nil, err
 		}
-		cq.nullable = nullable
+		cq.nullable = make([]bool, len(verdicts))
+		cq.nullReasons = make([]string, len(verdicts))
+		for i, v := range verdicts {
+			cq.nullable[i] = v.Nullable
+			cq.nullReasons[i] = v.Reason
+		}
+		res.Diags = append(res.Diags, overrideHygieneDiags(cfg, cq.q.Name, overrides, cq.descs[0])...)
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
@@ -599,7 +648,11 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 			if i < len(cq.nullable) && cq.nullable[i] {
 				null = "nullable"
 			}
-			d.Columns = append(d.Columns, fmt.Sprintf("%s: %s (%s)", col.Name, col.Type.Name, null))
+			why := ""
+			if i < len(cq.nullReasons) && cq.nullReasons[i] != "" {
+				why = "; " + cq.nullReasons[i]
+			}
+			d.Columns = append(d.Columns, fmt.Sprintf("%s: %s (%s%s)", col.Name, col.Type.Name, null, why))
 		}
 		data, err := json.MarshalIndent(d, "", "  ")
 		if err != nil {

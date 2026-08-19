@@ -53,19 +53,47 @@ var funcWhitelist = map[string]bool{
 func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 	cat *cache.Catalog, overrides map[string]bool) []bool {
 
-	// trustSrc: with a derived table/CTE/set operation or a grouping
-	// set anywhere relevant, no SrcRel narrowing at all — even a
-	// directly-present table can be re-attributed through the opaque
-	// construct (e.g. the same table both joined directly and wrapped
-	// in a null-extended derived table).
-	trustSrc := !maxTree.HasOpaqueProvenance() && !maxTree.HasGroupingSets()
+	vs := AnalyzeVerdicts(maxTree, maxR, desc, cat, overrides)
+	out := make([]bool, len(vs))
+	for i, v := range vs {
+		out[i] = v.Nullable
+	}
+	return out
+}
+
+// Verdict couples the per-column decision with the reason it was
+// reached — surfaced by `explain` so a conservative verdict is
+// auditable (and a null_overrides entry can be written with
+// confidence) instead of opaque.
+type Verdict struct {
+	Nullable bool
+	Reason   string
+}
+
+// AnalyzeVerdicts is Analyze with reasons.
+func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
+	cat *cache.Catalog, overrides map[string]bool) []Verdict {
+
+	// Statement-wide kill-switches: with a derived table/CTE/set
+	// operation or a grouping set anywhere relevant, no SrcRel
+	// narrowing at all — even a directly-present table can be
+	// re-attributed through the opaque construct (e.g. the same table
+	// both joined directly and wrapped in a null-extended derived
+	// table).
+	untrusted := ""
+	switch {
+	case maxTree.HasOpaqueProvenance():
+		untrusted = "narrowing disabled: statement contains a derived table, CTE, or set operation"
+	case maxTree.HasGroupingSets():
+		untrusted = "narrowing disabled: ROLLUP/CUBE/GROUPING SETS nulls grouping columns"
+	}
+	trustSrc := untrusted == ""
 
 	// present: source OIDs accounted for by SKELETON FROM relations,
 	// with their aggregated null-extension. Guarded relations are
 	// excluded: their instance never supplies result columns (R2), and
 	// a skeleton instance of the same table must not inherit a guarded
 	// instance's properties.
-	type presence struct{ nullExtended bool }
 	present := map[uint32]*presence{}
 	if cat != nil {
 		for _, rel := range maxTree.Relations() {
@@ -98,35 +126,65 @@ func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 		}
 	}
 
-	out := make([]bool, len(desc.Columns))
+	out := make([]Verdict, len(desc.Columns))
 	for i, col := range desc.Columns {
 		if v, ok := overrides[col.Name]; ok {
-			out[i] = v
+			out[i] = Verdict{Nullable: v, Reason: "forced by null_overrides"}
 			continue
 		}
 		// Direct column reference: catalog NOT NULL, provided the
 		// source relation is trusted, present, and not null-extended.
 		if col.SrcRel != 0 && cat != nil {
-			nonNull := false
-			if p := present[col.SrcRel]; trustSrc && p != nil && !p.nullExtended {
-				if t := cat.LookupOID(col.SrcRel); t != nil {
-					if c := t.ColByAtt(col.SrcAtt); c != nil {
-						nonNull = c.NotNull
-					}
-				}
-			}
-			out[i] = !nonNull
+			out[i] = srcVerdict(col, cat, trustSrc, untrusted, present)
 			continue
 		}
 		// Expression column: nullable unless whitelisted total function.
 		if aligned && funcWhitelist[targets[i].FuncName] {
-			out[i] = false
+			out[i] = Verdict{Nullable: false,
+				Reason: "total function " + targets[i].FuncName + "()"}
 			continue
 		}
-		out[i] = true
+		out[i] = Verdict{Nullable: true,
+			Reason: "expression column without a totality proof"}
 	}
 	return out
 }
+
+// srcVerdict decides a source-attributed column under the provenance
+// discipline, spelling out which gate stopped the narrowing.
+func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
+	trustSrc bool, untrusted string, present map[uint32]*presence) Verdict {
+
+	if !trustSrc {
+		return Verdict{Nullable: true, Reason: untrusted}
+	}
+	p := present[col.SrcRel]
+	if p == nil {
+		return Verdict{Nullable: true,
+			Reason: "source relation is not present in FROM (untrusted provenance)"}
+	}
+	t := cat.LookupOID(col.SrcRel)
+	if t == nil {
+		return Verdict{Nullable: true, Reason: "source relation unknown to the catalog"}
+	}
+	c := t.ColByAtt(col.SrcAtt)
+	if c == nil {
+		return Verdict{Nullable: true, Reason: "source column unknown to the catalog"}
+	}
+	qual := t.Name + "." + c.Name
+	if p.nullExtended {
+		return Verdict{Nullable: true,
+			Reason: qual + " is null-extended by an outer join"}
+	}
+	if !c.NotNull {
+		return Verdict{Nullable: true, Reason: qual + " is nullable in the catalog"}
+	}
+	return Verdict{Nullable: false, Reason: qual + " is NOT NULL in the catalog"}
+}
+
+// presence is one accounted-for source OID: seen in the skeleton FROM
+// list, with its aggregated null-extension.
+type presence struct{ nullExtended bool }
 
 // AnalyzeAll runs Analyze over every verified rendering and unions the
 // results per column — the spec's nullable-most rule for @choose
@@ -136,7 +194,24 @@ func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 func AnalyzeAll(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
 	cat *cache.Catalog, overrides map[string]bool) ([]bool, error) {
 
-	var out []bool
+	vs, err := AnalyzeAllVerdicts(fe, rs, descs, cat, overrides)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]bool, len(vs))
+	for i, v := range vs {
+		out[i] = v.Nullable
+	}
+	return out, nil
+}
+
+// AnalyzeAllVerdicts is AnalyzeAll with reasons: the union keeps the
+// first rendering's reason while a column stays non-nullable and
+// adopts the flipping rendering's reason when one turns it nullable.
+func AnalyzeAllVerdicts(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
+	cat *cache.Catalog, overrides map[string]bool) ([]Verdict, error) {
+
+	var out []Verdict
 	for i, r := range rs {
 		if i >= len(descs) {
 			break
@@ -145,14 +220,14 @@ func AnalyzeAll(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
 		if err != nil {
 			return nil, err
 		}
-		n := Analyze(tree, r, descs[i], cat, overrides)
+		n := AnalyzeVerdicts(tree, r, descs[i], cat, overrides)
 		if out == nil {
 			out = n
 			continue
 		}
 		for c := range out {
-			if c < len(n) {
-				out[c] = out[c] || n[c]
+			if c < len(n) && !out[c].Nullable && n[c].Nullable {
+				out[c] = n[c]
 			}
 		}
 	}
