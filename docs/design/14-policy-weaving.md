@@ -508,7 +508,7 @@ otherwise.
 | Code | Meaning |
 | --- | --- |
 | `SQLETCH124` | A query touches a policy-designated table without the scoping conjunct in every shape, and has no opt-out. |
-| `SQLETCH125` | A policy applies to this query but cannot be woven: the designated table is in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2, guarded-join relation per D5), its bound name is not a bare identifier (§11.3), or the query declares a conflicting type for the policy parameter (§11.4). Opt out explicitly or restructure. |
+| `SQLETCH125` | A policy applies to this query but cannot be woven: the designated table is in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2, guarded-join relation per D5), its bound name is not a bare identifier (§11.3), or the query already declares the policy's parameter name with a conflicting *type* (§11.4) or a conflicting *kind* — an optional `@if-present`/`@when` control parameter or a `@filter-tree` `@predicate` argument (§11.4). Opt out explicitly or restructure. |
 | `SQLETCH126` | `-- @policy-optout` names an unknown policy, or one that does not apply to this query. |
 | `SQLETCH303` | A policy declaration in `sqletch.yaml` is malformed, or its predicate does not parse as one complete boolean node. |
 
@@ -643,6 +643,30 @@ An existing hint with the *same* type is fine (idempotent); a
 about one parameter — loud, per-query, opt-out-able). Tier 2 dialects
 get their mandatory annotation this way; Tier 1 gets the normal
 assert-against-oracle behavior (`SQLETCH213`).
+
+The parameter's *kind* must agree too. D3(a) makes the woven parameter
+a **required** argument precisely so a caller cannot omit it and
+silently send the zero value; that guarantee is lost if the query
+already declares the same name as a parameter of an incompatible kind,
+because the weaver reuses the author's declaration rather than
+overwriting it. So the weaver rejects (`SQLETCH125`) when the name is
+already:
+
+- an **optional** `@if-present` parameter — the woven conjunct is
+  unconditional, so a `None` caller would bind `NULL` in every shape
+  (`tenant_id = NULL`) and silently empty the result set: the exact
+  "401 that reads like a wrong password" failure D3 exists to prevent;
+- a **control** parameter (`@when` value, presence guard, or a
+  `@filter-tree` `@predicate` argument) — binding it as an
+  unconditional SQL value is what R9 forbids, and the enforcement pass
+  (`SQLETCH124`) would wrongly accept the woven unconditional copy.
+
+Only a plain, always-**required** value parameter of the same name is
+sound to share (the D3(a) case): the policy binds the same required
+value the caller already had to supply. The check keys on
+scanner-populated fields (`Param.GuardBit`, per-occurrence
+`InFilterTree`), so it does not depend on the R9 `Optional`
+classification having run.
 
 ### 11.5 Wiring: one shared weave point, not two
 

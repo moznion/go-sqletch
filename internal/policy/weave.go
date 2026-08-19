@@ -192,6 +192,25 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 		}
 	}
 
+	// Parameter-kind agreement (design 14 §11.4). A policy binds its
+	// value parameter UNCONDITIONALLY (D3a); reusing a name the query
+	// author already declared is sound only when that parameter is a
+	// plain, always-required value parameter. Sharing the name with an
+	// optional (@if-present) parameter would send NULL in every shape
+	// the caller leaves it None — silently emptying the result, the
+	// exact failure D3 makes the woven parameter a required argument to
+	// prevent; sharing with a control parameter (@when value, presence
+	// guard, or @filter-tree @predicate argument) binds a value where R9
+	// forbids one. Reject loudly instead of weaving a copy the
+	// enforcement pass (SQLETCH124) would then wrongly accept.
+	if p.ParamName != "" {
+		if existing, ok := w.q.Params[p.ParamName]; ok {
+			if why := policyParamKindCollision(existing); why != "" {
+				return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, paramDeclSpan(w.q, p.ParamName), why)}
+			}
+		}
+	}
+
 	// Parameter-hint agreement (design 14 §11.4).
 	if p.ParamName != "" && p.ParamType != "" {
 		if h, ok := w.q.TypeHints[p.ParamName]; ok && !strings.EqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
@@ -218,6 +237,35 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 		}
 	}
 	return wp, inserts, nil
+}
+
+// policyParamKindCollision reports why a policy cannot re-bind an
+// existing query parameter as its unconditional scoping value, or ""
+// when sharing is sound. The unsafe kinds are recognised from
+// scanner-populated fields alone (GuardBit and the per-occurrence
+// InFilterTree flag), so the answer does not depend on the R9
+// classification (Optional) having run: an optional @if-present
+// parameter is always a presence guard, so GuardBit >= 0 already
+// covers it, and Optional is honoured only as belt-and-braces.
+func policyParamKindCollision(existing *template.Param) string {
+	for _, occ := range existing.Occurrences {
+		if occ.InFilterTree {
+			return fmt.Sprintf("the query already binds parameter %q inside a @filter-tree @predicate (a constructor argument); it cannot also be bound as a policy scoping value (R9)", existing.Name)
+		}
+	}
+	if existing.GuardBit >= 0 || existing.Optional {
+		return fmt.Sprintf("the query already uses parameter %q as a control parameter (an @if-present guard or @when value); an optional guard sends NULL in every shape the caller omits it, and a control parameter cannot be bound as a policy scoping value (R9)", existing.Name)
+	}
+	return ""
+}
+
+// paramDeclSpan points at the author's declaration of name (its first
+// bind occurrence), falling back to the query header.
+func paramDeclSpan(q *template.QueryTemplate, name string) diagnostics.Span {
+	if p, ok := q.Params[name]; ok && len(p.Occurrences) > 0 {
+		return p.Occurrences[0].Span
+	}
+	return q.HeaderSpan
 }
 
 func (w *weaver) unweavable(p *Policy, span diagnostics.Span, why string) diagnostics.Diagnostic {
