@@ -53,14 +53,37 @@ type RelRef struct {
 
 // TableRef is one base-table name referenced anywhere in the
 // statement, including subquery and CTE bodies — the policy weaver's
-// visibility input (design 14 §11.1). References to CTE *names* are
+// visibility input (design 14 §11.1) and the nullability analyzer's
+// poisoning input (design 05 §2b). References to CTE *names* are
 // deliberately included: a CTE shadowing a policy-designated table is
 // conservatively treated as touching it (a false positive is a loud
 // diagnostic with an opt-out, never a silent leak). Loc is -1 where
 // the parser exposes no offset.
 type TableRef struct {
-	Name string
-	Loc  int
+	Name   string
+	Schema string // explicit schema/database qualifier, "" when unqualified
+	Loc    int
+}
+
+// SubRel is one FROM-reachable derived table, wrapped in its own Tree
+// facade so the nullability analyzer can recurse instead of
+// distrusting the whole statement (design 05 §2b).
+type SubRel struct {
+	Alias        string
+	NullableSide bool // on a null-extended side of the ENCLOSING level
+	Tree         Tree
+}
+
+// CTEDef is one WITH-list definition.
+type CTEDef struct {
+	Name      string
+	Recursive bool
+	// Tree is the facade over the body, nil when the body is not a
+	// plain query (a data-modifying CTE): such bodies expose only
+	// RETURNING rows of their target table, whose constraints were
+	// enforced at write time — the analyzer grants them nothing and
+	// poisons nothing.
+	Tree Tree
 }
 
 // StmtKind is the statement class sqletch supports.
@@ -134,14 +157,25 @@ type Tree interface {
 	// HasFetchWithTies reports FETCH FIRST … WITH TIES, which makes
 	// the ORDER BY clause mandatory (@order-by then needs a @default).
 	HasFetchWithTies() bool
-	// HasOpaqueProvenance reports whether a result column's
-	// source-relation identity (Desc.Columns[].SrcRel) may have been
-	// attributed through a construct Relations() cannot model: a
-	// derived table in FROM, a CTE, or a set operation. Engines
-	// resolve column origins THROUGH those constructs to base tables,
-	// so when this is true, SrcRel-based nullability narrowing is
-	// unsound and must be disabled (design 05 §2a).
-	HasOpaqueProvenance() bool
+	// HasSetOperation reports a statement-level set operation
+	// (UNION/INTERSECT/EXCEPT, SQLite compound selects). Engines may
+	// attribute set-op output to a branch's base table (SQLite: the
+	// FIRST branch), which no per-branch analysis can license —
+	// SrcRel narrowing is off for the level (design 05 §2b).
+	HasSetOperation() bool
+	// DerivedRels returns the statement's own FROM-reachable derived
+	// tables, each wrapped in a sub-facade for recursive analysis.
+	DerivedRels() []SubRel
+	// CTEs returns the statement's WITH-list definitions in order.
+	CTEs() []CTEDef
+	// HasUnresolvableProvenance reports that the ORACLE's column
+	// attribution for this statement can cross-resolve to a wrong
+	// catalog entry: MySQL/SQLite attribute by BARE table name with
+	// no database qualifier, so any db-qualified reference anywhere
+	// in the statement (subqueries included) poisons every
+	// name-keyed attribution. PostgreSQL attributes by OID and always
+	// reports false (design 05 §2a).
+	HasUnresolvableProvenance() bool
 	// HasGroupingSets reports ROLLUP / CUBE / GROUPING SETS in the
 	// statement-level GROUP BY: super-aggregate rows null out grouping
 	// columns regardless of catalog NOT NULL, so SrcRel-based

@@ -290,39 +290,86 @@ func collectSource(src rsql.Source, join dialect.JoinType, nullable bool, out *[
 	}
 }
 
-// HasOpaqueProvenance reports FROM-reachable derived tables, a WITH
-// clause, or a compound select — constructs SQLite's column-origin
-// attribution (sqlite3_column_table_name) can resolve through via
-// query flattening, which Relations() cannot model.
-func (t *tree) HasOpaqueProvenance() bool {
-	s := t.sel()
-	if s == nil {
-		return false
-	}
-	if s.WithClause != nil || s.Compound != nil {
-		return true
-	}
-	return s.Source != nil && opaqueSource(s.Source)
+// subTree wraps a subquery (a derived-table body or a CTE body) in
+// its own facade for recursive analysis. rqlite offsets stay absolute
+// into the original sql, so fragment-range checks keep working.
+func subTree(sel *rsql.SelectStatement) *tree {
+	return &tree{stmts: []rsql.Statement{sel}}
 }
 
-func opaqueSource(src rsql.Source) bool {
-	switch v := src.(type) {
-	case *rsql.JoinClause:
-		return opaqueSource(v.X) || opaqueSource(v.Y)
-	case *rsql.ParenSource:
-		if _, ok := v.X.(*rsql.SelectStatement); ok {
+// HasSetOperation reports a compound select (UNION/INTERSECT/EXCEPT).
+func (t *tree) HasSetOperation() bool {
+	s := t.sel()
+	return s != nil && s.Compound != nil
+}
+
+// HasUnresolvableProvenance: SQLite's column-origin attribution
+// carries no database qualifier, so any schema-qualified reference
+// anywhere in the statement (attached databases) can cross-resolve to
+// a same-named main-database table.
+func (t *tree) HasUnresolvableProvenance() bool {
+	for _, tr := range t.DeepTables() {
+		if tr.Schema != "" {
 			return true
 		}
-		return opaqueSource(v.X)
-	case *rsql.SelectStatement:
-		return true
-	case *rsql.QualifiedTableName:
-		// Column-origin attribution carries no database qualifier;
-		// an explicitly qualified reference (attached databases)
-		// would be attributed to a same-named main-database table.
-		return v.Schema != nil
 	}
 	return false
+}
+
+// DerivedRels collects FROM-reachable derived tables with
+// sub-facades, tracking null-extension exactly like collectSource.
+func (t *tree) DerivedRels() []dialect.SubRel {
+	var out []dialect.SubRel
+	if s := t.sel(); s != nil && s.Source != nil {
+		collectDerivedSource(s.Source, false, &out)
+	}
+	return out
+}
+
+func collectDerivedSource(src rsql.Source, nullable bool, out *[]dialect.SubRel) {
+	switch v := src.(type) {
+	case *rsql.JoinClause:
+		jt := joinType(v.Operator)
+		rightNullable := nullable || jt == dialect.JoinLeft
+		collectDerivedSource(v.X, nullable, out)
+		collectDerivedSource(v.Y, rightNullable, out)
+	case *rsql.ParenSource:
+		if sub, ok := v.X.(*rsql.SelectStatement); ok {
+			alias := ""
+			if v.Alias != nil {
+				alias = v.Alias.Name
+			}
+			*out = append(*out, dialect.SubRel{
+				Alias: alias, NullableSide: nullable, Tree: subTree(sub),
+			})
+			return
+		}
+		collectDerivedSource(v.X, nullable, out)
+	case *rsql.SelectStatement:
+		*out = append(*out, dialect.SubRel{NullableSide: nullable, Tree: subTree(v)})
+	}
+}
+
+// CTEs returns the statement's WITH-list definitions. SQLite CTE
+// bodies are always selects, so Tree is always non-nil.
+func (t *tree) CTEs() []dialect.CTEDef {
+	s := t.sel()
+	if s == nil || s.WithClause == nil {
+		return nil
+	}
+	recursive := s.WithClause.Recursive.IsValid()
+	var out []dialect.CTEDef
+	for _, c := range s.WithClause.CTEs {
+		def := dialect.CTEDef{Recursive: recursive}
+		if c.TableName != nil {
+			def.Name = c.TableName.Name
+		}
+		if c.Select != nil {
+			def.Tree = subTree(c.Select)
+		}
+		out = append(out, def)
+	}
+	return out
 }
 
 // HasGroupingSets is always false: SQLite has no ROLLUP / CUBE /
@@ -345,7 +392,7 @@ func (t *tree) DeepTables() []dialect.TableRef {
 		w.walkSelect(s)
 	case *rsql.UpdateStatement:
 		if s.Table != nil {
-			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Loc: s.Table.Name.NamePos.Offset})
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Schema: qtnSchema(s.Table), Loc: s.Table.Name.NamePos.Offset})
 		}
 		for _, a := range s.Assignments {
 			w.walkExpr(a.Expr)
@@ -354,7 +401,7 @@ func (t *tree) DeepTables() []dialect.TableRef {
 		w.walkReturning(s.ReturningClause)
 	case *rsql.DeleteStatement:
 		if s.Table != nil {
-			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Loc: s.Table.Name.NamePos.Offset})
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Schema: qtnSchema(s.Table), Loc: s.Table.Name.NamePos.Offset})
 		}
 		w.walkExpr(s.WhereExpr)
 	case *rsql.InsertStatement:
@@ -423,7 +470,7 @@ func (w *tableWalker) walkSource(src rsql.Source) {
 			w.walkExpr(on.X)
 		}
 	case *rsql.QualifiedTableName:
-		w.out = append(w.out, dialect.TableRef{Name: v.Name.Name, Loc: v.Name.NamePos.Offset})
+		w.out = append(w.out, dialect.TableRef{Name: v.Name.Name, Schema: qtnSchema(v), Loc: v.Name.NamePos.Offset})
 	case *rsql.ParenSource:
 		if sub, ok := v.X.(*rsql.SelectStatement); ok {
 			w.walkSelect(sub)
@@ -905,3 +952,10 @@ func (t *tree) HasLockingClause() bool { return false }
 
 // HasFetchWithTies: SQLite has no FETCH FIRST … WITH TIES.
 func (t *tree) HasFetchWithTies() bool { return false }
+
+func qtnSchema(q *rsql.QualifiedTableName) string {
+	if q.Schema != nil {
+		return q.Schema.Name
+	}
+	return ""
+}

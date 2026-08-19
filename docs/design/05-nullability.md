@@ -65,16 +65,15 @@ SrcRel narrowing is therefore gated on **provenance trust**:
   another schema). An unaccounted OID fails SAFE to nullable — this
   also covers FROM constructs the frontend does not model
   (e.g. an unrecognized range item simply never becomes present).
-- **Kill-switches** (`Tree.HasOpaqueProvenance`,
-  `Tree.HasGroupingSets`): a derived table in FROM, a CTE, a set
-  operation, or a grouping set disables SrcRel narrowing for the
-  whole statement — presence alone cannot save the dual-instance case
-  (the same table joined directly *and* wrapped in a null-extended
-  derived table). On MySQL/SQLite a database-qualified table
-  reference is also opaque: their wire attribution is name-based and
-  database-blind. INSERT is exempt on PostgreSQL (RETURNING columns
-  are attributed to the target relation only); sublinks are not
-  FROM-reachable and stay transparent.
+- **Kill-switches** (`Tree.HasSetOperation`, `Tree.HasGroupingSets`,
+  `Tree.HasUnresolvableProvenance`): a statement-level set operation
+  or grouping set disables SrcRel narrowing for the whole statement,
+  as does any database-qualified table reference on MySQL/SQLite
+  (their wire attribution is name-based and database-blind — deep,
+  subqueries included). Derived tables and CTEs are handled by
+  RECURSION instead (§2b). INSERT is exempt on PostgreSQL (RETURNING
+  columns are attributed to the target relation only); sublinks are
+  not FROM-reachable and stay transparent.
 
 **Plain inheritance** (2026-08): a PostgreSQL inheritance child can
 DROP an inherited NOT NULL (proven on PG 16), so a parent scan can
@@ -86,7 +85,48 @@ narrow such a table's columns unless the reference is `FROM ONLY`
 parents are exempt: partitions cannot drop an inherited NOT NULL
 (42P16, pinned by the probe).
 
-Views need no special case under this rule: PostgreSQL and MySQL
+## 2b. Recursive provenance (2026-08)
+
+Derived tables and CTEs originally triggered a wholesale kill-switch.
+They are now analyzed RECURSIVELY: the facades hand out sub-trees
+(`Tree.DerivedRels`, `Tree.CTEs`) and `collectPresence` walks them,
+so a clean subquery contributes its relations to the presence map —
+with the enclosing side's null-extension compounded in — instead of
+distrusting the whole statement. Mechanics:
+
+- A FROM reference whose name matches an in-scope CTE resolves to the
+  CTE definition, never the catalog (shadowing); the definition's own
+  name is out of scope inside its body.
+- Null-extension compounds: a table inside a derived body is
+  null-extended if ITS side is, or if ANY enclosing derived/CTE
+  reference sits on a null-extended side.
+- Hazardous sub-levels POISON instead of contributing: a set
+  operation (SQLite attributes compound output to a branch's base
+  table even one level down — proven by
+  union_in_derived_with_direct_instance), grouping sets, or a WITH
+  RECURSIVE definition marks every table its body mentions
+  (schema-aware, via `DeepTables`) as poisoned; a poisoned OID never
+  narrows, even when another path exposes it cleanly.
+- A data-modifying CTE (nil sub-tree) grants nothing and poisons
+  nothing: it exposes only RETURNING rows of its target table, whose
+  constraints were enforced at write time.
+- Hazard merging over ALL paths resolves the dual-instance case: the
+  same table joined directly and wrapped in a null-extended derived
+  table is null-extended, period.
+- The IS NOT NULL filter's single-instance requirement counts
+  instances ACROSS levels and rejects poisoned OIDs — the
+  (SrcRel, SrcAtt) key cannot tell paths apart.
+- Guard exclusion inside subqueries rides on PostgreSQL's absolute
+  node offsets; MySQL/SQLite sub-relations carry no offsets (Loc -1),
+  where R2 (guarded joins contribute no result columns) is the
+  backstop.
+
+`FuzzProvenanceFlags` pins the facades against parser drift: an
+independent reflection scan of each level (same boundaries — sublinks
+skipped, subquery bodies counted but not entered) must agree with the
+facade's enumeration, recursing exactly where the analyzer recurses.
+
+Views need no special case under these rules: PostgreSQL and MySQL
 report the *view's own* identity (whose catalog rows carry the
 engine's per-view nullability), and SQLite resolves through to a base
 table that then fails the presence check. MySQL's engine-computed

@@ -330,56 +330,111 @@ func collectJoin(node ast.ResultSetNode, join dialect.JoinType, nullable bool, o
 	}
 }
 
-// HasOpaqueProvenance reports FROM-reachable derived tables, a WITH
-// clause, or a set operation — constructs the protocol's
-// org_table/org_name column attribution resolves through (merged
-// derived tables and views report their base tables), which
-// Relations() cannot model.
-func (t *tree) HasOpaqueProvenance() bool {
-	switch s := t.first().(type) {
-	case *ast.SelectStmt:
-		if s.With != nil {
+// subTree wraps a subquery node (a derived-table body or a CTE body)
+// in its own facade for recursive analysis. The sql text is dropped:
+// relation locations inside subtrees stay -1, which the analyzer
+// treats as "no fragment-range information" (guard skipping is a
+// precision aid there, not a soundness requirement — R2 keeps guarded
+// join columns out of the result).
+func subTree(node ast.StmtNode) *tree { return &tree{stmts: []ast.StmtNode{node}} }
+
+// HasSetOperation reports a statement-level set operation.
+func (t *tree) HasSetOperation() bool {
+	_, ok := t.first().(*ast.SetOprStmt)
+	return ok
+}
+
+// HasUnresolvableProvenance: the protocol's org_table carries no
+// database qualifier, so ANY db-qualified reference anywhere in the
+// statement can be attributed to a same-named table of the connected
+// database — every name-keyed attribution becomes untrustworthy.
+func (t *tree) HasUnresolvableProvenance() bool {
+	for _, tr := range t.DeepTables() {
+		if tr.Schema != "" {
 			return true
 		}
-		return s.From != nil && opaqueResultSet(s.From.TableRefs)
-	case *ast.SetOprStmt:
-		return true
-	case *ast.UpdateStmt:
-		if s.With != nil {
-			return true
-		}
-		return s.TableRefs != nil && opaqueResultSet(s.TableRefs.TableRefs)
-	case *ast.DeleteStmt:
-		if s.With != nil {
-			return true
-		}
-		return s.TableRefs != nil && opaqueResultSet(s.TableRefs.TableRefs)
 	}
 	return false
 }
 
-func opaqueResultSet(node ast.ResultSetNode) bool {
+// DerivedRels collects FROM-reachable derived tables with
+// sub-facades, tracking null-extension exactly like collectJoin.
+func (t *tree) DerivedRels() []dialect.SubRel {
+	var out []dialect.SubRel
+	switch s := t.first().(type) {
+	case *ast.SelectStmt:
+		if s.From != nil {
+			collectDerived(s.From.TableRefs, false, &out)
+		}
+	case *ast.UpdateStmt:
+		if s.TableRefs != nil {
+			collectDerived(s.TableRefs.TableRefs, false, &out)
+		}
+	case *ast.DeleteStmt:
+		if s.TableRefs != nil {
+			collectDerived(s.TableRefs.TableRefs, false, &out)
+		}
+	}
+	return out
+}
+
+func collectDerived(node ast.ResultSetNode, nullable bool, out *[]dialect.SubRel) {
 	switch v := node.(type) {
 	case *ast.Join:
-		return (v.Left != nil && opaqueResultSet(v.Left)) ||
-			(v.Right != nil && opaqueResultSet(v.Right))
+		leftNullable, rightNullable := nullable, nullable
+		switch v.Tp {
+		case ast.LeftJoin:
+			rightNullable = true
+		case ast.RightJoin:
+			leftNullable = true
+		}
+		if v.Left != nil {
+			collectDerived(v.Left, leftNullable, out)
+		}
+		if v.Right != nil {
+			collectDerived(v.Right, rightNullable, out)
+		}
 	case *ast.TableSource:
 		switch s := v.Source.(type) {
 		case *ast.TableName:
-			// The wire protocol's org_table carries no database
-			// qualifier, so a cross-database reference would be
-			// attributed to a same-named table of the connected
-			// database. Treat any explicit qualifier as opaque.
-			return s.Schema.O != ""
 		case *ast.Join: // parenthesized join
-			return opaqueResultSet(s)
-		default: // derived table (SELECT …) AS alias
-			return true
+			collectDerived(s, nullable, out)
+		case ast.StmtNode: // derived table (SELECT …/set op) AS alias
+			*out = append(*out, dialect.SubRel{
+				Alias: v.AsName.O, NullableSide: nullable, Tree: subTree(s),
+			})
 		}
-	case *ast.TableName:
-		return v.Schema.O != ""
 	}
-	return false
+}
+
+// CTEs returns the statement's WITH-list definitions. MySQL CTE
+// bodies are always queries, so Tree is always non-nil.
+func (t *tree) CTEs() []dialect.CTEDef {
+	var wc *ast.WithClause
+	switch s := t.first().(type) {
+	case *ast.SelectStmt:
+		wc = s.With
+	case *ast.SetOprStmt:
+		wc = s.With
+	case *ast.UpdateStmt:
+		wc = s.With
+	case *ast.DeleteStmt:
+		wc = s.With
+	}
+	if wc == nil {
+		return nil
+	}
+	var out []dialect.CTEDef
+	for _, c := range wc.CTEs {
+		def := dialect.CTEDef{Name: c.Name.O, Recursive: wc.IsRecursive || c.IsRecursive}
+		if c.Query != nil {
+			if body, ok := c.Query.Query.(ast.StmtNode); ok {
+				def.Tree = subTree(body)
+			}
+		}
+		out = append(out, def)
+	}
+	return out
 }
 
 // HasGroupingSets reports MySQL's GROUP BY … WITH ROLLUP, which nulls
@@ -573,7 +628,7 @@ type tableNameVisitor struct {
 
 func (v *tableNameVisitor) Enter(n ast.Node) (ast.Node, bool) {
 	if tn, ok := n.(*ast.TableName); ok {
-		v.out = append(v.out, dialect.TableRef{Name: tn.Name.O, Loc: -1})
+		v.out = append(v.out, dialect.TableRef{Name: tn.Name.O, Schema: tn.Schema.O, Loc: -1})
 	}
 	return n, false
 }

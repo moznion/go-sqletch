@@ -177,7 +177,9 @@ WHERE TRUE;
 
 // Derived table on the null-extended side: the wire protocol
 // attributes s.name to orgs (OID 200) even though orgs never appears
-// in FROM — narrowing from it would be unsound.
+// directly in FROM. Recursive analysis (design 05 §2b) tracks orgs
+// THROUGH the derived table as null-extended — and, unlike the old
+// wholesale kill-switch, keeps narrowing the direct users columns.
 func TestAnalyze_DerivedTableProvenanceNeverNarrows(t *testing.T) {
 	src := `-- name: Q :many
 SELECT u.id, s.name FROM users AS u
@@ -186,7 +188,97 @@ LEFT JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = u.org_id;
 	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
 		col("id", 100, 1), col("name", 200, 2),
 	}}, nil)
-	assertNullable(t, got, []bool{true, true}) // ALL narrowing off: opaque
+	assertNullable(t, got, []bool{false, true})
+}
+
+// The recursion's precision positive: an INNER-joined derived table
+// over a NOT NULL column narrows — the sub-level has no null
+// extension and neither does the enclosing side.
+func TestAnalyze_DerivedTableInnerJoinNarrows(t *testing.T) {
+	src := `-- name: Q :many
+SELECT u.id, s.name FROM users AS u
+JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = u.org_id;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("id", 100, 1), col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{false, false})
+}
+
+// Null extension INSIDE the derived body compounds outward: orgs on
+// the null-extended side of the sub-level LEFT JOIN stays nullable
+// even though the outer join is INNER.
+func TestAnalyze_DerivedTableInnerBodyLeftJoin(t *testing.T) {
+	src := `-- name: Q :many
+SELECT s.name FROM users AS u
+JOIN (SELECT u2.id, o.name FROM users AS u2 LEFT JOIN orgs AS o ON o.id = u2.org_id) AS s
+  ON s.id = u.id;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// Two levels of derived tables narrow when every level is clean.
+func TestAnalyze_NestedDerivedNarrows(t *testing.T) {
+	src := `-- name: Q :many
+SELECT s.name FROM (SELECT inner2.name FROM (SELECT o.name FROM orgs AS o) AS inner2) AS s;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{false})
+}
+
+// A set operation INSIDE a derived table poisons every table it
+// mentions: SQLite attributes compound output to the FIRST branch's
+// table, so even a direct instance of that table must stop narrowing.
+func TestAnalyze_SetOpInDerivedPoisons(t *testing.T) {
+	src := `-- name: Q :many
+SELECT o1.name FROM orgs AS o1
+JOIN (SELECT o.id FROM orgs AS o UNION ALL SELECT u.org_id FROM users AS u) AS s
+  ON s.id = o1.id
+WHERE o1.name IS NOT NULL;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("name", 200, 2),
+	}}, nil)
+	// Poisoned beats both catalog NOT NULL and the IS NOT NULL filter
+	// (the filter's single-instance requirement rejects poisoned OIDs).
+	assertNullable(t, got, []bool{true})
+}
+
+// A recursive CTE poisons the tables its body mentions.
+func TestAnalyze_RecursiveCTEPoisons(t *testing.T) {
+	src := `-- name: Q :many
+WITH RECURSIVE r AS (
+  SELECT o.id, o.name FROM orgs AS o
+  UNION ALL
+  SELECT r.id, r.name FROM r WHERE r.id < 10
+)
+SELECT r.name FROM r;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// A CTE shadowing a real table must resolve to the CTE: the catalog
+// table named "users" is NOT granted presence by `FROM users` when a
+// CTE of that name is in scope.
+func TestAnalyze_CTEShadowingResolvesToCTE(t *testing.T) {
+	src := `-- name: Q :many
+WITH users AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT u.id FROM users AS u;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		// The engine would attribute through the CTE to orgs.id; a
+		// hypothetical users-attributed column must stay nullable.
+		col("id", 100, 1),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
 }
 
 // The dual-instance trap: the same table is both directly present
@@ -205,7 +297,9 @@ LEFT JOIN (SELECT o.id, o.name FROM orgs AS o) AS s ON s.id = o1.id;
 }
 
 // CTE on the null-extended side (same wire attribution as the derived
-// table, proven by the devdb cte_on_null_side case).
+// table, proven by the devdb cte_on_null_side case): the recursion
+// compounds the reference's null extension into the body's tables
+// while keeping direct users columns narrowed.
 func TestAnalyze_CTEProvenanceNeverNarrows(t *testing.T) {
 	src := `-- name: Q :many
 WITH s AS (SELECT o.id, o.name FROM orgs AS o)
@@ -214,7 +308,34 @@ SELECT u.id, s.name FROM users AS u LEFT JOIN s ON s.id = u.org_id;
 	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
 		col("id", 100, 1), col("name", 200, 2),
 	}}, nil)
-	assertNullable(t, got, []bool{true, true})
+	assertNullable(t, got, []bool{false, true})
+}
+
+// The CTE precision positive: an INNER-joined clean CTE body narrows.
+func TestAnalyze_CTEInnerJoinNarrows(t *testing.T) {
+	src := `-- name: Q :many
+WITH s AS (SELECT o.id, o.name FROM orgs AS o)
+SELECT u.id, s.name FROM users AS u JOIN s ON s.id = u.org_id;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("id", 100, 1), col("name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{false, false})
+}
+
+// The IS NOT NULL filter's single-instance requirement counts
+// instances ACROSS levels: a second instance inside a derived table
+// shares the (SrcRel, SrcAtt) key and blocks the narrowing.
+func TestAnalyze_IsNotNullCrossLevelInstanceBlocks(t *testing.T) {
+	src := `-- name: Q :many
+SELECT s.org_id FROM users AS u
+JOIN (SELECT u2.id, u2.org_id FROM users AS u2) AS s ON s.id = u.id
+WHERE u.org_id IS NOT NULL;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_id", 100, 3),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
 }
 
 // A set operation disables narrowing wholesale (SQLite attributes
@@ -479,12 +600,12 @@ FROM users AS u LEFT JOIN orgs AS o ON o.id = u.org_id;
 
 func TestAnalyzeVerdicts_UntrustedReasons(t *testing.T) {
 	src := `-- name: Q :many
-SELECT u.id FROM users AS u LEFT JOIN (SELECT o.id FROM orgs AS o) AS s ON s.id = u.org_id;
+SELECT u.id FROM users AS u UNION ALL SELECT u2.org_id FROM users AS u2;
 `
 	got := analyzeVerdictsOf(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
 		col("id", 100, 1),
 	}})
-	wantReason := "narrowing disabled: statement contains a derived table, CTE, or set operation"
+	wantReason := "narrowing disabled: statement is a set operation"
 	if !got[0].Nullable || got[0].Reason != wantReason {
 		t.Errorf("verdict = %+v, want nullable with reason %q", got[0], wantReason)
 	}
@@ -501,6 +622,18 @@ SELECT u.email, count(*) AS n FROM users AS u GROUP BY ROLLUP(u.email);
 	}
 	if got[1].Nullable {
 		t.Errorf("count(*) = %+v, must stay total under grouping sets", got[1])
+	}
+
+	src = `-- name: Q :many
+SELECT o1.name FROM orgs AS o1
+JOIN (SELECT o.id FROM orgs AS o UNION ALL SELECT u.org_id FROM users AS u) AS s ON s.id = o1.id;
+`
+	got = analyzeVerdictsOf(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("name", 200, 2),
+	}})
+	wantReason = "orgs.name is exposed through a hazardous subquery (set operation, grouping sets, or a recursive CTE)"
+	if !got[0].Nullable || got[0].Reason != wantReason {
+		t.Errorf("verdict = %+v, want nullable with reason %q", got[0], wantReason)
 	}
 }
 

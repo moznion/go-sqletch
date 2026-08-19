@@ -282,29 +282,41 @@ func asParseErr(err error, out **dialect.ParseError) bool {
 	return ok
 }
 
-func TestHasOpaqueProvenance(t *testing.T) {
-	opaque := []string{
-		"SELECT s.a FROM t1 LEFT JOIN (SELECT a FROM t2) AS s ON s.a = t1.a",
-		"SELECT s.a FROM (SELECT a FROM t2) AS s",
-		"WITH s AS (SELECT a FROM t2) SELECT s.a FROM s",
-		"SELECT a FROM t1 UNION ALL SELECT b FROM t2",
-		// org_table carries no database qualifier: cross-database
-		// references must not be trusted.
+func TestProvenanceFacades(t *testing.T) {
+	tr := parse(t, "WITH s AS (SELECT a FROM t2) SELECT s.a, d.b FROM s LEFT JOIN (SELECT b FROM t3) AS d ON TRUE")
+	ctes := tr.CTEs()
+	if len(ctes) != 1 || ctes[0].Name != "s" || ctes[0].Recursive || ctes[0].Tree == nil {
+		t.Fatalf("CTEs = %+v", ctes)
+	}
+	if rels := ctes[0].Tree.Relations(); len(rels) != 1 || rels[0].Table != "t2" {
+		t.Errorf("cte body relations = %+v, want t2", rels)
+	}
+	dr := tr.DerivedRels()
+	if len(dr) != 1 || dr[0].Alias != "d" || !dr[0].NullableSide || dr[0].Tree == nil {
+		t.Fatalf("DerivedRels = %+v", dr)
+	}
+	if rels := dr[0].Tree.Relations(); len(rels) != 1 || rels[0].Table != "t3" {
+		t.Errorf("derived body relations = %+v, want t3", rels)
+	}
+	rec := parse(t, "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM r) SELECT n FROM r").CTEs()
+	if len(rec) != 1 || !rec[0].Recursive || rec[0].Tree == nil {
+		t.Errorf("recursive CTE = %+v", rec)
+	}
+	if !rec[0].Tree.HasSetOperation() {
+		t.Error("recursive CTE body's set operation not reported by the sub-facade")
+	}
+	if parse(t, "SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a").HasUnresolvableProvenance() {
+		t.Error("unqualified statement reported unresolvable")
+	}
+	// org_table carries no database qualifier: cross-database
+	// references anywhere (subqueries included) distrust everything.
+	for _, sql := range []string{
 		"SELECT t1.a FROM otherdb.t1",
 		"SELECT t1.a, t2.b FROM t1 LEFT JOIN otherdb.t2 ON t2.a = t1.a",
-	}
-	for _, sql := range opaque {
-		if !parse(t, sql).HasOpaqueProvenance() {
-			t.Errorf("HasOpaqueProvenance(%q) = false, want true", sql)
-		}
-	}
-	transparent := []string{
-		"SELECT t1.a, t2.b FROM t1 LEFT JOIN t2 ON t2.a = t1.a",
-		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t2) AS s)",
-	}
-	for _, sql := range transparent {
-		if parse(t, sql).HasOpaqueProvenance() {
-			t.Errorf("HasOpaqueProvenance(%q) = true, want false", sql)
+		"SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM otherdb.t2)",
+	} {
+		if !parse(t, sql).HasUnresolvableProvenance() {
+			t.Errorf("HasUnresolvableProvenance(%q) = false, want true", sql)
 		}
 	}
 }
