@@ -64,7 +64,7 @@ func TestStore_OracleRoundTripAndStoreCompare(t *testing.T) {
 		SchemaFP:    "fp1",
 		RenderedSQL: "SELECT $1",
 		Params:      []EntryType{{OID: 25, Name: "text"}},
-		Columns:     []EntryColumn{{Name: "c", OID: 25, TypeName: "text", Nullable: true}},
+		Columns:     []EntryColumn{{Name: "c", OID: 25, TypeName: "text"}},
 	}
 	if err := s.SaveOracle(e); err != nil {
 		t.Fatal(err)

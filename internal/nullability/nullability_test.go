@@ -401,6 +401,42 @@ SELECT sum(u.id) AS s FROM users AS u;
 	assertNullable(t, got, []bool{true})
 }
 
+// A plain-inheritance parent's NOT NULL is not enforced on children
+// (PG 16: a child can DROP the inherited constraint), so scans that
+// include children must not narrow; FROM ONLY excludes them and may.
+func TestAnalyze_InheritanceParentNeverNarrows(t *testing.T) {
+	inhCat := cat()
+	inhCat.Tables = append(inhCat.Tables, cache.Table{
+		Schema: "public", Name: "parent", OID: 300, HasChildren: true,
+		Cols: []cache.Column{{Name: "x", Att: 1, NotNull: true}},
+	})
+	run := func(src string) []bool {
+		t.Helper()
+		f, diags := template.NewScanner(postgres.Profile{}).ScanFile("t.sql", []byte(src))
+		if len(diags) != 0 {
+			t.Fatalf("scan: %+v", diags)
+		}
+		rs, err := ast.Renderings(postgres.Profile{}, f.Queries[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Analyze(tree, rs[0], dialect.Desc{Columns: []dialect.ColumnDesc{
+			col("x", 300, 1),
+		}}, inhCat, nil)
+	}
+	assertNullable(t, run("-- name: Q :many\nSELECT p.x FROM parent AS p;\n"), []bool{true})
+	assertNullable(t, run("-- name: Q :many\nSELECT p.x FROM ONLY parent AS p;\n"), []bool{false})
+	// The skeleton IS NOT NULL filter runs after the scan and beats
+	// the inheritance hazard.
+	assertNullable(t,
+		run("-- name: Q :many\nSELECT p.x FROM parent AS p WHERE p.x IS NOT NULL;\n"),
+		[]bool{false})
+}
+
 // Reasons are part of the explain contract: each verdict names the
 // gate that produced it, so a conservative verdict is auditable.
 func TestAnalyzeVerdicts_Reasons(t *testing.T) {

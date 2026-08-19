@@ -127,6 +127,13 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 			if rel.NullableSide {
 				p.nullExtended = true
 			}
+			// A plain-inheritance parent's NOT NULL is not enforced
+			// on its children (PG 16, proven by the adversarial
+			// suite) — unless the reference is FROM ONLY, its scan
+			// can return NULL where the catalog says otherwise.
+			if t.HasChildren && !rel.Only {
+				p.inherited = true
+			}
 			res.add(rel, t)
 		}
 	}
@@ -194,7 +201,8 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 				continue
 			case groupedAggs && strictAggs[ti.FuncName] && ti.AggArg != nil:
 				if inst, c, ok := res.resolve(ti.AggArg); ok &&
-					!inst.NullableSide && c.NotNull {
+					!inst.NullableSide && c.NotNull &&
+					!(inst.table.HasChildren && !inst.Only) {
 					out[i] = Verdict{Nullable: false,
 						Reason: ti.FuncName + "(" + inst.table.Name + "." + c.Name +
 							") over a non-null column with GROUP BY"}
@@ -300,6 +308,10 @@ func srcVerdict(col dialect.ColumnDesc, cat *cache.Catalog,
 		return Verdict{Nullable: false,
 			Reason: qual + " is filtered by an unconditional IS NOT NULL"}
 	}
+	if p.inherited {
+		return Verdict{Nullable: true,
+			Reason: qual + "'s table has inheritance children, which may drop NOT NULL"}
+	}
 	if p.nullExtended {
 		return Verdict{Nullable: true,
 			Reason: qual + " is null-extended by an outer join"}
@@ -328,8 +340,12 @@ func inSkeleton(maxR ast.Rendering, loc int) bool {
 }
 
 // presence is one accounted-for source OID: seen in the skeleton FROM
-// list, with its aggregated null-extension.
-type presence struct{ nullExtended bool }
+// list, with its aggregated hazards (null-extension; a non-ONLY scan
+// of a plain-inheritance parent).
+type presence struct {
+	nullExtended bool
+	inherited    bool
+}
 
 // AnalyzeAll runs Analyze over every verified rendering and unions the
 // results per column — the spec's nullable-most rule for @choose

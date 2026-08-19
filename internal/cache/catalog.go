@@ -13,10 +13,19 @@ type Catalog struct {
 }
 
 type Table struct {
-	Schema string   `json:"schema"`
-	Name   string   `json:"name"`
-	OID    uint32   `json:"oid"`
-	Cols   []Column `json:"cols"`
+	Schema string `json:"schema"`
+	Name   string `json:"name"`
+	OID    uint32 `json:"oid"`
+	// HasChildren marks a plain-inheritance parent (PostgreSQL:
+	// relhassubclass on relkind 'r'). Children may DROP an inherited
+	// NOT NULL (proven on PG 16), so a parent scan can return NULL
+	// where attnotnull says otherwise — the analyzer must not narrow
+	// such tables unless the reference is `FROM ONLY`. Partitioned
+	// parents ('p') are exempt: partitions cannot drop inherited NOT
+	// NULL (42P16). omitempty keeps every inheritance-free catalog
+	// byte-identical.
+	HasChildren bool     `json:"has_children,omitempty"`
+	Cols        []Column `json:"cols"`
 }
 
 type Column struct {

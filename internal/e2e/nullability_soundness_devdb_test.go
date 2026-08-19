@@ -54,12 +54,17 @@ CREATE TABLE aux.orgs (
     id   bigint PRIMARY KEY,
     name text NOT NULL
 );
+CREATE TABLE inh_parent (x bigint NOT NULL);
+CREATE TABLE inh_child () INHERITS (inh_parent);
+ALTER TABLE inh_child ALTER COLUMN x DROP NOT NULL;
 `
 
 const nullSoundSeedSQL = `
 INSERT INTO orgs VALUES (1, 'acme');
 INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
 -- aux.orgs stays empty: every LEFT JOIN against it misses.
+INSERT INTO inh_parent VALUES (1);
+INSERT INTO inh_child VALUES (NULL);
 `
 
 var nullSoundCases = []struct {
@@ -179,6 +184,20 @@ FROM members AS m GROUP BY m.email
 ORDER BY m.email;
 `,
 		note: "positive: sum over NOT NULL id narrows under GROUP BY; max(org_id) has a nullable argument and must not",
+	},
+	{
+		name: "inheritance_parent_scan",
+		src: `-- name: ParentScan :many
+SELECT p.x FROM inh_parent AS p ORDER BY p.x NULLS LAST;
+`,
+		note: "a plain-inheritance child dropped the inherited NOT NULL; the parent scan includes its NULL row",
+	},
+	{
+		name: "inheritance_only_scan",
+		src: `-- name: ParentOnlyScan :many
+SELECT p.x FROM ONLY inh_parent AS p ORDER BY p.x;
+`,
+		note: "positive: FROM ONLY excludes children — attnotnull holds and narrowing is allowed",
 	},
 }
 

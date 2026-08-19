@@ -26,16 +26,14 @@
       "oid": 20,
       "type_name": "int8",
       "src_rel": 16387,
-      "src_att": 1,
-      "nullable": false
+      "src_att": 1
     },
     {
       "name": "email",
       "oid": 25,
       "type_name": "text",
       "src_rel": 16387,
-      "src_att": 2,
-      "nullable": false
+      "src_att": 2
     }
   ]
 }
