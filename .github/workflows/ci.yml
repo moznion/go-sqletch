@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod pins go1.27rc2, which setup-go cannot resolve from
+          # go.mod pins go1.27rc3, which setup-go cannot resolve from
           # go-version-file (it reads the directive as "1.27", an
           # unreleased version). Pin the rc explicitly; return to
           # `go-version-file: go.mod` when 1.27.0 is released
@@ -28,7 +28,7 @@ jobs:
           # That matches the pin, but it means a `go install tool@ver`
           # whose module requires a go newer than this rc will now FAIL
           # rather than silently fetch a toolchain.
-          go-version: "1.27.0-rc.2"
+          go-version: "1.27.0-rc.3"
       - name: Build
         run: go build ./...
       - name: Unit tests
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod pins go1.27rc2, which setup-go cannot resolve from
+          # go.mod pins go1.27rc3, which setup-go cannot resolve from
           # go-version-file (it reads the directive as "1.27", an
           # unreleased version). Pin the rc explicitly; return to
           # `go-version-file: go.mod` when 1.27.0 is released
@@ -59,7 +59,7 @@ jobs:
           # That matches the pin, but it means a `go install tool@ver`
           # whose module requires a go newer than this rc will now FAIL
           # rather than silently fetch a toolchain.
-          go-version: "1.27.0-rc.2"
+          go-version: "1.27.0-rc.3"
       - name: E2E suite (property test, generated module, CLI round-trip)
         run: go test -tags devdb -v ./internal/e2e/
       - name: Offline check against the committed example caches
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod pins go1.27rc2, which setup-go cannot resolve from
+          # go.mod pins go1.27rc3, which setup-go cannot resolve from
           # go-version-file (it reads the directive as "1.27", an
           # unreleased version). Pin the rc explicitly; return to
           # `go-version-file: go.mod` when 1.27.0 is released
@@ -88,7 +88,7 @@ jobs:
           # That matches the pin, but it means a `go install tool@ver`
           # whose module requires a go newer than this rc will now FAIL
           # rather than silently fetch a toolchain.
-          go-version: "1.27.0-rc.2"
+          go-version: "1.27.0-rc.3"
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: latest
@@ -100,7 +100,7 @@ jobs:
           args: --build-tags devdb
       # staticcheck + unused run standalone (they are disabled in
       # .golangci.yml): golangci's bundled honnef.co/go/tools v0.7.0
-      # predates Go 1.27 and panics building IR for the go1.27rc2
+      # predates Go 1.27 and panics building IR for the go1.27rc3
       # linux stdlib. 2026.2rc1 is the first staticcheck that analyzes
       # Go 1.27 code. Generated packages (examples/*/gen) are skipped —
       # the standalone binary has no generated-file exclusion, and
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod pins go1.27rc2, which setup-go cannot resolve from
+          # go.mod pins go1.27rc3, which setup-go cannot resolve from
           # go-version-file (it reads the directive as "1.27", an
           # unreleased version). Pin the rc explicitly; return to
           # `go-version-file: go.mod` when 1.27.0 is released
@@ -130,7 +130,7 @@ jobs:
           # That matches the pin, but it means a `go install tool@ver`
           # whose module requires a go newer than this rc will now FAIL
           # rather than silently fetch a toolchain.
-          go-version: "1.27.0-rc.2"
+          go-version: "1.27.0-rc.3"
       - name: Scanner fuzz (30s, all three lexer profiles)
         run: go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=30s
       - name: Compose/render differential fuzz (30s)

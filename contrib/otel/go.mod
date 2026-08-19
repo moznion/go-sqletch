@@ -1,6 +1,6 @@
 module github.com/moznion/go-sqletch/contrib/otel
 
-go 1.27rc2
+go 1.27rc3
 
 require (
 	github.com/moznion/go-sqletch v0.0.0
