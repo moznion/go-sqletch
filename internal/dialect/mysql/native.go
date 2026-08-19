@@ -247,7 +247,27 @@ func wireNormalize(oid uint32) uint32 {
 
 // ---- SELECT ----------------------------------------------------------------
 
+// refuseWith rejects a statement-level WITH (CTE) clause. CTEs are
+// outside the native subset (design 15: "no derived tables and no
+// subqueries"), and the describers do not model them: a name resolving
+// to a CTE would need the CTE body's own column resolution. Skipping
+// s.With silently let a query whose main statement is independently
+// valid — an unused CTE, or one whose body references a nonexistent
+// table — pass describe with err=nil and then fail at execution on a
+// real server. Fail closed here instead (SQLETCH214).
+func refuseWith(w *ast.WithClause) error {
+	if w == nil {
+		return nil
+	}
+	return &dialect.NativeUnsupportedError{Pos: -1,
+		Construct: "a WITH (common table expression) clause",
+		Hint:      "inline the CTE or switch to database.oracle: \"server\""}
+}
+
 func (d *describer) describeSelect(s *ast.SelectStmt) ([]dialect.ColumnDesc, error) {
+	if err := refuseWith(s.With); err != nil {
+		return nil, err
+	}
 	scope, err := d.scopeFrom(s.From)
 	if err != nil {
 		return nil, err
@@ -438,6 +458,9 @@ func (d *describer) describeInsert(s *ast.InsertStmt) error {
 }
 
 func (d *describer) describeUpdate(s *ast.UpdateStmt) error {
+	if err := refuseWith(s.With); err != nil {
+		return err
+	}
 	scope, err := d.scopeFrom(s.TableRefs)
 	if err != nil {
 		return err
@@ -466,6 +489,9 @@ func (d *describer) describeUpdate(s *ast.UpdateStmt) error {
 }
 
 func (d *describer) describeDelete(s *ast.DeleteStmt) error {
+	if err := refuseWith(s.With); err != nil {
+		return err
+	}
 	scope, err := d.scopeFrom(s.TableRefs)
 	if err != nil {
 		return err
