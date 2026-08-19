@@ -144,6 +144,7 @@ var typesByName = map[string]dialect.TypeRef{
 	"json":       {OID: typeJSON, Name: "json"},
 	"bit":        {OID: typeBit, Name: "bit"},
 	"enum":       {OID: typeEnum, Name: "enum"},
+	"set":        {OID: typeSet, Name: "set"},
 }
 
 // TypeByName resolves a SQL type name from a `-- @param` hint.
