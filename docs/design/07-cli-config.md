@@ -55,7 +55,7 @@ relies on the driver's own DSN environment variables, or templates the
 config file outside sqletch.
 
 `cache.path` and `output.path` drive every write sqletch performs, so
-`Load` also validates them (`SQLETCH305`): a **relative** path escaping
+`Load` also validates them (`SQLETCH306`): a **relative** path escaping
 the project directory via `..` is an **error** (a committed relative
 path climbing out of the repo is the clone-and-run write-redirection
 vector), while an **absolute** path is a deliberate operator choice and
