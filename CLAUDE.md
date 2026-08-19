@@ -376,7 +376,17 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.
 - R3 skips unqualified column refs inside subquery scopes
   (innermost-first resolution unmodeled); qualified refs are checked
-  everywhere. The exhaustive/property tests are the backstop.
+  everywhere. The exhaustive/property tests are the backstop. Caveat
+  (design 03 §6 "Known limitation"): because qualified refs key on
+  TOP-LEVEL relation names only, a subquery that REDEFINES an alias
+  shadowing a guarded top-level alias is OVER-REJECTED (`SQLETCH115`
+  false positive — over-rejection, never unsound; workaround: rename
+  the inner alias). Checking qualified subquery refs is deliberate and
+  must stay: it catches correlated refs to a guarded outer join
+  (`TestCheckResolved_R3_CorrelatedSubqueryRef`). A sound fix needs
+  innermost-first scope resolution, which the facades don't yet
+  support (`SubRel` has no byte range; non-FROM sublinks aren't in
+  `DerivedRels()`) — an analysis addition, not a mechanical fix.
 - Indeterminate-parameter detection covers SQLSTATE 42P18 and 42725;
   bare `SELECT $1` is NOT an error on modern PostgreSQL.
 - The numeric OID maps to float64 (lossy, documented in typemap.go).
