@@ -1,6 +1,6 @@
 module github.com/moznion/go-sqletch
 
-go 1.27rc2
+go 1.27rc3
 
 require (
 	github.com/go-mysql-org/go-mysql v1.16.0

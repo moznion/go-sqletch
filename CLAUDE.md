@@ -57,7 +57,7 @@ regression test.
   (`GOTOOLCHAIN=go1.27rc2 go install honnef.co/go/tools/cmd/staticcheck@v0.8.0-rc.1`),
   skipping generated `/gen` packages (no generated-file exclusion in
   the standalone binary). Fold back into golangci-lint once it bundles
-  honnef.co/go/tools >= v0.8.0. CI's setup-go pins `1.27.0-rc.2`
+  honnef.co/go/tools >= v0.8.0. CI's setup-go pins `1.27.0-rc.3`
   explicitly (`go-version-file` cannot parse an rc directive); return
   it to `go-version-file: go.mod` at 1.27.0.
 - **JSON v1/v2 split**: byte-pinned outputs (cache JSON, `--json`
