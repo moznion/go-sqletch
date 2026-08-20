@@ -3,6 +3,7 @@ package policy
 import (
 	"strings"
 
+	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/template"
@@ -12,21 +13,25 @@ import (
 // (spec §"Cross-Query Policies"): for every top-level relation whose
 // table a policy designates (and whose statement kind the policy
 // covers), a conjunct token-identical to the policy's bound predicate
-// is unconditional skeleton text of the WHERE clause — hence present
-// in every reachable shape. It re-derives presence from the template
-// itself, independently of what the weaver decided, so a weaver
-// regression surfaces as SQLETCH124 instead of a silent leak.
+// is unconditional skeleton text — of the WHERE clause, or of the
+// relation's own join's ON clause for a null-extended outer-join
+// occurrence (§D2(a)) — hence present in every reachable shape. It
+// re-derives presence from the template itself, independently of what
+// the weaver decided, so a weaver regression surfaces as SQLETCH124
+// instead of a silent leak.
 //
 // It also owns SQLETCH126: an opt-out naming an unknown policy, or
 // one that does not apply to the query — renaming a policy must never
 // silently disarm its opt-outs.
 //
-// The tree is the parsed maximal rendering of the woven template
-// (the caller has it in hand; design 14 §6.1: this pass lives in
-// cli.resolvedChecks). Unweavable positions are not re-checked here:
-// they are SQLETCH125 at weave time, which already stops the
-// pipeline before this pass.
-func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *template.QueryTemplate, tree dialect.Tree) []diagnostics.Diagnostic {
+// tree and maxR are the parsed maximal rendering of the woven
+// template and that rendering itself (the caller has both in hand;
+// design 14 §6.1: this pass lives in cli.resolvedChecks). Unweavable
+// positions are not re-checked here: they are SQLETCH125 at weave
+// time, which already stops the pipeline before this pass.
+func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *template.QueryTemplate,
+	tree dialect.Tree, maxR ast.Rendering) []diagnostics.Diagnostic {
+
 	var diags []diagnostics.Diagnostic
 
 	kind := tree.Kind()
@@ -64,7 +69,9 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		}
 	}
 
-	segs, segOK := skeletonConjuncts(profile, q)
+	where := whereClause(profile, q)
+	whereOK := where.lexOK && !where.hasOR
+	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
 		a := analyzeApplicability(p, kind, rels, deep)
@@ -87,11 +94,24 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		}
 		for _, r := range a.topOcc {
 			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r))
-			if !conjunctPresent(profile, segs, segOK, conjunct) {
+			present := false
+			if r.NullableSide {
+				if res := onScanFor(profile, q, maxR, r, onScans); res != nil {
+					present = res.found && res.cs.lexOK && !res.cs.hasOR &&
+						segsContain(profile, res.cs.segs, conjunct)
+				}
+			} else {
+				present = whereOK && segsContain(profile, where.segs, conjunct)
+			}
+			if !present {
+				clause := "WHERE clause"
+				if r.NullableSide {
+					clause = "join's ON clause (the table is on a null-extended outer-join side)"
+				}
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
 					"query touches policy-designated table %q without policy %q's scoping conjunct in every shape",
 					r.Table, p.Name).
-					WithHint("expected an unconditional WHERE conjunct `%s`; a copy inside @if-present does not count — it vanishes in guard-off shapes", conjunct))
+					WithHint("expected an unconditional conjunct `%s` in the %s; a copy inside @if-present does not count — it vanishes in guard-off shapes", conjunct, clause))
 				break
 			}
 		}
@@ -99,18 +119,23 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	return diags
 }
 
-func conjunctPresent(profile dialect.LexerProfile, segs [][]string, segOK bool, conjunct string) bool {
-	if !segOK {
-		return false
+// onScanFor maps the relation back to the template and memoizes the
+// ON-clause scan; nil when the relation cannot be located (the
+// conservative answer — the caller then reports the conjunct absent).
+func onScanFor(profile dialect.LexerProfile, q *template.QueryTemplate, maxR ast.Rendering,
+	r dialect.RelRef, memo map[int]*joinOnResult) *joinOnResult {
+
+	if r.Loc < 0 {
+		return nil
 	}
-	want := normalizedTokens(profile, conjunct)
-	if want == nil {
-		return false
+	tOff, synth := maxR.Map.ToTemplate(r.Loc)
+	if synth {
+		return nil
 	}
-	for _, seg := range segs {
-		if tokensEqual(seg, want) {
-			return true
-		}
+	if res, ok := memo[tOff]; ok {
+		return res
 	}
-	return false
+	res := joinOn(profile, q, tOff)
+	memo[tOff] = &res
+	return &res
 }

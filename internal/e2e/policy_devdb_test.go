@@ -34,6 +34,16 @@ const allAuditBackfill = `-- name: AllAuditBackfill :many
 SELECT a.id, a.action FROM audit_logs AS a ORDER BY a.id;
 `
 
+// The D2(a) case: audit_logs on the null-extended side of a LEFT
+// JOIN. The conjunct must land in the ON clause — every user row
+// stays present, but only the tenant's audit rows join.
+const usersWithAudit = `-- name: UsersWithAudit :many
+SELECT u.id, a.action
+FROM users AS u
+LEFT JOIN audit_logs AS a ON a.actor_id = u.id
+ORDER BY u.id, a.id;
+`
+
 func tenantScopePolicy() policy.Policy {
 	return policy.Policy{
 		Name:      "tenant_scope",
@@ -83,7 +93,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 	}
 
 	var inputs []codegen.QueryInput
-	for _, src := range []string{allAudit, allAuditBackfill, corpus["list_audit_logs"]} {
+	for _, src := range []string{allAudit, allAuditBackfill, usersWithAudit, corpus["list_audit_logs"]} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -106,7 +116,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d := policy.Enforce(postgres.Profile{}, postgres.Frontend{}, pols, wq, tree); len(d) != 0 {
+		if d := policy.Enforce(postgres.Profile{}, postgres.Frontend{}, pols, wq, tree, rs[0]); len(d) != 0 {
 			t.Fatalf("%s: enforcement rejects the woven template: %+v", q.Name, d)
 		}
 
@@ -118,6 +128,10 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 		case "AllAuditBackfill":
 			if strings.Contains(rs[0].SQL, "tenant_id") {
 				t.Fatalf("opt-out was woven anyway:\n%s", rs[0].SQL)
+			}
+		case "UsersWithAudit":
+			if !strings.Contains(rs[0].SQL, "ON a.actor_id = u.id AND a.tenant_id = $1") {
+				t.Fatalf("outer-join occurrence not woven into the ON clause:\n%s", rs[0].SQL)
 			}
 		case "ListAuditLogs":
 			if n := strings.Count(rs[0].SQL, "tenant_id ="); n != 1 {
@@ -251,11 +265,16 @@ func main() {
 	die(err)
 	defer conn.Close(ctx)
 
-	// Two tenants; tenant 2's row is the one a leak would expose.
+	// Two tenants; tenant 2's rows are the ones a leak would expose.
+	// alice (user 1) has audit rows in BOTH tenants — the ON-weave
+	// case must keep her row while hiding the cross-tenant action.
 	_, err = conn.Exec(ctx, ` + "`" + `
 		TRUNCATE users, organization_users, audit_logs RESTART IDENTITY;
+		INSERT INTO users (email, status, tenant_id) VALUES
+			('alice@example.com', 'active', 1),
+			('bob@example.com',   'active', 1);
 		INSERT INTO audit_logs (tenant_id, actor_id, action) VALUES
-			(1, 1, 'login'), (1, NULL, 'cron'), (2, 9, 'secret');
+			(1, 1, 'login'), (1, NULL, 'cron'), (2, 9, 'secret'), (2, 1, 'crossed');
 	` + "`" + `)
 	die(err)
 
@@ -275,12 +294,32 @@ func main() {
 	}
 	t2, err := q.AllAudit(ctx, gen.TenantID(2), gen.AllAuditParams{})
 	die(err)
-	expect(len(t2) == 1 && t2[0].Action == "secret", "tenant 2 sees its row")
+	expect(len(t2) == 2 && t2[0].Action == "secret" && t2[1].Action == "crossed", "tenant 2 sees its rows")
 
 	// The opt-out legitimately crosses tenants.
 	all, err := q.AllAuditBackfill(ctx, gen.AllAuditBackfillParams{})
 	die(err)
-	expect(len(all) == 3, "opt-out sees every tenant")
+	expect(len(all) == 4, "opt-out sees every tenant")
+
+	// ON-woven outer join: every user row survives (bob has no audit
+	// rows and still appears), and alice's cross-tenant action is
+	// invisible — a WHERE-placed conjunct would have dropped bob, an
+	// unwoven query would have shown 'crossed'.
+	rows, err := q.UsersWithAudit(ctx, tenant1, gen.UsersWithAuditParams{})
+	die(err)
+	expect(len(rows) == 2, "alice (login) + bob's null-extended row; cron is actorless")
+	sawBob, sawCrossed := false, false
+	for _, r := range rows {
+		if r.ID == 2 {
+			sawBob = true
+			expect(r.Action.IsNone(), "bob's outer row is null-extended")
+		}
+		if r.Action.TakeOr("") == "crossed" {
+			sawCrossed = true
+		}
+	}
+	expect(sawBob, "outer row preserved by the ON conjunct")
+	expect(!sawCrossed, "cross-tenant action must not leak through the join")
 
 	// The hand-scoped query still paginates as written.
 	page, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 10})

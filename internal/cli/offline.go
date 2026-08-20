@@ -432,7 +432,7 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 	}
 	var diags []diagnostics.Diagnostic
 	diags = append(diags, rules.CheckResolved(q, rs[0], tree, cat)...)
-	diags = append(diags, policy.Enforce(drv.profile, drv.frontend, pols, q, tree)...)
+	diags = append(diags, policy.Enforce(drv.profile, drv.frontend, pols, q, tree, rs[0])...)
 	paramTypes := map[string]dialect.TypeRef{}
 	if !drv.annotationsRequired {
 		// Tier 1: the oracle types parameters; agreement is checked

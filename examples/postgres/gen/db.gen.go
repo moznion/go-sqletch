@@ -129,6 +129,7 @@ var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
 	"ListUsersSorted":   {Enumerable: 26, Exact: true, Unbounded: false},
 	"SearchUsers":       {Enumerable: 64, Exact: true, Unbounded: false},
 	"UpdateUserProfile": {Enumerable: 4, Exact: true, Unbounded: false},
+	"UserAuditActions":  {Enumerable: 1, Exact: true, Unbounded: false},
 }
 
 // And / Or combine @filter-tree predicates built with the generated

@@ -39,11 +39,18 @@ type Result struct {
 // Weave applies the policies to one scanned query (design 14 §4):
 // it renders the maximal rendering of the unwoven template, parses it
 // to learn the statement's relations, and splices unconditional
-// scoping conjuncts into the WHERE clause. A designated table the
-// weaver cannot scope — subquery/CTE position, null-extended
-// outer-join side, guarded join, non-bare bound name, conflicting
-// parameter hint — is SQLETCH125: loud and incomplete beats silent
-// and incomplete.
+// scoping conjuncts — into the WHERE clause for ordinary occurrences,
+// and into the introducing join's ON clause for occurrences on the
+// null-extended side of an outer join (§D2(a): a WHERE conjunct would
+// silently turn the outer join into an inner join; the ON conjunct
+// preserves the outer row set and scopes only the joined rows). A
+// clause whose top level contains OR is wrapped in parentheses first,
+// so the appended conjunct always binds above it.
+//
+// A designated table the weaver cannot scope — subquery/CTE position,
+// USING/NATURAL join on a null-extended side, guarded join, non-bare
+// bound name, conflicting parameter hint — is SQLETCH125: loud and
+// incomplete beats silent and incomplete.
 //
 // A template whose maximal rendering fails to render or parse is
 // returned unchanged: the ordinary pipeline diagnostics (SQLETCH100
@@ -61,38 +68,94 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 		return Result{Query: q}
 	}
 
-	w := &weaver{profile: profile, q: q, maxR: maxR, tree: tree, kind: tree.Kind()}
-	w.rels = tree.Relations()
-	w.deep = tree.DeepTables()
+	w := &weaver{
+		profile: profile, q: q, maxR: maxR, kind: tree.Kind(),
+		rels: tree.Relations(), deep: tree.DeepTables(),
+		onInfo: map[int]*joinOnResult{},
+	}
 	w.overread = overreadDeep(profile, fe, q, w.deep)
-	w.segments, w.segmentable = skeletonConjuncts(profile, q)
+	w.where = whereClause(profile, q)
 
 	res := Result{Query: q}
-	var inserts []string
+	var whereConjs []string
+	type occAgg struct {
+		res   *joinOnResult
+		conjs []string
+	}
+	var onAggs []*occAgg
+	onByStart := map[int]*occAgg{}
 	for i := range pols {
 		p := &pols[i]
-		wp, conjs, diags := w.apply(p)
+		wp, wcs, needs, diags := w.apply(p)
 		res.Diags = append(res.Diags, diags...)
 		if wp != nil {
 			res.Woven = append(res.Woven, *wp)
 		}
-		inserts = append(inserts, conjs...)
+		whereConjs = append(whereConjs, wcs...)
+		for _, n := range needs {
+			agg := onByStart[n.res.cs.start]
+			if agg == nil {
+				agg = &occAgg{res: n.res}
+				onByStart[n.res.cs.start] = agg
+				onAggs = append(onAggs, agg)
+			}
+			agg.conjs = append(agg.conjs, n.conj)
+		}
 	}
-	if len(inserts) == 0 {
+
+	// Assemble the insertions. prio: wrap parens (0) < ON text (1) <
+	// WHERE text (2), so an ON conjunct precedes a WHERE clause
+	// synthesized at the same statement-end boundary.
+	var ins []insertion
+	seq := 0
+	add := func(off, prio int, text string) {
+		ins = append(ins, insertion{off: off, prio: prio, seq: seq, text: text})
+		seq++
+	}
+	for _, agg := range onAggs {
+		joined := strings.Join(agg.conjs, " AND ")
+		if agg.res.cs.hasOR {
+			add(agg.res.cs.start, 0, "(")
+			add(agg.res.cs.end, 1, ") AND "+joined)
+		} else {
+			add(agg.res.cs.end, 1, " AND "+joined)
+		}
+	}
+	if len(whereConjs) > 0 {
+		joined := strings.Join(whereConjs, " AND ")
+		switch {
+		case q.WhereKwEnd >= 0 && w.where.hasOR:
+			add(q.WhereKwEnd, 2, " "+joined+" AND")
+			add(w.where.start, 2, "(")
+			add(w.where.end, 2, ")")
+		case q.WhereKwEnd >= 0:
+			add(q.WhereKwEnd, 2, " "+joined+" AND")
+		case q.TailStart >= 0:
+			add(q.TailStart, 2, "WHERE "+joined+" ")
+		case q.StmtEnd >= 0:
+			add(q.StmtEnd, 2, " WHERE "+joined)
+		}
+	}
+	if len(ins) == 0 {
 		return res
 	}
 
-	woven := splice(q, inserts)
+	woven := splice(q, ins)
 	registerParams(woven, res.Woven)
 	res.Query = woven
 	return res
+}
+
+// onNeed is one conjunct destined for one join's ON clause.
+type onNeed struct {
+	res  *joinOnResult
+	conj string
 }
 
 type weaver struct {
 	profile dialect.LexerProfile
 	q       *template.QueryTemplate
 	maxR    ast.Rendering
-	tree    dialect.Tree
 	kind    dialect.StmtKind
 	rels    []dialect.RelRef
 	deep    []dialect.TableRef
@@ -106,13 +169,8 @@ type weaver struct {
 	// woven and must not ship unscoped.
 	overread map[string]bool
 
-	// segments are the query's unconditional skeleton WHERE conjuncts
-	// as normalized token sequences (the idempotence input);
-	// segmentable is false when the WHERE clause has a top-level OR,
-	// in which case nothing matches and the weaver errs toward weaving
-	// (a doubled predicate is harmless; a skipped one is a leak).
-	segments    [][]string
-	segmentable bool
+	where  clauseScan
+	onInfo map[int]*joinOnResult // keyed by relation template offset
 }
 
 // applicability is the shared answer to "would this policy bite this
@@ -268,20 +326,47 @@ func optOutFor(q *template.QueryTemplate, name string) (template.PolicyOptOut, b
 	return template.PolicyOptOut{}, false
 }
 
+// relTemplateOff maps a relation's rendered location to its template
+// offset; ok is false when the dialect exposes no offset or the
+// location maps into synthesized text.
+func (w *weaver) relTemplateOff(r dialect.RelRef) (int, bool) {
+	if r.Loc < 0 {
+		return 0, false
+	}
+	tOff, synth := w.maxR.Map.ToTemplate(r.Loc)
+	if synth {
+		return 0, false
+	}
+	return tOff, true
+}
+
+// joinOnFor memoizes the ON-clause scan per relation occurrence.
+func (w *weaver) joinOnFor(relOff int) *joinOnResult {
+	if res, ok := w.onInfo[relOff]; ok {
+		return res
+	}
+	res := joinOn(w.profile, w.q, relOff)
+	w.onInfo[relOff] = &res
+	return &res
+}
+
 // apply runs one policy against the query. It returns the coverage
-// record (nil when the policy does not touch the query), the conjunct
-// texts to insert, and diagnostics.
-func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnostic) {
+// record (nil when the policy does not touch the query), the WHERE
+// conjuncts to insert, the ON-clause needs, and diagnostics.
+func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []onNeed, []diagnostics.Diagnostic) {
 	a := analyzeApplicability(p, w.kind, w.rels, w.deep)
 	over := designatedOverread(p, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// An honored opt-out suppresses weaving and the unweavable
 	// diagnostics alike; an opt-out on a query the policy does not
 	// touch is SQLETCH126, owned by the enforcement pass.
 	if o, ok := optOutFor(w.q, p.Name); ok {
-		return &WovenPolicy{Policy: p, OptedOut: true, OptOutReason: o.Reason}, nil, nil
+		return &WovenPolicy{Policy: p, OptedOut: true, OptOutReason: o.Reason}, nil, nil, nil
+	}
+	fail := func(d diagnostics.Diagnostic) (*WovenPolicy, []string, []onNeed, []diagnostics.Diagnostic) {
+		return nil, nil, nil, []diagnostics.Diagnostic{d}
 	}
 	// A designated table read only in a non-maximal rendering — a
 	// non-first @choose alternative or an @order-by @default body — is
@@ -290,31 +375,51 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 	// completely unscoped (a silent tenant-scoping leak); this holds
 	// whether or not the policy also bites the maximal rendering.
 	if len(over) > 0 {
-		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
-			fmt.Sprintf("designated table %q is read only inside a non-first @choose alternative or an @order-by @default body, a rendering the weaver cannot see or scope (it works from the maximal rendering)", over[0]))}
+		return fail(w.unweavable(p, w.q.HeaderSpan,
+			fmt.Sprintf("designated table %q is read only inside a non-first @choose alternative or an @order-by @default body, a rendering the weaver cannot see or scope (it works from the maximal rendering)", over[0])))
 	}
 	if w.kind == dialect.StmtInsert {
-		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
-			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope")}
+		return fail(w.unweavable(p, w.q.HeaderSpan,
+			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope"))
 	}
 	if a.hidden {
-		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
-			"a designated table appears inside a subquery, CTE, or set-operation branch, which sqletch cannot scope")}
+		return fail(w.unweavable(p, w.q.HeaderSpan,
+			"a designated table appears inside a subquery, CTE, or set-operation branch, which sqletch cannot scope"))
 	}
-	topOcc := a.topOcc
 
-	// Occurrence checks (design 14 §D1/D2/D5, §11.2, §11.3).
-	for _, r := range topOcc {
+	// Occurrence checks (design 14 §D1/D2/D5, §11.2, §11.3), and the
+	// WHERE-vs-ON split: a null-extended outer-join occurrence is
+	// scoped in its own join's ON clause (§D2(a)).
+	var whereOcc []dialect.RelRef
+	var onOcc []struct {
+		rel dialect.RelRef
+		res *joinOnResult
+	}
+	for _, r := range a.topOcc {
 		switch {
-		case r.NullableSide:
-			return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.relSpan(r),
-				fmt.Sprintf("table %q sits on the null-extended side of an outer join; a WHERE conjunct would silently turn it into an inner join", r.Table))}
 		case w.guardedAt(r.Loc):
-			return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.relSpan(r),
-				fmt.Sprintf("table %q is introduced by a guarded (@if-present) join and cannot be unconditionally scoped", r.Table))}
+			return fail(w.unweavable(p, w.relSpan(r),
+				fmt.Sprintf("table %q is introduced by a guarded (@if-present) join and cannot be unconditionally scoped", r.Table)))
 		case !bareIdentRe.MatchString(boundName(r)):
-			return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.relSpan(r),
-				fmt.Sprintf("the name bound to the predicate placeholder (%q) is not a bare identifier", boundName(r)))}
+			return fail(w.unweavable(p, w.relSpan(r),
+				fmt.Sprintf("the name bound to the predicate placeholder (%q) is not a bare identifier", boundName(r))))
+		case r.NullableSide:
+			relOff, ok := w.relTemplateOff(r)
+			if !ok {
+				return fail(w.unweavable(p, w.relSpan(r),
+					fmt.Sprintf("table %q sits on the null-extended side of an outer join, and its reference cannot be located in the template", r.Table)))
+			}
+			res := w.joinOnFor(relOff)
+			if !res.found || !res.cs.lexOK || res.cs.start < 0 {
+				return fail(w.unweavable(p, w.relSpan(r),
+					fmt.Sprintf("table %q sits on the null-extended side of a join with no ON expression to extend (USING/NATURAL/comma join); rewrite it with an explicit ON", r.Table)))
+			}
+			onOcc = append(onOcc, struct {
+				rel dialect.RelRef
+				res *joinOnResult
+			}{r, res})
+		default:
+			whereOcc = append(whereOcc, r)
 		}
 	}
 
@@ -332,7 +437,7 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 	if p.ParamName != "" {
 		if existing, ok := w.q.Params[p.ParamName]; ok {
 			if why := policyParamKindCollision(existing); why != "" {
-				return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, paramDeclSpan(w.q, p.ParamName), why)}
+				return fail(w.unweavable(p, paramDeclSpan(w.q, p.ParamName), why))
 			}
 		}
 	}
@@ -340,29 +445,39 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 	// Parameter-hint agreement (design 14 §11.4).
 	if p.ParamName != "" && p.ParamType != "" {
 		if h, ok := w.q.TypeHints[p.ParamName]; ok && !strings.EqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
-			return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, h.Span,
-				fmt.Sprintf("the query hints parameter %q as %q, but the policy declares %q", p.ParamName, h.SQLType, p.ParamType))}
+			return fail(w.unweavable(p, h.Span,
+				fmt.Sprintf("the query hints parameter %q as %q, but the policy declares %q", p.ParamName, h.SQLType, p.ParamType)))
 		}
 	}
 
 	wp := &WovenPolicy{Policy: p}
-	var inserts []string
+	var whereConjs []string
+	var needs []onNeed
 	if strings.Contains(p.Predicate, Placeholder) {
-		for _, r := range topOcc {
+		for _, r := range whereOcc {
 			c := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r))
 			wp.Conjuncts = append(wp.Conjuncts, c)
-			if !w.present(c) {
-				inserts = append(inserts, c)
+			if !w.wherePresent(c) {
+				whereConjs = append(whereConjs, c)
+			}
+		}
+		for _, o := range onOcc {
+			c := strings.ReplaceAll(p.Predicate, Placeholder, boundName(o.rel))
+			wp.Conjuncts = append(wp.Conjuncts, c)
+			if !onPresent(w.profile, o.res, c) {
+				needs = append(needs, onNeed{res: o.res, conj: c})
 			}
 		}
 	} else {
-		// No relation reference: one conjunct scopes every occurrence.
+		// No relation reference: one WHERE conjunct scopes every
+		// occurrence (it references no joined columns, so it cannot
+		// null-filter an outer join).
 		wp.Conjuncts = append(wp.Conjuncts, p.Predicate)
-		if !w.present(p.Predicate) {
-			inserts = append(inserts, p.Predicate)
+		if !w.wherePresent(p.Predicate) {
+			whereConjs = append(whereConjs, p.Predicate)
 		}
 	}
-	return wp, inserts, nil
+	return wp, whereConjs, needs, nil
 }
 
 // policyParamKindCollision reports why a policy cannot re-bind an
@@ -430,24 +545,25 @@ func (w *weaver) guardedAt(loc int) bool {
 	return false
 }
 
-// present reports whether an identical conjunct is already an
+// wherePresent reports whether an identical conjunct is already an
 // unconditional skeleton conjunct of the WHERE clause — the
 // idempotence rule: hand-scoped queries are not double-woven. Guarded
-// copies deliberately do not count (they vanish in guard-off shapes).
-func (w *weaver) present(conjunct string) bool {
-	if !w.segmentable {
+// copies deliberately do not count (they vanish in guard-off shapes),
+// and a top-level OR poisons matching (the weaver then weaves and
+// wraps: doubling is harmless, skipping leaks).
+func (w *weaver) wherePresent(conjunct string) bool {
+	if !w.where.lexOK || w.where.hasOR {
 		return false
 	}
-	want := normalizedTokens(w.profile, conjunct)
-	if want == nil {
+	return segsContain(w.profile, w.where.segs, conjunct)
+}
+
+// onPresent is wherePresent for one join's ON clause.
+func onPresent(profile dialect.LexerProfile, res *joinOnResult, conjunct string) bool {
+	if !res.found || !res.cs.lexOK || res.cs.hasOR {
 		return false
 	}
-	for _, seg := range w.segments {
-		if tokensEqual(seg, want) {
-			return true
-		}
-	}
-	return false
+	return segsContain(profile, res.cs.segs, conjunct)
 }
 
 func boundName(r dialect.RelRef) string {

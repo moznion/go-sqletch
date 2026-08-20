@@ -196,10 +196,16 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 - Policies weave AFTER the P1 scan, BEFORE rendering; everything
   downstream sees ordinary items. D1–D6 settled 2026-08-02 (doc 14
-  §5): per-occurrence weaving at top level; nullable-outer-join sides,
-  subquery/CTE/set-op positions, guarded joins rejected (SQLETCH125);
-  ordinary-parameter binding (D3a); empty guard set; hybrid span
-  attribution (303 → config path, 124/125 → query).
+  §5): per-occurrence weaving at top level; subquery/CTE/set-op
+  positions and guarded joins rejected (SQLETCH125);
+  ordinary-parameter binding (D3a; the D3b ambient design is settled
+  in doc 14 but unscheduled); empty guard set; hybrid span attribution
+  (303 → config path, 124/125 → query).
+- Nullable-outer-join sides weave into THAT JOIN's ON clause (D2a
+  refinement, second settlement 2026-08-02) — WHERE would inner-join
+  them. USING/NATURAL joins on a nullable side stay SQLETCH125 (no ON
+  expression to extend); enforcement checks the ON clause for those
+  occurrences.
 - `Tree.DeepTables()` exists because `Relations()` never descends into
   subqueries; the weaver compares the two by per-name counts. CTE
   names shadowing designated tables are conservatively "touching".
