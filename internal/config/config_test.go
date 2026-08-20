@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
@@ -473,4 +475,127 @@ func TestLoad_OracleBackend(t *testing.T) {
 			}
 		})
 	}
+}
+
+// aliasBomb builds a "billion laughs" sqletch.yaml: nested YAML anchors
+// whose aliases fan out so a ~600-byte file expands to ~fan^levels nodes
+// during decode. The amplification targets the KNOWN typed field
+// static_expansion.queries, so DisallowUnknownField does not short it.
+func aliasBomb(levels, fan int) string {
+	var b strings.Builder
+	b.WriteString(validYAML)
+	b.WriteString("static_expansion:\n  queries:\n  - &l0 \"lol\"\n")
+	for i := 1; i <= levels; i++ {
+		fmt.Fprintf(&b, "  - &l%d [", i)
+		for j := 0; j < fan; j++ {
+			if j > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "*l%d", i-1)
+		}
+		b.WriteString("]\n")
+	}
+	return b.String()
+}
+
+// TestLoad_YAMLAliasBomb pins the DoS fix: a tiny alias-amplification
+// config must be REFUSED quickly (SQLETCH300), never expanded. The
+// deadline guarantees a regression cannot hang CI — a hung Load makes
+// the test fail by timeout rather than wedging the suite.
+func TestLoad_YAMLAliasBomb(t *testing.T) {
+	dir := t.TempDir()
+	// ~9^9 (~387M) expansion in ~500 bytes.
+	path := write(t, dir, "sqletch.yaml", aliasBomb(9, 9))
+
+	done := make(chan []diagnostics.Diagnostic, 1)
+	go func() {
+		_, diags := Load(path)
+		done <- diags
+	}()
+
+	select {
+	case diags := <-done:
+		refused := false
+		for _, d := range diags {
+			if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Fatalf("alias bomb must be refused with SQLETCH300, got %+v", diags)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Load hung on an alias bomb (DoS regression): it must reject before expanding")
+	}
+}
+
+// TestLoad_LargeFlatConfigLoads makes sure the bomb guard does not
+// reject a legitimate large-but-flat config (many queries, no aliases).
+func TestLoad_LargeFlatConfigLoads(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(validYAML)
+	b.WriteString("static_expansion:\n  queries:\n")
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&b, "  - q%d\n", i)
+	}
+	_, diags := Load(write(t, dir, "sqletch.yaml", b.String()))
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse {
+			t.Fatalf("large flat config wrongly refused: %+v", d)
+		}
+	}
+}
+
+// TestExpandGlobs_PathEscape pins the MEDIUM fix: a glob whose matches
+// resolve outside the project directory is refused (SQLETCH306), so a
+// clone-and-run cannot read arbitrary host files through queries/
+// schema.files. An in-tree glob still expands.
+func TestExpandGlobs_PathEscape(t *testing.T) {
+	parent := t.TempDir()
+	// A file the attacker wants to read, OUTSIDE the project dir.
+	if err := os.WriteFile(filepath.Join(parent, "secret.conf"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "project")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Dir: dir}
+
+	t.Run("relative escaping glob is refused", func(t *testing.T) {
+		_, err := cfg.ExpandGlobs([]string{"../secret*.conf"})
+		if err == nil {
+			t.Fatal("a glob escaping the project directory must be refused")
+		}
+		if !strings.Contains(err.Error(), string(diagnostics.CodePathEscape)) {
+			t.Errorf("error must cite SQLETCH306, got %v", err)
+		}
+	})
+
+	t.Run("symlinked directory escape is refused", func(t *testing.T) {
+		link := filepath.Join(dir, "link")
+		if err := os.Symlink(parent, link); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		_, err := cfg.ExpandGlobs([]string{"link/secret*.conf"})
+		if err == nil {
+			t.Fatal("a glob escaping through a symlinked directory must be refused")
+		}
+		if !strings.Contains(err.Error(), string(diagnostics.CodePathEscape)) {
+			t.Errorf("error must cite SQLETCH306, got %v", err)
+		}
+	})
+
+	t.Run("in-tree glob still expands", func(t *testing.T) {
+		write(t, dir, "queries/a.sql", "x")
+		write(t, dir, "queries/b.sql", "x")
+		paths, err := cfg.ExpandGlobs([]string{"queries/*.sql"})
+		if err != nil {
+			t.Fatalf("in-tree glob must succeed: %v", err)
+		}
+		if len(paths) != 2 {
+			t.Errorf("paths = %v", paths)
+		}
+	})
 }

@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,9 +13,28 @@ import (
 	"strings"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
+
+// maxConfigBytes bounds the sqletch.yaml a run will read. A config file
+// is authored by hand and never legitimately large; the cap is
+// deliberately generous (real configs are a few KB) yet forecloses an
+// attacker-planted giant file OOMing the process on `sqletch lsp`
+// workspace-open or in CI.
+const maxConfigBytes = 1 << 20 // 1 MiB
+
+// maxExpandedNodes bounds the node count a YAML document may expand to
+// once anchors/aliases are resolved. YAML alias fan-out is exponential
+// ("billion laughs"): a ~600-byte file can name ~1e9 nodes and hang the
+// decoder for tens of seconds, and DisallowUnknownField does NOT
+// short-circuit amplification aimed at a KNOWN typed field
+// (static_expansion.queries). The cap is far above any realistic flat
+// config (bounded by maxConfigBytes to well under 1e6 nodes) yet
+// rejects a bomb after O(input) work, before any expansion happens.
+const maxExpandedNodes = 1 << 20
 
 type Config struct {
 	Version       int          `yaml:"version"`
@@ -144,10 +164,20 @@ func (c Config) Expanded(query string) bool {
 // the config outside sqletch.
 func Load(path string) (Config, []diagnostics.Diagnostic) {
 	span := diagnostics.Span{File: path}
-	raw, err := os.ReadFile(path)
+	raw, err := readConfigCapped(path)
 	if err != nil {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
+	}
+
+	// Bound YAML alias expansion BEFORE decoding: a billion-laughs bomb
+	// amplifies through DisallowUnknownField because it targets a known
+	// typed field, so the decoder must never see it. This pre-scan is
+	// O(input) — it parses the document (aliases unresolved) and sums the
+	// expanded node count, rejecting before any exponential blow-up.
+	if err := boundYAMLExpansion(raw); err != nil {
+		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
+			diagnostics.CodeConfigParse, span, "invalid config: %v", err)}
 	}
 
 	var cfg Config
@@ -314,6 +344,104 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	return cfg, diags
 }
 
+// readConfigCapped reads path but refuses more than maxConfigBytes, so a
+// committed giant sqletch.yaml cannot OOM the process. It reads at most
+// maxConfigBytes+1 and rejects if that ceiling is reached, so the bound
+// holds even if the file grows after an initial stat (no size TOCTOU).
+func readConfigCapped(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxConfigBytes {
+		return nil, fmt.Errorf("config file exceeds the %d-byte cap", maxConfigBytes)
+	}
+	return data, nil
+}
+
+// boundYAMLExpansion rejects a config whose YAML anchors/aliases expand
+// beyond maxExpandedNodes ("billion laughs" DoS). It parses the document
+// (goccy/go-yaml does NOT resolve aliases while parsing, so this is
+// O(input)) and computes each node's expanded size, resolving every
+// alias to its already-seen anchor's size — anchors always precede their
+// aliases in a valid document, so a single document-order pass suffices.
+// The per-node accumulation short-circuits once the cap is exceeded, so
+// the computation itself stays bounded even for an astronomical bomb.
+// A parse failure is left to the real decoder, which reports the precise
+// syntax error.
+func boundYAMLExpansion(raw []byte) error {
+	file, err := parser.ParseBytes(raw, 0)
+	if err != nil {
+		return nil // let UnmarshalWithOptions surface the syntax error
+	}
+	anchors := map[string]int64{}
+	for _, doc := range file.Docs {
+		if expandedNodeSize(doc.Body, anchors) > maxExpandedNodes {
+			return fmt.Errorf("YAML anchor/alias expansion exceeds the %d-node cap: this is the shape of a \"billion laughs\" denial-of-service (a tiny file that expands to billions of nodes); remove the alias fan-out", maxExpandedNodes)
+		}
+	}
+	return nil
+}
+
+// expandedNodeSize returns the number of nodes n contributes once every
+// alias it reaches is resolved, memoizing each anchor's size in anchors.
+// The result saturates near maxExpandedNodes: aggregate nodes stop
+// summing children once they pass the cap, so a bomb is detected without
+// ever materializing the expansion.
+func expandedNodeSize(n ast.Node, anchors map[string]int64) int64 {
+	if n == nil {
+		return 1
+	}
+	switch t := n.(type) {
+	case *ast.AnchorNode:
+		size := expandedNodeSize(t.Value, anchors)
+		if t.Name != nil {
+			if tok := t.Name.GetToken(); tok != nil {
+				anchors[tok.Value] = size
+			}
+		}
+		return size
+	case *ast.AliasNode:
+		if t.Value != nil {
+			if tok := t.Value.GetToken(); tok != nil {
+				if size, ok := anchors[tok.Value]; ok {
+					return size
+				}
+			}
+		}
+		return 1
+	case *ast.SequenceNode:
+		size := int64(1)
+		for _, v := range t.Values {
+			size += expandedNodeSize(v, anchors)
+			if size > maxExpandedNodes {
+				return size
+			}
+		}
+		return size
+	case *ast.MappingNode:
+		size := int64(1)
+		for _, v := range t.Values {
+			size += expandedNodeSize(v, anchors)
+			if size > maxExpandedNodes {
+				return size
+			}
+		}
+		return size
+	case *ast.MappingValueNode:
+		return expandedNodeSize(t.Key, anchors) + expandedNodeSize(t.Value, anchors)
+	case *ast.DocumentNode:
+		return expandedNodeSize(t.Body, anchors)
+	default:
+		return 1
+	}
+}
+
 // resolvesOutsideRoot reports whether target — after following symlinks in
 // its existing ancestry — lands outside root, and returns the resolved real
 // path. root (the project directory) is itself symlink-resolved so a project
@@ -371,6 +499,15 @@ func (c Config) Abs(p string) string {
 // ExpandGlobs resolves config-relative globs into a sorted, duplicate-
 // free path list; a pattern matching nothing is an error (a typoed
 // glob silently matching zero files is the classic footgun).
+//
+// Every match is path-escape-checked (SQLETCH306): the read paths
+// (cli/commands.go, pipeline.go via os.ReadFile) consume this list
+// unchecked, so a committed `queries: ["../../etc/*.conf"]` or a
+// symlinked-directory glob would otherwise read arbitrary host-readable
+// files on a clone-and-run `check`/`generate` and disclose them through
+// catalog/scan and diagnostic excerpts. The check mirrors Load's
+// write-path policy (lexical `..` plus symlinked-component resolution)
+// against the project directory.
 func (c Config) ExpandGlobs(patterns []string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
@@ -383,6 +520,9 @@ func (c Config) ExpandGlobs(patterns []string) ([]string, error) {
 			return nil, fmt.Errorf("glob %q matches no files", pat)
 		}
 		for _, m := range matches {
+			if err := c.checkMatchInRoot(pat, m); err != nil {
+				return nil, err
+			}
 			if !seen[m] {
 				seen[m] = true
 				out = append(out, m)
@@ -391,6 +531,26 @@ func (c Config) ExpandGlobs(patterns []string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// checkMatchInRoot refuses a glob match that resolves outside the project
+// directory — lexically (a `..`-climbing pattern) or through a symlinked
+// directory component whose real target escapes. match is the absolute
+// path filepath.Glob returned (it exists, so symlink resolution is
+// exact). The error cites SQLETCH306 so the path-escape refusal is
+// recognizable even though ExpandGlobs's channel is a plain error.
+func (c Config) checkMatchInRoot(pat, match string) error {
+	resolved := filepath.Clean(match)
+	rel, err := filepath.Rel(c.Dir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s: glob %q matches %q, which escapes the project directory: a cloned repository could otherwise read arbitrary host files through queries/schema.files; keep globs inside the project directory",
+			diagnostics.CodePathEscape, pat, resolved)
+	}
+	if real, outside := resolvesOutsideRoot(c.Dir, resolved); outside {
+		return fmt.Errorf("%s: glob %q matches %q, which escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise read arbitrary host files; keep globs inside the project directory and remove any symlinked components",
+			diagnostics.CodePathEscape, pat, resolved, real)
+	}
+	return nil
 }
 
 // NullOverridesFor collects the per-column nullability overrides of
