@@ -39,27 +39,28 @@ regression test.
 
 ## Go toolchain policy (v0.5)
 
-- The module requires **go1.27rc2** (bump to 1.27.0 when released).
-  A `go 1.26` directive + `toolchain go1.27rc2` split (keeping
-  consumers on 1.26) was considered and rejected 2026-08: it would
-  need a build-tagged v1 fallback for the LSP's json/v2 decode path
-  plus a 1.26 CI leg to test it — not worth it, and GOTOOLCHAIN=auto
-  makes the 1.27 requirement transparent for most consumers anyway.
-  Released golangci-lint binaries are built with the previous stable
-  Go and refuse newer targets: build it from source with the module's
-  toolchain (`GOTOOLCHAIN=go1.27rc2 go install .../golangci-lint@latest`);
-  CI does the same via `install-mode: goinstall`. Drop both once
-  golangci-lint ships go1.27-built binaries. Separately, golangci's
-  bundled honnef.co/go/tools v0.7.0 predates Go 1.27 and its buildir
-  panics on the go1.27rc2 LINUX stdlib (macOS happens not to trip it),
-  so staticcheck+unused are disabled in .golangci.yml and run via the
-  standalone staticcheck 2026.2rc1
-  (`GOTOOLCHAIN=go1.27rc2 go install honnef.co/go/tools/cmd/staticcheck@v0.8.0-rc.1`),
+- The module requires go1.27.0+ (`go 1.27.0` directive; no
+  `toolchain` line — GOTOOLCHAIN=auto makes the requirement
+  transparent for most consumers).
+  A `go 1.26` directive + 1.27 `toolchain` split (keeping consumers
+  on 1.26) was considered and rejected 2026-08, during the rc period:
+  it would need a build-tagged v1 fallback for the LSP's json/v2
+  decode path plus a 1.26 CI leg to test it — not worth it.
+  golangci-lint must be a go1.27-built binary: v2.13.0+ works
+  (released 2026-08-19, built with Go 1.27.0); older release binaries
+  refuse the target. The rc-era build-from-source workaround
+  (`GOTOOLCHAIN=… go install`, CI `install-mode: goinstall`) was
+  dropped at 1.27.0. Separately, staticcheck+unused stay disabled in
+  .golangci.yml and run via the standalone staticcheck 2026.2rc1
+  (`go install honnef.co/go/tools/cmd/staticcheck@v0.8.0-rc.1`),
   skipping generated `/gen` packages (no generated-file exclusion in
-  the standalone binary). Fold back into golangci-lint once it bundles
-  honnef.co/go/tools >= v0.8.0. CI's setup-go pins `1.27.0-rc.3`
-  explicitly (`go-version-file` cannot parse an rc directive); return
-  it to `go-version-file: go.mod` at 1.27.0.
+  the standalone binary): golangci builds bundling honnef.co/go/tools
+  v0.7.0 panic in buildir on the go1.27 LINUX stdlib (macOS happens
+  not to trip it), and v2.13.0 still bundles only the rc
+  (v0.8.0-rc.1). Fold back into golangci-lint once it bundles
+  honnef.co/go/tools >= v0.8.0 final. CI's setup-go reads
+  `go-version-file: go.mod` again (the rc-era explicit `1.27.0-rc.3`
+  pin — `go-version-file` cannot parse an rc directive — is gone).
 - **JSON v1/v2 split**: byte-pinned outputs (cache JSON, `--json`
   diagnostics, LSP outbound frames) marshal with the v1 API; external
   input (LSP inbound, doc 10 §3) decodes with `encoding/json/v2` for

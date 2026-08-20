@@ -6,7 +6,7 @@ linters:
   # staticcheck binary (2026.2rc1 / honnef.co/go/tools v0.8.0-rc.1)
   # instead — see the lint job in .github/workflows/ci.yml and the
   # CLAUDE.md toolchain policy. golangci's bundled honnef.co/go/tools
-  # v0.7.0 predates Go 1.27: its buildir panics on the go1.27rc2 linux
+  # v0.7.0 predates Go 1.27: its buildir panics on the go1.27 linux
   # stdlib ("unexpected expr: *ast.KeyValueExpr", the new
   # embedded-field struct-initializer syntax). Re-enable both and drop
   # the standalone step once golangci-lint bundles

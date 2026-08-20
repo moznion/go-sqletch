@@ -59,7 +59,7 @@ jobs:
           args: --build-tags devdb
       # staticcheck + unused run standalone (they are disabled in
       # .golangci.yml): golangci's bundled honnef.co/go/tools v0.7.0
-      # predates Go 1.27 and panics building IR for the go1.27rc3
+      # predates Go 1.27 and panics building IR for the go1.27
       # linux stdlib. 2026.2rc1 is the first staticcheck that analyzes
       # Go 1.27 code. Generated packages (examples/*/gen) are skipped —
       # the standalone binary has no generated-file exclusion, and
