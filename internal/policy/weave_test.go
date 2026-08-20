@@ -311,6 +311,28 @@ func TestWeave_Rejections(t *testing.T) {
 	}
 }
 
+// Regression (#89 follow-up): a SELECT whose JOIN condition uses a bare
+// column literally named `conflict` forms the token pair `ON` `CONFLICT`,
+// but this is NOT an INSERT upsert. Before the scanner gated ON CONFLICT
+// detection on the statement being an INSERT, WhereKwEnd stayed -1 and the
+// weaver fell through to the tail/StmtEnd fallback, synthesizing a SECOND
+// `WHERE` — producing `... WHERE o.status = $2 WHERE o.tenant_id = $1`,
+// which the oracle rejects as a syntax error. The policy conjunct must
+// instead weave into the single real WHERE.
+func TestWeave_SelectJoinOnConflictColumnSingleWhere(t *testing.T) {
+	src := "-- name: Q :many\nSELECT o.id FROM orders o JOIN b ON conflict = b.id WHERE o.status = :status\n"
+	res := weaveOne(t, src, tenantPolicy())
+	noDiags(t, res)
+	got := renderSQL(t, res.Query)
+	if n := strings.Count(got, "WHERE"); n != 1 {
+		t.Fatalf("expected exactly one WHERE, got %d:\n%s", n, got)
+	}
+	want := "SELECT o.id FROM orders o JOIN b ON conflict = b.id WHERE o.tenant_id = $1 AND o.status = $2"
+	if got != want {
+		t.Errorf("woven rendering:\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestWeave_AppliesToFiltering(t *testing.T) {
 	p := tenantPolicy()
 	p.Kinds = []dialect.StmtKind{dialect.StmtSelect}

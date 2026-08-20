@@ -77,3 +77,25 @@ func TestScan_OrdinaryWhereStillRecorded(t *testing.T) {
 		t.Fatalf("ordinary statement WHERE must set WhereKwEnd, got %d", q.WhereKwEnd)
 	}
 }
+
+// Regression guard (#89 follow-up): `ON CONFLICT` detection must be gated
+// on the statement being an INSERT. In a SELECT, `ON` is the ordinary JOIN
+// keyword, so a bare column literally named `conflict` in the join
+// condition forms the depth-0 token pair `ON` `CONFLICT` — but this is NOT
+// an upsert. Ungated, afterOnConflict flipped and the real statement WHERE
+// was skipped (WhereKwEnd stayed -1), which drove the policy weaver to
+// synthesize a spurious second WHERE (doubled-WHERE oracle syntax error).
+func TestScan_SelectJoinOnConflictColumnRecordsRealWhere(t *testing.T) {
+	src := "-- name: Sel :many\n" +
+		"SELECT a.id FROM a JOIN b ON conflict = b.id WHERE a.tenant = :t;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("SELECT with a JOIN column named `conflict` must record its real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	// The recorded end must sit just past the real WHERE keyword, i.e. the
+	// tenant predicate follows it.
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd < 0 || q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}

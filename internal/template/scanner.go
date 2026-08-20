@@ -159,8 +159,14 @@ type queryBuilder struct {
 	// records that the INSERT conflict clause has begun: a WHERE inside
 	// it (partial-index predicate or DO UPDATE row filter) is not the
 	// statement's row filter and must not become WhereKwEnd.
+	// isInsert gates the `ON CONFLICT` recognition on the statement
+	// actually being an INSERT: `ON CONFLICT` is only meaningful there,
+	// whereas `ON` is the ordinary JOIN keyword, so a bare column named
+	// `conflict` in a SELECT/UPDATE/DELETE join condition would otherwise
+	// spuriously trip afterOnConflict and suppress the real WHERE.
 	prevKw          string
 	afterOnConflict bool
+	isInsert        bool
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
@@ -509,7 +515,11 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 	// `ON CONFLICT` opens the INSERT conflict clause: a WHERE within it
 	// (a partial-index predicate or the DO UPDATE row filter) is not the
 	// statement's row filter, so it must never be recorded as WhereKwEnd.
-	if prevKw == "ON" && kw == "CONFLICT" {
+	// Only honor the pair inside an INSERT — outside one `ON` is the JOIN
+	// keyword, so a bare column named `conflict` must not suppress the
+	// real WHERE (which would splice the policy weaver's conjunct into the
+	// wrong place, or double the WHERE via the tail fallback).
+	if qb.isInsert && prevKw == "ON" && kw == "CONFLICT" {
 		qb.afterOnConflict = true
 	}
 	switch kw {
@@ -542,6 +552,7 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		}
 	case "INSERT":
 		qb.ctx = ctxInsertTarget
+		qb.isInsert = true
 	case "VALUES":
 		qb.ctx = ctxValues
 	case "RETURNING":
