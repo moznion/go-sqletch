@@ -164,6 +164,88 @@ func TestGenerate_UnexportedColumnField(t *testing.T) {
 	}
 }
 
+// ---- class (e): two required arguments fold to the same Go name ----
+
+// argIdent is a many-to-one fold: a reserved/import/frags collision is
+// escaped with a fixed "Arg" suffix, so two DIFFERENT template params
+// (policy-woven and/or @filter-tree!) can land on the SAME method
+// parameter name. The generated method would then declare two
+// parameters of that one name — a Go compile error — while, before the
+// gate, `sqletch generate` reported zero diagnostics. Refuse it with
+// SQLETCH307.
+func TestGenerate_RequiredArgNameCollision(t *testing.T) {
+	// Two policy-woven params: :ctx (reserved -> ctxArg) and :ctx_arg
+	// (-> ctxArg) fold to the same argument name.
+	t.Run("two_policy_params_fold", func(t *testing.T) {
+		q := scanOne(t, `-- name: Q :one
+SELECT count(*) AS total FROM t WHERE t.a = :ctx AND t.b = :ctx_arg;
+`)
+		q.Params["ctx"].Policy = "scope"
+		q.Params["ctx_arg"].Policy = "scope"
+		_, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"ctx": {OID: 20}, "ctx_arg": {OID: 20}},
+		}})
+		if !hasCode(diags, diagnostics.CodeInvalidColumnIdentifier) {
+			t.Fatalf("params :ctx and :ctx_arg fold to the same arg name (want SQLETCH307), got %+v", diags)
+		}
+	})
+
+	// A policy-woven param (:runtime_arg -> runtimeArg) and a
+	// @filter-tree!(runtime) tree argument (runtime -> runtimeArg, escaped
+	// off the import) fold to the same name across the two argument
+	// sources.
+	t.Run("policy_and_filter_tree_fold", func(t *testing.T) {
+		q := scanOne(t, `-- name: Pick :many
+SELECT t.id FROM t
+WHERE TRUE
+  AND t.x = :runtime_arg
+  AND @filter-tree!(runtime)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`)
+		q.Params["runtime_arg"].Policy = "scope"
+		_, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"runtime_arg": {OID: 20}, "scope_tenant_id": {OID: 20}},
+		}})
+		if !hasCode(diags, diagnostics.CodeInvalidColumnIdentifier) {
+			t.Fatalf("policy :runtime_arg and @filter-tree!(runtime) fold to the same arg name (want SQLETCH307), got %+v", diags)
+		}
+	})
+
+	// Two distinct required args must NOT be gated: the fix may not
+	// over-reject non-colliding parameters, and both names must reach the
+	// signature.
+	t.Run("distinct_required_args_pass", func(t *testing.T) {
+		q := scanOne(t, `-- name: Q :one
+SELECT count(*) AS total FROM t WHERE t.a = :tenant_id AND t.b = :region;
+`)
+		q.Params["tenant_id"].Policy = "scope"
+		q.Params["region"].Policy = "scope"
+		files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+			Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+			Columns:    []dialect.ColumnDesc{{Name: "total", Type: dialect.TypeRef{OID: 20}}},
+			Nullable:   []bool{false},
+			ParamTypes: map[string]dialect.TypeRef{"tenant_id": {OID: 20}, "region": {OID: 20}},
+		}})
+		if diagnostics.HasErrors(diags) {
+			t.Fatalf("distinct required args must not be gated: %+v", diags)
+		}
+		src := string(files["q.sql.gen.go"])
+		for _, want := range []string{"tenantID TenantID", "region Region"} {
+			if !strings.Contains(src, want) {
+				t.Errorf("distinct required arg %q missing from signature\n----\n%s", want, src)
+			}
+		}
+	})
+}
+
 // ---- compile proof for the rename (class a) ----
 
 // The renamed arguments must actually compile. Generate a package that
