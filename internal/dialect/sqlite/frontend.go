@@ -334,6 +334,19 @@ func collectSource(src rsql.Source, join dialect.JoinType, nullable bool, out *[
 			return
 		}
 		collectSource(v.X, join, nullable, out) // parenthesized join
+	case *rsql.QualifiedTableFunctionName:
+		// A table-valued function (FROM json_each(…)) is an opaque
+		// source, like a derived table: it is COUNTED so the weaver does
+		// not undercount, but its own name is never a base table. A
+		// designated table hiding inside a TVF argument surfaces through
+		// DeepTables (which descends into the arguments) but not here, so
+		// the weaver's Relations/DeepTables comparison flags it as hidden
+		// and refuses it (SQLETCH125) rather than silently skipping it.
+		alias := ""
+		if v.Alias != nil {
+			alias = v.Alias.Name
+		}
+		*out = append(*out, dialect.RelRef{Alias: alias, Loc: -1, Join: join, NullableSide: nullable})
 	case *rsql.SelectStatement:
 		*out = append(*out, dialect.RelRef{Loc: -1, Join: join, NullableSide: nullable})
 	}
@@ -572,6 +585,15 @@ func (w *tableWalker) walkSource(src rsql.Source) {
 			return
 		}
 		w.walkSource(v.X)
+	case *rsql.QualifiedTableFunctionName:
+		// The TVF name is not a base table, but its arguments can hide a
+		// designated table (a subquery argument, or a ref through an
+		// outer table). Descend into the arguments so such a table is
+		// counted in DeepTables — where, absent from Relations, it reads
+		// as a hidden occurrence the weaver refuses (SQLETCH125).
+		for _, a := range v.Args {
+			w.walkExpr(a)
+		}
 	case *rsql.SelectStatement:
 		w.walkSelect(v)
 	}
@@ -759,6 +781,13 @@ func (w *refWalker) walkSource(src rsql.Source, inSub bool, scope, enclosing []s
 			return
 		}
 		w.walkSource(v.X, inSub, scope, enclosing)
+	case *rsql.QualifiedTableFunctionName:
+		// TVF arguments are ordinary expressions in the current FROM
+		// scope (they may reference preceding FROM items, lateral-style),
+		// so their column refs must be resolved like any other.
+		for _, a := range v.Args {
+			w.walkExpr(a, inSub, scope)
+		}
 	case *rsql.SelectStatement:
 		w.walkSelect(v, true, enclosing)
 	}
@@ -852,6 +881,15 @@ func sourceNames(src rsql.Source, out *[]string) {
 			return
 		}
 		sourceNames(v.X, out) // parenthesized join
+	case *rsql.QualifiedTableFunctionName:
+		// A TVF introduces an effective FROM name (alias else function
+		// name) that a qualified ref can target, so it belongs in the
+		// scope set exactly like a table's own name.
+		if v.Alias != nil {
+			*out = append(*out, v.Alias.Name)
+		} else if v.Name != nil {
+			*out = append(*out, v.Name.Name)
+		}
 	}
 }
 
