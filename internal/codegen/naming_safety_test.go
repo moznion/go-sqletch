@@ -88,7 +88,7 @@ func TestArgIdent_ReservedLocals(t *testing.T) {
 		"resolution": "resolution",
 	}
 	for in, want := range cases {
-		if got := argIdent(in); got != want {
+		if got := argIdent(in, ""); got != want {
 			t.Errorf("argIdent(%q) = %q, want %q", in, got, want)
 		}
 	}

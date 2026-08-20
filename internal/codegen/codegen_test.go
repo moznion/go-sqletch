@@ -886,8 +886,9 @@ SELECT count(*) AS total FROM audit_logs WHERE audit_logs.tenant_id = :tenant_id
 
 func TestGenerate_PolicyParamReservedName(t *testing.T) {
 	// The generated package already declares Queries, Querier, DBTX,
-	// New, and Ptr; a policy parameter whose Go name lands on one of
-	// them must be a diagnostic, not a file that fails to compile.
+	// New, And, Or, and ShapeSpace; a policy parameter whose Go name
+	// lands on one of them must be a diagnostic (SQLETCH307), not a file
+	// that fails to compile.
 	q := scanOne(t, `-- name: CountLogs :one
 SELECT count(*) AS total FROM audit_logs WHERE audit_logs.queries = :queries;
 `)
@@ -899,7 +900,7 @@ SELECT count(*) AS total FROM audit_logs WHERE audit_logs.queries = :queries;
 		Nullable:   []bool{false},
 		ParamTypes: map[string]dialect.TypeRef{"queries": {OID: 20}},
 	}})
-	if !hasCode(diags, diagnostics.CodeNameCollision) {
-		t.Fatalf("reserved policy type name must be a collision, got %+v", diags)
+	if !hasCode(diags, diagnostics.CodeInvalidColumnIdentifier) {
+		t.Fatalf("reserved policy type name must be refused (SQLETCH307), got %+v", diags)
 	}
 }
