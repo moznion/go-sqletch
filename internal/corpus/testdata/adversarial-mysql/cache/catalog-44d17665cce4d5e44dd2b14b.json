@@ -258,7 +258,7 @@
         {
           "name": "c_tags",
           "att": 32,
-          "type_oid": 0,
+          "type_oid": 248,
           "type_name": "set('x','y')",
           "not_null": true,
           "has_default": false

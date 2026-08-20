@@ -9,24 +9,21 @@
       "oid": 8,
       "type_name": "bigint",
       "src_rel": 2,
-      "src_att": 1,
-      "nullable": false
+      "src_att": 1
     },
     {
       "name": "ref",
       "oid": 8,
       "type_name": "bigint",
       "src_rel": 2,
-      "src_att": 2,
-      "nullable": false
+      "src_att": 2
     },
     {
       "name": "label",
       "oid": 253,
       "type_name": "varchar",
       "src_rel": 2,
-      "src_att": 3,
-      "nullable": false
+      "src_att": 3
     }
   ]
 }

@@ -9,8 +9,7 @@
       "oid": 253,
       "type_name": "varchar",
       "src_rel": 2,
-      "src_att": 3,
-      "nullable": false
+      "src_att": 3
     }
   ]
 }

@@ -9,40 +9,35 @@
       "oid": 10,
       "type_name": "date",
       "src_rel": 1,
-      "src_att": 24,
-      "nullable": false
+      "src_att": 24
     },
     {
       "name": "c_dt",
       "oid": 12,
       "type_name": "datetime",
       "src_rel": 1,
-      "src_att": 25,
-      "nullable": false
+      "src_att": 25
     },
     {
       "name": "c_ts",
       "oid": 7,
       "type_name": "timestamp",
       "src_rel": 1,
-      "src_att": 26,
-      "nullable": false
+      "src_att": 26
     },
     {
       "name": "c_time",
       "oid": 11,
       "type_name": "time",
       "src_rel": 1,
-      "src_att": 27,
-      "nullable": false
+      "src_att": 27
     },
     {
       "name": "c_year",
       "oid": 269,
       "type_name": "year unsigned",
       "src_rel": 1,
-      "src_att": 28,
-      "nullable": false
+      "src_att": 28
     }
   ]
 }

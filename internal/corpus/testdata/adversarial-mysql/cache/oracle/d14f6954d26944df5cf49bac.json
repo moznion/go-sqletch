@@ -9,48 +9,42 @@
       "oid": 764,
       "type_name": "blob",
       "src_rel": 1,
-      "src_att": 15,
-      "nullable": false
+      "src_att": 15
     },
     {
       "name": "c_tblob",
       "oid": 764,
       "type_name": "blob",
       "src_rel": 1,
-      "src_att": 16,
-      "nullable": false
+      "src_att": 16
     },
     {
       "name": "c_mblob",
       "oid": 764,
       "type_name": "blob",
       "src_rel": 1,
-      "src_att": 17,
-      "nullable": false
+      "src_att": 17
     },
     {
       "name": "c_lblob",
       "oid": 764,
       "type_name": "blob",
       "src_rel": 1,
-      "src_att": 18,
-      "nullable": false
+      "src_att": 18
     },
     {
       "name": "c_vbin",
       "oid": 765,
       "type_name": "varbinary",
       "src_rel": 1,
-      "src_att": 19,
-      "nullable": false
+      "src_att": 19
     },
     {
       "name": "c_bin",
       "oid": 766,
       "type_name": "binary",
       "src_rel": 1,
-      "src_att": 20,
-      "nullable": false
+      "src_att": 20
     }
   ]
 }

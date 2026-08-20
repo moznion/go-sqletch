@@ -9,24 +9,21 @@
       "oid": 246,
       "type_name": "decimal",
       "src_rel": 1,
-      "src_att": 21,
-      "nullable": false
+      "src_att": 21
     },
     {
       "name": "c_float",
       "oid": 4,
       "type_name": "float",
       "src_rel": 1,
-      "src_att": 22,
-      "nullable": false
+      "src_att": 22
     },
     {
       "name": "c_dbl",
       "oid": 5,
       "type_name": "double",
       "src_rel": 1,
-      "src_att": 23,
-      "nullable": false
+      "src_att": 23
     }
   ]
 }

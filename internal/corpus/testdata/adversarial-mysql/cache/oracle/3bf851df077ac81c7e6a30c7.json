@@ -9,48 +9,42 @@
       "oid": 253,
       "type_name": "varchar",
       "src_rel": 1,
-      "src_att": 9,
-      "nullable": false
+      "src_att": 9
     },
     {
       "name": "c_char",
       "oid": 254,
       "type_name": "char",
       "src_rel": 1,
-      "src_att": 10,
-      "nullable": false
+      "src_att": 10
     },
     {
       "name": "c_text",
       "oid": 252,
       "type_name": "text",
       "src_rel": 1,
-      "src_att": 11,
-      "nullable": false
+      "src_att": 11
     },
     {
       "name": "c_ttext",
       "oid": 252,
       "type_name": "text",
       "src_rel": 1,
-      "src_att": 12,
-      "nullable": false
+      "src_att": 12
     },
     {
       "name": "c_mtext",
       "oid": 252,
       "type_name": "text",
       "src_rel": 1,
-      "src_att": 13,
-      "nullable": false
+      "src_att": 13
     },
     {
       "name": "c_ltext",
       "oid": 252,
       "type_name": "text",
       "src_rel": 1,
-      "src_att": 14,
-      "nullable": false
+      "src_att": 14
     }
   ]
 }
