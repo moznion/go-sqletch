@@ -732,6 +732,12 @@ func (fs *fileScan) parseWhen(pos, nameEnd int) int {
 	atom := GuardAtom{Param: ident.Text, Op: opText, RawValue: lit.Text}
 	switch {
 	case lit.Kind == dialect.KindString:
+		if msg, hint := whenStringError(lit.Text); msg != "" {
+			fs.emit(diagnostics.Errorf(
+				diagnostics.CodeWhenStringLiteral, fs.span(lit.Start, lit.End), "%s", msg).
+				WithHint("%s", hint))
+			return fs.span(lit.Start, lit.End).End
+		}
 		atom.Kind = ValueString
 		atom.Value = unquoteSQLString(lit.Text)
 	case lit.Kind == dialect.KindNumber && !strings.ContainsAny(lit.Text, ".eE"):
@@ -793,8 +799,61 @@ func whenIntError(text string) (msg, hint string) {
 	return "", ""
 }
 
-// unquoteSQLString converts a lexed SQL string literal ('a”b') to its
-// Go value (a'b). E-strings are rejected earlier by RawValue shape.
+// whenStringError validates a lexed `@when` string literal, returning a
+// diagnostic message and compliant-rewrite hint (both empty when the
+// literal is fine). @when is documented as a plain string / integer /
+// boolean literal, and only a plain single-quoted SQL string is
+// decodable by unquoteSQLString below. Every other form the dialect
+// lexers classify as KindString — Postgres E-strings (E'…') and
+// dollar-quoted strings ($$…$$, $tag$…$tag$), MySQL double-quoted
+// strings ("…") and backslash escapes ('a\'b'), and SQLite blob
+// literals (x'…') — keeps its delimiters/escapes in the stored guard
+// value. Codegen emits that value verbatim into a Go comparison
+// (goLiteral), so the guarded fragment would compare against a value
+// the runtime never produces and become permanently dead, with no
+// other signal. Refuse it here rather than widen the decoder: the
+// author must spell the intended value as a plain literal.
+//
+// "Plain" = leading char `'`, trailing char `'`, and a doubled
+// single-quote the only escape inside (no backslash escapes, which are
+// dialect-dependent).
+func whenStringError(text string) (msg, hint string) {
+	if isPlainSQLString(text) {
+		return "", ""
+	}
+	return fmt.Sprintf("@when string literal %s must be a plain single-quoted SQL string: E-strings, dollar-quoted strings, double-quoted strings, blob literals, and backslash escapes keep their delimiters in the guard value, so the generated comparison never matches the runtime value and the guarded fragment is silently dead", text),
+		"write a plain single-quoted literal — e.g. 'abc' — and double an embedded quote to escape it ('it''s')"
+}
+
+// isPlainSQLString reports whether text is a plain single-quoted SQL
+// string literal: it opens and closes with `'` and the only special
+// sequence inside is a doubled single-quote. Backslash escapes are rejected
+// because their meaning is dialect-dependent (MySQL treats `\` as an
+// escape, standard SQL does not) and unquoteSQLString does not honor
+// them.
+func isPlainSQLString(text string) bool {
+	if len(text) < 2 || text[0] != '\'' || text[len(text)-1] != '\'' {
+		return false
+	}
+	inner := text[1 : len(text)-1]
+	for i := 0; i < len(inner); i++ {
+		switch inner[i] {
+		case '\\':
+			return false
+		case '\'':
+			if i+1 >= len(inner) || inner[i+1] != '\'' {
+				return false
+			}
+			i++ // consume the second quote of a doubled ''
+		}
+	}
+	return true
+}
+
+// unquoteSQLString converts a lexed plain single-quoted SQL string
+// literal ('a”b') to its Go value (a'b). The caller (parseWhen) has
+// already rejected every non-plain KindString form via whenStringError,
+// so this only ever sees a leading `'` and doubled-single-quote escaping.
 func unquoteSQLString(text string) string {
 	inner := text
 	if len(inner) >= 2 && inner[0] == '\'' {
