@@ -459,6 +459,15 @@ type. An integer literal must be a plain decimal digit run that fits a
 verbatim into the generated Go comparison, where a leading zero would
 read as an octal constant (`010` == 8) and silently change which value
 the guard matches, so it is rejected (SQLETCH014).
+A string literal must be a **plain** single-quoted SQL string — leading
+`'`, with `''` the only in-string escape. Every other lexed-as-string
+form (Postgres `E'…'` and `$$…$$`/`$tag$…$tag$`, MySQL `"…"` and
+backslash escapes, SQLite `x'…'` blobs) keeps its delimiters or escapes
+in the decoded value, which is emitted verbatim into the generated Go
+comparison — so the guard could never match the runtime value and the
+fragment would be silently dead; such literals are rejected (SQLETCH015)
+rather than decoded, and the author must spell the value as a plain
+`'…'` literal.
 The parameter's Go type comes from the literal (it need not bind in
 SQL — a sanctioned pure-control form, cf. R9's closing bullet; if it
 *does* bind, the literal-derived and SQL-inferred types must agree,
