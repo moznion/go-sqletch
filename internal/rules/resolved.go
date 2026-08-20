@@ -47,7 +47,13 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 			// §6). A correlated reference whose qualifier is absent from
 			// every enclosing subquery FROM is not shadowed and is
 			// checked as before, preserving the correlated-ref guarantee.
-			if slices.Contains(cr.ScopeAliases, qualifier) {
+			//
+			// Only a two-field ref (alias.column) can be alias-shadowed: a
+			// three-or-more-field ref is schema-qualified
+			// (schema.table.column) and a bare FROM alias — which carries
+			// no schema — can never shadow it, so such a reference is
+			// always resolved and checked against the top-level relation.
+			if len(cr.Fields) == 2 && slices.Contains(cr.ScopeAliases, qualifier) {
 				continue
 			}
 			rel = res.byName[qualifier]

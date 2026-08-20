@@ -505,7 +505,7 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 		return nil
 	}
 	var out []dialect.ColRef
-	collectColRefs(n.ProtoReflect(), nil, false, &out)
+	collectColRefs(n.ProtoReflect(), nil, nil, false, &out)
 	return out
 }
 
@@ -517,7 +517,15 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 // select body (pointer-identity match), never into a sibling field such
 // as a SubLink test expression, whose references belong to the enclosing
 // scope and must stay checkable.
-func collectColRefs(m protoreflect.Message, scopes []string, inSub bool, out *[]dialect.ColRef) {
+//
+// enclosing carries the scope that surrounds the CURRENT select before
+// its own FROM names were added, i.e. what a non-lateral WITH-clause body
+// may legally see. A CTE body cannot reference the FROM items of the
+// select that uses it, so descending into a select's with_clause resets
+// the scope to enclosing — otherwise the using-select's FROM names (e.g.
+// the CTE name itself) would leak in and wrongly shadow a same-named
+// guarded top-level relation for a correlated CTE-body reference.
+func collectColRefs(m protoreflect.Message, scopes, enclosing []string, inSub bool, out *[]dialect.ColRef) {
 	if v, ok := m.Interface().(*pgquery.ColumnRef); ok {
 		cr := dialect.ColRef{Loc: int(v.Location), InSubquery: inSub}
 		if len(scopes) > 0 {
@@ -535,6 +543,7 @@ func collectColRefs(m protoreflect.Message, scopes []string, inSub bool, out *[]
 		return
 	}
 	var innerSelect *pgquery.Node
+	var withClause *pgquery.WithClause
 	isSubBoundary := false
 	switch v := m.Interface().(type) {
 	case *pgquery.SubLink:
@@ -543,24 +552,43 @@ func collectColRefs(m protoreflect.Message, scopes []string, inSub bool, out *[]
 		innerSelect, isSubBoundary = v.Subquery, true
 	case *pgquery.CommonTableExpr:
 		innerSelect, isSubBoundary = v.Ctequery, true
+	case *pgquery.SelectStmt:
+		withClause = v.WithClause
 	}
 	childInSub := inSub || isSubBoundary
 	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
-		childScopes := scopes
-		if innerSelect != nil && fd.Kind() == protoreflect.MessageKind &&
-			!fd.IsList() && !fd.IsMap() {
-			if n, ok := val.Message().Interface().(*pgquery.Node); ok && n == innerSelect {
-				childScopes = appendFromNames(scopes, innerSelect)
+		if fd.Kind() != protoreflect.MessageKind || fd.IsMap() {
+			return true
+		}
+		childScopes, childEnclosing := scopes, enclosing
+		if !fd.IsList() {
+			msg := val.Message().Interface()
+			if innerSelect != nil {
+				if n, ok := msg.(*pgquery.Node); ok && n == innerSelect {
+					// Descending into the subquery's own body: its FROM
+					// names shadow same-named enclosing relations, and the
+					// scope that enclosed this boundary becomes the new
+					// with-clause visibility floor.
+					childScopes = appendFromNames(scopes, innerSelect)
+					childEnclosing = scopes
+				}
+			}
+			if withClause != nil {
+				if w, ok := msg.(*pgquery.WithClause); ok && w == withClause {
+					// CTE bodies see only the enclosing scope, never this
+					// select's own FROM names.
+					childScopes = enclosing
+					childEnclosing = enclosing
+				}
 			}
 		}
-		switch {
-		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+		if fd.IsList() {
 			l := val.List()
 			for i := 0; i < l.Len(); i++ {
-				collectColRefs(l.Get(i).Message(), childScopes, childInSub, out)
+				collectColRefs(l.Get(i).Message(), childScopes, childEnclosing, childInSub, out)
 			}
-		case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
-			collectColRefs(val.Message(), childScopes, childInSub, out)
+		} else {
+			collectColRefs(val.Message(), childScopes, childEnclosing, childInSub, out)
 		}
 		return true
 	})
@@ -597,6 +625,16 @@ func fromNames(node *pgquery.Node, out *[]string) {
 		}
 	case node.GetJoinExpr() != nil:
 		je := node.GetJoinExpr()
+		// A join alias renames the whole join and HIDES the inner
+		// relation names (PostgreSQL §7.2.1.2): `(a JOIN b) AS j` exposes
+		// only `j`, so a reference qualified by `a` inside a subquery over
+		// this join is correlated outward and must stay checkable. Emitting
+		// the inner names here would over-collect and wrongly suppress the
+		// R3 guard for a same-named top-level relation.
+		if je.Alias != nil && je.Alias.Aliasname != "" {
+			*out = append(*out, je.Alias.Aliasname)
+			return
+		}
 		fromNames(je.Larg, out)
 		fromNames(je.Rarg, out)
 	case node.GetRangeSubselect() != nil:
