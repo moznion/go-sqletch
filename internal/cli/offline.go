@@ -431,7 +431,7 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 		return nil, nil, fmt.Errorf("internal: maximal rendering re-parse: %w", err)
 	}
 	var diags []diagnostics.Diagnostic
-	diags = append(diags, rules.CheckResolved(q, rs[0], tree, cat)...)
+	diags = append(diags, rules.CheckResolved(drv.profile, q, rs[0], tree, cat)...)
 	diags = append(diags, policy.Enforce(drv.profile, drv.frontend, pols, q, tree, rs[0])...)
 	paramTypes := map[string]dialect.TypeRef{}
 	if !drv.annotationsRequired {

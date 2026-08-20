@@ -43,7 +43,7 @@ func checkResolved(t *testing.T, src string) []diagnostics.Diagnostic {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CheckResolved(q, rs[0], tree, fixtureCatalog())
+	return CheckResolved(postgres.Profile{}, q, rs[0], tree, fixtureCatalog())
 }
 
 func TestCheckResolved_Clean(t *testing.T) {

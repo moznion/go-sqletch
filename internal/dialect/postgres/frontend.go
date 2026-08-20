@@ -71,14 +71,27 @@ func (f Frontend) ProbeJoinItem(item string) error {
 		return toParseError(err)
 	}
 	sel := singleSelect(res)
+	bad := &dialect.ParseError{Pos: 0, Msg: "fragment is not a single join item"}
 	if sel == nil || len(sel.FromClause) != 1 ||
 		sel.WhereClause != nil || len(sel.GroupClause) != 0 ||
 		len(sel.SortClause) != 0 || sel.LimitCount != nil ||
 		len(sel.LockingClause) != 0 {
-		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a single join item"}
+		return bad
 	}
 	if sel.FromClause[0].GetJoinExpr() == nil {
 		return &dialect.ParseError{Pos: 0, Msg: "fragment does not join onto the preceding FROM entry"}
+	}
+	// The fragment must introduce exactly ONE joined relation onto the
+	// probe table: the flattened FROM tree therefore holds exactly two
+	// relations (probe + join). A single JoinExpr can nest a whole CHAIN
+	// of joins (`JOIN a ON … JOIN (SELECT …) AS d ON …`); such a chain
+	// smuggles extra — possibly derived (Loc==-1), guard-detached —
+	// relations past R2/R3, so reject anything but a two-relation join
+	// (mirrors the mysql/sqlite probes).
+	var rels []dialect.RelRef
+	collectFromItem(sel.FromClause[0], dialect.JoinBase, false, &rels)
+	if len(rels) != 2 {
+		return bad
 	}
 	return nil
 }

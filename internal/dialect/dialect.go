@@ -3,7 +3,10 @@
 // LexerProfile half; Frontend/Oracle land in P2/P4.
 package dialect
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type TokenKind int
 
@@ -88,6 +91,30 @@ func InEmptyOf(profile LexerProfile) string {
 	}
 	// The MySQL form, kept as the default for compatibility.
 	return "IN (SELECT NULL FROM DUAL WHERE FALSE)"
+}
+
+// CaseInsensitiveIdents is implemented by lexer profiles whose dialect
+// resolves identifier references case-insensitively: an alias written
+// `A` is matched by a reference `a`, and a column `Kind` by `kind`
+// (MySQL, SQLite). PostgreSQL case-folds unquoted identifiers at parse
+// time, so its facade already yields folded names — it leaves this
+// unimplemented and folding is then the identity.
+type CaseInsensitiveIdents interface {
+	CaseInsensitiveIdents() bool
+}
+
+// FoldIdent returns the profile's identifier-folding function: on a
+// case-insensitive dialect it maps an identifier to its case-folded
+// form, elsewhere it is the identity. The resolution-based rules (R3
+// guard scope, R2 qualified star) run every qualifier, alias, scope
+// name, and catalog column name through it so a mixed-case reference
+// cannot slip past a guard check on a dialect that would resolve it at
+// runtime (SQLETCH115/117). Fold both sides of every comparison.
+func FoldIdent(profile LexerProfile) func(string) string {
+	if p, ok := profile.(CaseInsensitiveIdents); ok && p.CaseInsensitiveIdents() {
+		return strings.ToLower
+	}
+	return func(s string) string { return s }
 }
 
 // LexError is returned for unterminated strings/comments; the scanner
