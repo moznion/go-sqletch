@@ -153,7 +153,80 @@ func (d *describer) scopeFrom(refs *ast.TableRefsClause) ([]nativeRel, error) {
 		}
 		scope = append(scope, nativeRel{name: name, alias: isAlias, table: tb})
 	}
+	// Effective qualifiers (alias-else-table) must be unique, or a
+	// qualified reference has no single referent — MySQL rejects the
+	// statement outright (ER_NONUNIQ_TABLE) before it looks at any
+	// column. The comparison is case-insensitive, matching MySQL's
+	// alias/identifier handling. Skipping this let `FROM t, t` and
+	// `FROM t AS a, u AS a` sail through with err=nil.
+	seen := make(map[string]bool, len(scope))
+	for i := range scope {
+		key := strings.ToLower(scope[i].name)
+		if seen[key] {
+			return nil, &dialect.OracleError{Pos: -1,
+				Msg: fmt.Sprintf("not unique table/alias: %q", scope[i].name)}
+		}
+		seen[key] = true
+	}
 	return scope, nil
+}
+
+// walkJoinConds resolves every JOIN ON condition in a FROM tree and
+// refuses NATURAL/USING joins. scopeFrom flattens the FROM tree into a
+// flat relation scope but drops the join conditions entirely, so a
+// query joining ON a nonexistent column (or with a bad USING column)
+// used to describe with err=nil and then fail at execution on a real
+// server — the same fail-closed hole as an unread WITH.
+//
+// NATURAL and USING joins are refused (SQLETCH214): MySQL COALESCEs
+// their common columns into a single output column (appearing once,
+// from the first table), a projected shape the native star expander
+// cannot reproduce byte-identically. Refuse rather than guess. This
+// also makes USING-column resolution moot for those joins.
+func (d *describer) walkJoinConds(node ast.ResultSetNode) error {
+	switch v := node.(type) {
+	case *ast.Join:
+		if v.NaturalJoin || len(v.Using) > 0 {
+			return &dialect.NativeUnsupportedError{Pos: -1,
+				Construct: "a NATURAL or USING join",
+				Hint:      "spell the condition as ON a.col = b.col, or switch to database.oracle: \"server\""}
+		}
+		if err := d.walkJoinConds(v.Left); err != nil {
+			return err
+		}
+		if v.Right != nil {
+			if err := d.walkJoinConds(v.Right); err != nil {
+				return err
+			}
+		}
+		if v.On != nil {
+			if err := d.resolveExpr(v.On.Expr, false); err != nil {
+				return err
+			}
+		}
+	case *ast.TableSource:
+		// A parenthesized join nests under a TableSource.
+		if j, ok := v.Source.(*ast.Join); ok {
+			return d.walkJoinConds(j)
+		}
+	}
+	return nil
+}
+
+// scopeTarget reports whether name matches a relation in scope by its
+// effective qualifier (alias-else-table): aliases match
+// case-insensitively, bare table names as spelled — mirroring resolve.
+func (d *describer) scopeTarget(name string) bool {
+	for i := range d.scope {
+		r := &d.scope[i]
+		if r.alias && strings.EqualFold(r.name, name) {
+			return true
+		}
+		if !r.alias && r.name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // resolve finds [qualifier.]name in scope. MySQL matches column names
@@ -293,6 +366,15 @@ func (d *describer) describeSelect(s *ast.SelectStmt) ([]dialect.ColumnDesc, err
 	}
 	d.scope = scope
 	d.aliases = map[string]bool{}
+
+	// JOIN ON conditions must resolve (and NATURAL/USING joins are
+	// refused) before anything projects — a bad ON reference fails the
+	// server's prepare, and a USING join changes the * shape.
+	if s.From != nil {
+		if err := d.walkJoinConds(s.From.TableRefs); err != nil {
+			return nil, err
+		}
+	}
 
 	var cols []dialect.ColumnDesc
 	if s.Fields == nil {
@@ -486,6 +568,11 @@ func (d *describer) describeUpdate(s *ast.UpdateStmt) error {
 	}
 	d.scope = scope
 	d.aliases = map[string]bool{}
+	if s.TableRefs != nil {
+		if err := d.walkJoinConds(s.TableRefs.TableRefs); err != nil {
+			return err
+		}
+	}
 	for _, a := range s.List {
 		if _, _, err := d.resolve(a.Column.Table.O, a.Column.Name.O, a.Column.OriginTextPosition()); err != nil {
 			return err
@@ -517,6 +604,28 @@ func (d *describer) describeDelete(s *ast.DeleteStmt) error {
 	}
 	d.scope = scope
 	d.aliases = map[string]bool{}
+	if s.TableRefs != nil {
+		if err := d.walkJoinConds(s.TableRefs.TableRefs); err != nil {
+			return err
+		}
+	}
+	// A multi-table DELETE names its delete targets in s.Tables; each
+	// must reference a table or alias in the FROM scope. Ignoring them
+	// let `DELETE ghost FROM t1 JOIN t2 ...` describe with err=nil while
+	// the server rejects the unknown target (ER_UNKNOWN_TABLE).
+	if s.Tables != nil {
+		for _, tn := range s.Tables.Tables {
+			if tn.Schema.O != "" {
+				return &dialect.NativeUnsupportedError{Pos: -1,
+					Construct: "a schema-qualified DELETE target",
+					Hint:      "name the target by table or alias only"}
+			}
+			if !d.scopeTarget(tn.Name.O) {
+				return &dialect.OracleError{Pos: -1,
+					Msg: fmt.Sprintf("unknown table %q in MULTI DELETE", tn.Name.O)}
+			}
+		}
+	}
 	if err := d.resolveExpr(s.Where, false); err != nil {
 		return err
 	}
