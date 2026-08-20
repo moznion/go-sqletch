@@ -83,13 +83,27 @@ view:       [ spaces, newlines kept  ][ template text ]
 - One view per marked literal; each is scanned separately and the
   resulting `QueryFile`s are merged.
 
-Consequences: `internal/template` needs no change at all, no span
-shifting exists to get wrong, and excerpts point at the real `.go`
-line with a correct caret. The whitespace prefix is inert to the
-lexer, and no `-- name:` header can appear in it.
+Consequences: no span shifting exists to get wrong, and excerpts point
+at the real `.go` line with a correct caret. The whitespace prefix is
+inert to the lexer, and no `-- name:` header can appear in it.
 
-Cost is O(literals × file size) in scratch buffers, which is
-irrelevant at source-file scale.
+Cost is kept linear in the file, not O(literals × file size):
+
+- **Memory**: one backing buffer is blanked once and reused across
+  every view (re-blanked after each), so scratch memory is O(file
+  size), not a full prefix copy per literal.
+- **CPU**: the view is truncated at the literal's end *and* handed to
+  the scanner with the literal's start offset via
+  `template.Scanner.ScanFileFrom(path, view, start)`, so the scanner
+  begins at the literal instead of re-lexing — and re-copying, as one
+  giant whitespace token's `Text` — the blank prefix once per const.
+  Because the skipped prefix is scan-inert trivia, the result is
+  byte-identical to scanning the whole `[0,end)` view from 0
+  (`ScanFileFrom` with `start == 0` *is* `ScanFile`); the equality is
+  pinned by `TestScanFileFromEqualsScanFile`. Without it a file of
+  thousands of marked consts was O(consts × file size) quadratic CPU,
+  DoS-able by a malicious repo and, through `cli.scanSource`, a hang of
+  the LSP on file-open.
 
 ## 4. Wiring
 
