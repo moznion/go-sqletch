@@ -296,6 +296,123 @@ func TestNativeDescribeQuestionCountsIgnoreStringsAndComments(t *testing.T) {
 	}
 }
 
+func TestNativeDescribeJoinOnConditionsResolve(t *testing.T) {
+	// H1: scopeFrom flattens the FROM tree but drops the join
+	// conditions, so a JOIN ON referencing a nonexistent column used to
+	// describe with err=nil while the server rejects it
+	// (ER_BAD_FIELD_ERROR). The ON expression must resolve against the
+	// scope. This covers SELECT, UPDATE, and (multi-table) DELETE FROM
+	// trees.
+	for _, tt := range []struct{ name, sql, want string }{
+		{"select on lhs ghost",
+			"SELECT o.id FROM orgs o JOIN users u ON o.ghost = u.org_id", "unknown column"},
+		{"select on rhs ghost",
+			"SELECT o.id FROM orgs o JOIN users u ON o.id = u.ghost", "unknown column"},
+		{"select on unknown qualifier",
+			"SELECT o.id FROM orgs o JOIN users u ON x.id = u.org_id", "unknown table"},
+		{"update multi-table on ghost",
+			"UPDATE orgs o JOIN users u ON o.ghost = u.org_id SET o.name = ?", "unknown column"},
+		{"delete multi-table on ghost",
+			"DELETE o FROM orgs o JOIN users u ON o.id = u.ghost", "unknown column"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var oe *dialect.OracleError
+			if !errors.As(err, &oe) {
+				t.Fatalf("want *dialect.OracleError, got %T: %v", err, err)
+			}
+			if !strings.Contains(oe.Msg, tt.want) {
+				t.Errorf("message %q should mention %q", oe.Msg, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeDescribeJoinOnConditionsValid(t *testing.T) {
+	// The valid counterpart must still pass unchanged (byte-identity):
+	// a well-formed ON condition resolves.
+	for _, sql := range []string{
+		"SELECT o.id FROM orgs o JOIN users u ON o.id = u.org_id",
+		"UPDATE orgs o JOIN users u ON o.id = u.org_id SET o.name = ?",
+		"DELETE o FROM orgs o JOIN users u ON o.id = u.org_id",
+	} {
+		if _, err := describe(t, sql); err != nil {
+			t.Errorf("valid ON condition must pass: %s: %v", sql, err)
+		}
+	}
+}
+
+func TestNativeDescribeRefusesNaturalAndUsingJoins(t *testing.T) {
+	// H2: MySQL COALESCEs the common columns of a NATURAL/USING join
+	// into a single output column (appearing once, from the first
+	// table). The native star expander concatenates all columns of all
+	// tables, so `SELECT * FROM t1 JOIN t2 USING (id)` produced a wrong
+	// struct shape (a duplicated `id`) and broke byte-identity with the
+	// server backend. Refuse these joins (SQLETCH214) rather than guess.
+	for _, tt := range []struct{ name, sql string }{
+		{"star using", "SELECT * FROM orgs o JOIN users u USING (id)"},
+		{"star natural", "SELECT * FROM orgs o NATURAL JOIN users u"},
+		{"projected using", "SELECT o.id FROM orgs o JOIN users u USING (id)"},
+		{"projected natural", "SELECT o.name FROM orgs o NATURAL JOIN users u"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError, got %T: %v", err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "USING") {
+				t.Errorf("refusal %q/%q should mention NATURAL/USING", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
+func TestNativeDescribeRejectsDuplicateEffectiveNames(t *testing.T) {
+	// H3: two FROM items sharing an effective qualifier (alias-else-
+	// table) leave a qualified reference without a single referent.
+	// MySQL rejects the statement outright (ER_NONUNIQ_TABLE); scopeFrom
+	// used to accept it. Comparison is case-insensitive.
+	for _, tt := range []struct{ name, sql string }{
+		{"same table twice", "SELECT id FROM orgs, orgs"},
+		{"duplicate alias", "SELECT a.name FROM orgs AS a, users AS a"},
+		{"duplicate alias case-insensitive", "SELECT id FROM orgs AS a, users AS A"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var oe *dialect.OracleError
+			if !errors.As(err, &oe) {
+				t.Fatalf("want *dialect.OracleError, got %T: %v", err, err)
+			}
+			if !strings.Contains(oe.Msg, "not unique") {
+				t.Errorf("message %q should mention %q", oe.Msg, "not unique")
+			}
+		})
+	}
+}
+
+func TestNativeDescribeMultiTableDeleteTargets(t *testing.T) {
+	// H4: a multi-table DELETE names its delete targets in s.Tables,
+	// which describeDelete used to ignore — `DELETE ghost FROM ...`
+	// described with err=nil while the server rejects the unknown
+	// target. Each target must reference a FROM table or alias.
+	t.Run("unknown target", func(t *testing.T) {
+		_, err := describe(t, "DELETE ghost FROM orgs o JOIN users u ON o.id = u.org_id")
+		var oe *dialect.OracleError
+		if !errors.As(err, &oe) {
+			t.Fatalf("want *dialect.OracleError, got %T: %v", err, err)
+		}
+		if !strings.Contains(oe.Msg, "MULTI DELETE") {
+			t.Errorf("message %q should mention MULTI DELETE", oe.Msg)
+		}
+	})
+	t.Run("valid alias target", func(t *testing.T) {
+		if _, err := describe(t, "DELETE o FROM orgs o JOIN users u ON o.id = u.org_id"); err != nil {
+			t.Fatalf("valid delete target must pass: %v", err)
+		}
+	})
+}
+
 func TestNativeServerVersionIsThePin(t *testing.T) {
 	v, err := nativeOracle(t).ServerVersion(context.Background())
 	if err != nil || v != "8.4" {
