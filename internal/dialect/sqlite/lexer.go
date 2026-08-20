@@ -10,13 +10,18 @@ import (
 type Profile struct{}
 
 var (
-	_ dialect.LexerProfile = Profile{}
-	_ dialect.Placeholders = Profile{}
-	_ dialect.InEmpty      = Profile{}
+	_ dialect.LexerProfile          = Profile{}
+	_ dialect.Placeholders          = Profile{}
+	_ dialect.InEmpty               = Profile{}
+	_ dialect.CaseInsensitiveIdents = Profile{}
 )
 
 // PlaceholderStyle declares SQLite's '?' per-occurrence binding.
 func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.PlaceholderQuestion }
+
+// CaseInsensitiveIdents reports that SQLite resolves aliases and column
+// references case-insensitively, so R3/R2 name matching must fold.
+func (Profile) CaseInsensitiveIdents() bool { return true }
 
 // InEmptySQL is the arity-0 @in emission (FALSE even for NULL
 // operands; SQLite allows a FROM-less SELECT with WHERE).

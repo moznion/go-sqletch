@@ -155,7 +155,6 @@ func TestFrontend_ProbeJoinItem(t *testing.T) {
 	valid := []string{
 		"JOIN orgs AS o ON o.id = sqletch_probe_t.id",
 		"LEFT JOIN x ON true",
-		"JOIN a ON true JOIN b ON true", // left-deep chain: accepted (design 02 §4)
 	}
 	for _, item := range valid {
 		if err := fe.ProbeJoinItem(item); err != nil {
@@ -167,6 +166,12 @@ func TestFrontend_ProbeJoinItem(t *testing.T) {
 		", extra_table",                 // comma-joined second FROM item
 		"orgs",                          // not a join
 		"JOIN orgs ON true; SELECT 1",   // second statement
+		// A left-deep CHAIN introduces more than one joined relation and
+		// must be rejected: it could smuggle an extra (possibly derived,
+		// guard-detached) relation past R2/R3 (F1 soundness fix; mirrors
+		// the mysql/sqlite probes, which require exactly two relations).
+		"JOIN a ON true JOIN b ON true",
+		"JOIN a ON true JOIN (SELECT 1 AS cnt) AS d ON true",
 	}
 	for _, item := range invalid {
 		if err := fe.ProbeJoinItem(item); err == nil {

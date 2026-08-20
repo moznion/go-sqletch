@@ -12,13 +12,18 @@ import (
 type Profile struct{}
 
 var (
-	_ dialect.LexerProfile = Profile{}
-	_ dialect.Placeholders = Profile{}
-	_ dialect.InEmpty      = Profile{}
+	_ dialect.LexerProfile          = Profile{}
+	_ dialect.Placeholders          = Profile{}
+	_ dialect.InEmpty               = Profile{}
+	_ dialect.CaseInsensitiveIdents = Profile{}
 )
 
 // PlaceholderStyle declares MySQL's '?' per-occurrence binding.
 func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.PlaceholderQuestion }
+
+// CaseInsensitiveIdents reports that MySQL resolves aliases and column
+// references case-insensitively, so R3/R2 name matching must fold.
+func (Profile) CaseInsensitiveIdents() bool { return true }
 
 // InEmptySQL is the arity-0 @in emission (FALSE even for NULL
 // operands; MySQL needs FROM DUAL to attach a WHERE).

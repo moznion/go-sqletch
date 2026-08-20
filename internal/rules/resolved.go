@@ -1,7 +1,6 @@
 package rules
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
@@ -25,11 +24,11 @@ import (
 // inside subquery scopes remain skipped — resolving a bare column
 // against nested scopes is not modeled — with the per-shape EXPLAIN
 // property test as the mechanical backstop.
-func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
+func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR ast.Rendering,
 	maxTree dialect.Tree, cat *cache.Catalog) []diagnostics.Diagnostic {
 
 	var diags []diagnostics.Diagnostic
-	res := newResolver(q, maxR, maxTree, cat)
+	res := newResolver(profile, q, maxR, maxTree, cat)
 
 	// R3: every column reference resolving into an optional join must
 	// be guarded at least as strongly as the join.
@@ -39,7 +38,7 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 		}
 		var rel *relInfo
 		if len(cr.Fields) >= 2 {
-			qualifier := cr.Fields[len(cr.Fields)-2]
+			qualifier := res.fold(cr.Fields[len(cr.Fields)-2])
 			// Innermost-first resolution: a qualifier introduced by a
 			// nearer subquery scope shadows a same-named top-level
 			// relation, so this reference does not touch the top-level
@@ -53,7 +52,7 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 			// (schema.table.column) and a bare FROM alias — which carries
 			// no schema — can never shadow it, so such a reference is
 			// always resolved and checked against the top-level relation.
-			if len(cr.Fields) == 2 && slices.Contains(cr.ScopeAliases, qualifier) {
+			if len(cr.Fields) == 2 && res.scopeContains(cr.ScopeAliases, qualifier) {
 				continue
 			}
 			rel = res.byName[qualifier]
@@ -62,7 +61,14 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 				continue // conservative skip; see doc comment
 			}
 			name := cr.Fields[0]
-			if res.outputAliases[name] {
+			// Output aliases are visible ONLY in ORDER BY (a bare
+			// output-column name binds to the alias, universally across
+			// dialects); in WHERE/HAVING/ON the reference binds to a real
+			// column, so the guard must still be resolved even when the
+			// name equals an output alias. Skipping on name equality alone
+			// masked R3 for a guarded-column reference sharing an alias's
+			// spelling (F2).
+			if res.outputAliases[res.fold(name)] && res.inOrderBy[cr.Loc] {
 				continue
 			}
 			cands := res.columnCandidates(name)
@@ -108,7 +114,7 @@ func CheckResolved(q *template.QueryTemplate, maxR ast.Rendering,
 			}
 			continue
 		}
-		if rel := res.byName[ti.Qualifier]; rel != nil && len(rel.guards) > 0 {
+		if rel := res.byName[res.fold(ti.Qualifier)]; rel != nil && len(rel.guards) > 0 {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeStarExpansion,
 				res.spanAt(ti.Loc, len(ti.Qualifier)),
 				"%s.* projects columns of an optional join; optional joins may not contribute result columns (R2)", ti.Qualifier))
@@ -172,17 +178,33 @@ func (r *relInfo) fragSpan(q *template.QueryTemplate) diagnostics.Span {
 }
 
 type resolver struct {
-	q             *template.QueryTemplate
-	maxR          ast.Rendering
-	rels          []*relInfo
-	byName        map[string]*relInfo
+	q    *template.QueryTemplate
+	maxR ast.Rendering
+	rels []*relInfo
+	// byName is keyed by FOLDED relation name (alias else table) so a
+	// mixed-case qualifier resolves on case-insensitive dialects (F3).
+	byName map[string]*relInfo
+	// outputAliases is keyed by FOLDED alias name for the same reason.
 	outputAliases map[string]bool
+	// inOrderBy holds the parsed-SQL byte offset of every statement-level
+	// ORDER BY item, the only clause where a bare output-alias name binds
+	// to the alias rather than a table column (F2).
+	inOrderBy map[int]bool
+	// fold folds an identifier for dialect-correct name matching:
+	// case-folding on MySQL/SQLite, identity on PostgreSQL (F3).
+	fold func(string) string
 }
 
-func newResolver(q *template.QueryTemplate, maxR ast.Rendering,
+func newResolver(profile dialect.LexerProfile, q *template.QueryTemplate, maxR ast.Rendering,
 	maxTree dialect.Tree, cat *cache.Catalog) *resolver {
 
-	res := &resolver{q: q, maxR: maxR, byName: map[string]*relInfo{}, outputAliases: map[string]bool{}}
+	res := &resolver{
+		q: q, maxR: maxR,
+		byName:        map[string]*relInfo{},
+		outputAliases: map[string]bool{},
+		inOrderBy:     map[int]bool{},
+		fold:          dialect.FoldIdent(profile),
+	}
 	for _, rr := range maxTree.Relations() {
 		ri := &relInfo{RelRef: rr}
 		if frag := res.fragAt(rr.Loc); frag != nil {
@@ -194,15 +216,31 @@ func newResolver(q *template.QueryTemplate, maxR ast.Rendering,
 		}
 		res.rels = append(res.rels, ri)
 		if n := ri.name(); n != "" {
-			res.byName[n] = ri
+			res.byName[res.fold(n)] = ri
 		}
 	}
 	for _, ti := range maxTree.TargetItems() {
 		if ti.Name != "" {
-			res.outputAliases[ti.Name] = true
+			res.outputAliases[res.fold(ti.Name)] = true
+		}
+	}
+	for _, loc := range maxTree.OrderByLocs() {
+		if loc >= 0 {
+			res.inOrderBy[loc] = true
 		}
 	}
 	return res
+}
+
+// scopeContains reports whether qualifier (already folded) is among the
+// enclosing subquery scope names, comparing under the dialect's folding.
+func (res *resolver) scopeContains(scope []string, qualifier string) bool {
+	for _, s := range scope {
+		if res.fold(s) == qualifier {
+			return true
+		}
+	}
+	return false
 }
 
 // fragAt returns the @if-present fragment whose rendered range covers
@@ -232,10 +270,17 @@ func (res *resolver) guardsAt(loc int) []template.GuardAtom {
 }
 
 func (res *resolver) columnCandidates(col string) []*relInfo {
+	folded := res.fold(col)
 	var out []*relInfo
 	for _, rel := range res.rels {
-		if rel.table != nil && rel.table.Col(col) != nil {
-			out = append(out, rel)
+		if rel.table == nil {
+			continue
+		}
+		for i := range rel.table.Cols {
+			if res.fold(rel.table.Cols[i].Name) == folded {
+				out = append(out, rel)
+				break
+			}
 		}
 	}
 	return out

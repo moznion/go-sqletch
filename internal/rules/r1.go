@@ -319,7 +319,18 @@ func checkJoinMembership(maxTree dialect.Tree, v *template.IfPresent,
 
 	var diags []diagnostics.Diagnostic
 	found := 0
+	hasDerived := false
 	for _, rel := range maxTree.Relations() {
+		// A derived table / set-returning function carries no parse
+		// offset (Loc == -1): it can be attributed to NO fragment, so
+		// R2 (join type) and R3 (guard scope) never see it. A guarded
+		// fragment that introduces one thus ships an unverified relation;
+		// track its presence so a join fragment that resolves to no
+		// attributable relation is rejected rather than silently trusted.
+		if rel.Loc == -1 {
+			hasDerived = true
+			continue
+		}
 		if rel.Loc < fr.Start || rel.Loc >= fr.End {
 			continue
 		}
@@ -330,9 +341,26 @@ func checkJoinMembership(maxTree dialect.Tree, v *template.IfPresent,
 					"which would change result nullability per shape (R2)", rel.Join))
 		}
 	}
-	if found == 0 {
+	// A join fragment introduces exactly one relation (the ProbeJoinItem
+	// probe enforces this per-fragment); more than one attributable
+	// relation means several joins were smuggled into one fragment.
+	if found > 1 {
 		diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
-			"fragment does not introduce a relation in the FROM clause (R1)"))
+			"fragment introduces %d relations; an optional join must be exactly one join item (R1)", found))
+		return diags
+	}
+	if found == 0 {
+		if hasDerived {
+			// The join item is a derived table / function whose columns
+			// no rule can attribute to this guard — reject rather than
+			// letting a guard-detached relation reach codegen.
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+				"fragment introduces a derived table or function whose columns cannot be attributed to the guard; "+
+					"an optional join must be a named relation (R1)"))
+		} else {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNodeIncomplete, v.BodySpan,
+				"fragment does not introduce a relation in the FROM clause (R1)"))
+		}
 	}
 	return diags
 }
