@@ -32,7 +32,6 @@ import (
 func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *template.QueryTemplate,
 	tree dialect.Tree, maxR ast.Rendering) []diagnostics.Diagnostic {
 
-
 	var diags []diagnostics.Diagnostic
 
 	kind := tree.Kind()

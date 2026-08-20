@@ -305,16 +305,16 @@ func main() {
 	// rows and still appears), and alice's cross-tenant action is
 	// invisible — a WHERE-placed conjunct would have dropped bob, an
 	// unwoven query would have shown 'crossed'.
-	rows, err := q.UsersWithAudit(ctx, gen.UsersWithAuditParams{TenantID: 1})
+	rows, err := q.UsersWithAudit(ctx, tenant1, gen.UsersWithAuditParams{})
 	die(err)
 	expect(len(rows) == 2, "alice (login) + bob's null-extended row; cron is actorless")
 	sawBob, sawCrossed := false, false
 	for _, r := range rows {
 		if r.ID == 2 {
 			sawBob = true
-			expect(r.Action == nil, "bob's outer row is null-extended")
+			expect(r.Action.IsNone(), "bob's outer row is null-extended")
 		}
-		if r.Action != nil && *r.Action == "crossed" {
+		if r.Action.TakeOr("") == "crossed" {
 			sawCrossed = true
 		}
 	}
