@@ -1,6 +1,8 @@
 package gosrc
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +11,17 @@ import (
 
 // bt spells backquotes as '~' so fixtures can nest raw literals.
 func bt(s string) []byte { return []byte(strings.ReplaceAll(s, "~", "`")) }
+
+// collectViews drives the callback API and copies each view out (the
+// buffer handed to yield is reused, so a copy is mandatory) so a test
+// can hold every view at once.
+func collectViews(path string, src []byte) ([][]byte, []diagnostics.Diagnostic) {
+	var out [][]byte
+	ds := Views(path, src, func(v []byte) {
+		out = append(out, append([]byte(nil), v...))
+	})
+	return out, ds
+}
 
 func codes(ds []diagnostics.Diagnostic) []string {
 	out := make([]string, 0, len(ds))
@@ -51,7 +64,7 @@ func unrelated() string { return "SELECT 1" }
 // phase produces indexes the original source correctly.
 func TestViewsPreserveOffsetsAndLines(t *testing.T) {
 	src := bt(oneQuery)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", codes(diags))
 	}
@@ -107,7 +120,7 @@ const bSQL = ~
 SELECT 2
 ~
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", codes(diags))
 	}
@@ -141,7 +154,7 @@ SELECT 2
 ~
 )
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", codes(diags))
 	}
@@ -163,7 +176,7 @@ SELECT 1
 ~
 )
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", codes(diags))
 	}
@@ -182,7 +195,7 @@ const notATemplate = ~
 SELECT 1
 ~
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(views) != 0 || len(diags) != 0 {
 		t.Fatalf("got %d views, %v diags; want none", len(views), codes(diags))
 	}
@@ -277,7 +290,7 @@ func f( {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			views, diags := Views("repo/users.go", bt(tc.src))
+			views, diags := collectViews("repo/users.go", bt(tc.src))
 			if len(views) != 0 {
 				t.Errorf("got %d views, want 0", len(views))
 			}
@@ -308,7 +321,7 @@ const (
 	b
 )
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(views) != 0 {
 		t.Fatalf("got %d views, want 0", len(views))
 	}
@@ -329,7 +342,7 @@ var searchSQL = ~
 -- name: A :one
 ~
 `)
-	_, diags := Views("repo/users.go", src)
+	_, diags := collectViews("repo/users.go", src)
 	if len(diags) != 1 {
 		t.Fatalf("got %v, want exactly one diagnostic", codes(diags))
 	}
@@ -345,9 +358,9 @@ var searchSQL = ~
 // Determinism: identical input, identical output, every time.
 func TestViewsDeterministic(t *testing.T) {
 	src := bt(oneQuery)
-	first, _ := Views("repo/users.go", src)
+	first, _ := collectViews("repo/users.go", src)
 	for range 3 {
-		got, _ := Views("repo/users.go", src)
+		got, _ := collectViews("repo/users.go", src)
 		if len(got) != len(first) {
 			t.Fatalf("view count changed between runs")
 		}
@@ -362,7 +375,7 @@ func TestViewsDeterministic(t *testing.T) {
 // Views must not alias the caller's buffer.
 func TestViewsDoNotAliasSource(t *testing.T) {
 	src := bt(oneQuery)
-	views, _ := Views("repo/users.go", src)
+	views, _ := collectViews("repo/users.go", src)
 	orig := string(src)
 	for _, v := range views {
 		for i := range v {
@@ -380,7 +393,7 @@ func TestViewsEmptyLiteral(t *testing.T) {
 //sqletch:query
 const aSQL = ~~
 `)
-	views, diags := Views("repo/users.go", src)
+	views, diags := collectViews("repo/users.go", src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", codes(diags))
 	}
@@ -389,5 +402,52 @@ const aSQL = ~~
 	}
 	if strings.TrimSpace(string(views[0])) != "" {
 		t.Errorf("empty literal should yield an all-blank view")
+	}
+}
+
+// A .go file with many marked consts must not allocate a fresh
+// file-length buffer per const: that O(consts × file size) blowup was
+// DoS-able by a malicious repo and, through cli.scanSource, would take
+// the LSP down on open. Assert every view shares one backing buffer and
+// that splice/restore still yields each literal's exact content with no
+// leakage from its neighbours.
+func TestViewsShareOneReusedBuffer(t *testing.T) {
+	const k = 400
+	var b strings.Builder
+	b.WriteString("package repo\n\n")
+	for i := range k {
+		fmt.Fprintf(&b, "//sqletch:query\nconst q%d = ~\n-- name: Q%d :one\nSELECT %d\n~\n\n", i, i, i)
+	}
+	src := bt(b.String())
+
+	var count int
+	var firstPtr *byte
+	ds := Views("repo/users.go", src, func(v []byte) {
+		idx := count
+		count++
+		if len(v) == 0 {
+			return
+		}
+		if firstPtr == nil {
+			firstPtr = &v[0]
+		} else if &v[0] != firstPtr {
+			t.Fatalf("view %d uses a different backing buffer; the buffer is not reused", idx)
+		}
+		want := fmt.Sprintf("-- name: Q%d :one\nSELECT %d", idx, idx)
+		if !bytes.Contains(v, []byte(want)) {
+			t.Fatalf("view %d does not contain its own literal %q", idx, want)
+		}
+		if idx > 0 {
+			leaked := fmt.Sprintf("-- name: Q%d :one", idx-1)
+			if bytes.Contains(v, []byte(leaked)) {
+				t.Fatalf("view %d leaked the previous literal %q (region not re-blanked)", idx, leaked)
+			}
+		}
+	})
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", codes(ds))
+	}
+	if count != k {
+		t.Fatalf("got %d views, want %d", count, k)
 	}
 }

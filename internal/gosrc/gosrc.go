@@ -36,17 +36,27 @@ const marker = "//sqletch:query"
 // both forms.
 func IsGoSource(path string) bool { return filepath.Ext(path) == ".go" }
 
-// Views returns one offset-preserving view per marked template
-// literal, in source order, plus diagnostics for markers that do not
-// name an extractable template.
-func Views(path string, src []byte) ([][]byte, []diagnostics.Diagnostic) {
+// Views calls yield once per marked template literal, in source order,
+// with an offset-preserving view of the file, and returns diagnostics
+// for markers that do not name an extractable template.
+//
+// The []byte handed to yield is a single backing buffer reused across
+// every view — it is only valid until yield returns. This keeps total
+// memory O(len(src)) instead of O(literals × len(src)): a file with
+// thousands of marked consts would otherwise allocate a full
+// file-length prefix copy per const and exhaust memory (and, through
+// cli.scanSource, take the LSP down on open). Reuse is sound because
+// the scanner copies out everything it retains — skeleton and body
+// texts are string copies and spans are byte offsets, never slices
+// into the source — so nothing observes the buffer after yield returns.
+func Views(path string, src []byte, yield func(view []byte)) []diagnostics.Diagnostic {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
-		return nil, []diagnostics.Diagnostic{parseDiag(path, src, err)}
+		return []diagnostics.Diagnostic{parseDiag(path, src, err)}
 	}
 
-	e := extractor{path: path, src: src, fset: fset}
+	e := extractor{path: path, src: src, fset: fset, yield: yield}
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
@@ -57,14 +67,15 @@ func Views(path string, src []byte) ([][]byte, []diagnostics.Diagnostic) {
 			e.genDecl(d)
 		}
 	}
-	return e.views, e.diags
+	return e.diags
 }
 
 type extractor struct {
 	path  string
 	src   []byte
 	fset  *token.FileSet
-	views [][]byte
+	yield func(view []byte)
+	buf   []byte // reused view buffer; blank outside a live literal
 	diags []diagnostics.Diagnostic
 }
 
@@ -110,30 +121,48 @@ func (e *extractor) valueSpec(vs *ast.ValueSpec) {
 				WithHint("wrap the template in backquotes: const q = `\n-- name: … `"))
 			continue
 		}
-		e.views = append(e.views, e.view(lit))
+		e.view(lit)
 	}
 }
 
-// view copies the file with everything before the literal's contents
-// blanked (newlines kept, so line numbers survive) and the tail cut at
-// the literal's end, so a query's extent cannot run past it into the
-// surrounding Go code.
-func (e *extractor) view(lit *ast.BasicLit) []byte {
+// view hands yield a buffer holding the file with everything before the
+// literal's contents blanked (newlines kept, so line numbers survive)
+// and the tail cut at the literal's end, so a query's extent cannot run
+// past it into the surrounding Go code. The buffer is shared across
+// views and re-blanked after each yield (see Views).
+func (e *extractor) view(lit *ast.BasicLit) {
 	// Bounds come from the FileSet, not len(lit.Value): go/scanner
 	// strips carriage returns out of a raw literal's value, so the
 	// value can be shorter than the source it came from.
 	start := e.offset(lit.Pos()) + 1
 	end := max(e.offset(lit.End())-1, start)
-	buf := make([]byte, end)
-	for i := 0; i < start && i < len(buf); i++ {
-		if e.src[i] == '\n' {
-			buf[i] = '\n'
-			continue
-		}
-		buf[i] = ' '
+	if e.buf == nil {
+		// Blank the whole file once: every byte becomes a space except
+		// newlines, which survive to keep line numbers. Allocated lazily
+		// so a file with no marked consts costs nothing.
+		e.buf = make([]byte, len(e.src))
+		blank(e.buf, e.src, 0, len(e.src))
 	}
-	copy(buf[start:end], e.src[start:end])
-	return buf
+	// Splice the literal's real bytes in at their true offsets, hand the
+	// truncated view to yield, then restore just that region to blanks
+	// so the next view sees a clean prefix. Only O(literal) work per
+	// view, so the whole file costs O(len(src)) regardless of count.
+	copy(e.buf[start:end], e.src[start:end])
+	e.yield(e.buf[:end])
+	blank(e.buf, e.src, start, end)
+}
+
+// blank sets dst[i] to src[i] where it is a newline and to a space
+// otherwise, for i in [lo, hi), so line numbers survive but no Go
+// source outside a template literal reaches the scanner.
+func blank(dst, src []byte, lo, hi int) {
+	for i := lo; i < hi; i++ {
+		if src[i] == '\n' {
+			dst[i] = '\n'
+		} else {
+			dst[i] = ' '
+		}
+	}
 }
 
 func (e *extractor) rejectTarget(pos token.Pos, keyword, what string) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Span is a byte range into an original template file. It lives here
@@ -228,16 +229,13 @@ func (d Diagnostic) RenderExcerptWith(src []byte, lm *LineMap) string {
 	for lineEnd < len(src) && src[lineEnd] != '\n' {
 		lineEnd++
 	}
-	lineText := string(src[lineStart:lineEnd])
-
-	// Caret geometry in runes, keeping alignment for multibyte text.
-	prefixRunes := len([]rune(string(src[lineStart:d.Span.Start])))
 	spanEnd := d.Span.End
 	if spanEnd > lineEnd || spanEnd <= d.Span.Start {
 		spanEnd = d.Span.Start + 1
 	}
 	capEnd := min(lineEnd, spanEnd)
-	caretRunes := max(len([]rune(string(src[d.Span.Start:capEnd]))), 1)
+
+	lineText, prefixRunes, caretRunes := excerptLine(src, lineStart, lineEnd, d.Span.Start, capEnd)
 
 	gutter := fmt.Sprintf("%d", line)
 	pad := strings.Repeat(" ", len(gutter))
@@ -251,6 +249,80 @@ func (d Diagnostic) RenderExcerptWith(src []byte, lm *LineMap) string {
 		fmt.Fprintf(&b, "\nhelp: %s", d.Hint)
 	}
 	return b.String()
+}
+
+const (
+	// A line at or below this many bytes renders in full, exactly as
+	// before. Past it the excerpt is windowed around the span: a single
+	// pathological line (e.g. a 1 MB one-liner) otherwise made each
+	// diagnostic copy the whole line and rune-count the whole prefix —
+	// O(line) per diagnostic, gigabytes of output across many.
+	excerptFullMaxBytes = 320
+	// Context runes shown on each side of the span in a windowed excerpt.
+	excerptCtxRunes = 48
+	// Longest caret underline in a windowed excerpt; a span covering a
+	// huge line is shown truncated rather than underlined end to end.
+	excerptMaxCaretRunes = 160
+)
+
+// excerptLine returns the excerpt line text, the rune count before the
+// caret (left padding), and the caret length in runes. For lines up to
+// excerptFullMaxBytes it is byte-identical to the original full-line
+// rendering; longer lines are windowed around [start,capEnd] with
+// ellipses so both the work and the output stay bounded.
+func excerptLine(src []byte, lineStart, lineEnd, start, capEnd int) (text string, prefixRunes, caretRunes int) {
+	if lineEnd-lineStart <= excerptFullMaxBytes {
+		text = string(src[lineStart:lineEnd])
+		prefixRunes = utf8.RuneCount(src[lineStart:start])
+		caretRunes = max(utf8.RuneCount(src[start:capEnd]), 1)
+		return text, prefixRunes, caretRunes
+	}
+
+	// Windowed: never rune-count or copy beyond the window, so cost is
+	// O(excerptCtxRunes + excerptMaxCaretRunes) regardless of line length.
+	caretEnd := fwdRunes(src, start, capEnd, excerptMaxCaretRunes)
+	winStart := backRunes(src, start, lineStart, excerptCtxRunes)
+	winEnd := fwdRunes(src, caretEnd, lineEnd, excerptCtxRunes)
+
+	var b strings.Builder
+	if winStart > lineStart {
+		b.WriteRune('…')
+		prefixRunes++
+	}
+	b.Write(src[winStart:winEnd])
+	if winEnd < lineEnd {
+		b.WriteRune('…')
+	}
+	text = b.String()
+	prefixRunes += utf8.RuneCount(src[winStart:start])
+	caretRunes = max(utf8.RuneCount(src[start:caretEnd]), 1)
+	return text, prefixRunes, caretRunes
+}
+
+// backRunes returns the byte offset n runes before pos, not crossing lo.
+// It is bounds-safe on invalid UTF-8 (stray continuation bytes only make
+// it stop sooner).
+func backRunes(src []byte, pos, lo, n int) int {
+	for pos > lo && n > 0 {
+		pos--
+		for pos > lo && src[pos]&0xC0 == 0x80 {
+			pos--
+		}
+		n--
+	}
+	return pos
+}
+
+// fwdRunes returns the byte offset n runes after pos, not crossing hi.
+func fwdRunes(src []byte, pos, hi, n int) int {
+	for pos < hi && n > 0 {
+		pos++
+		for pos < hi && src[pos]&0xC0 == 0x80 {
+			pos++
+		}
+		n--
+	}
+	return pos
 }
 
 // LineCol converts a byte offset into 1-based line and column
