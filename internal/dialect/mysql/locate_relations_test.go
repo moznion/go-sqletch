@@ -215,6 +215,57 @@ func TestLocateRelations_MultiRelation(t *testing.T) {
 	}
 }
 
+// TestLocateRelations_NonReservedKeywordTableName is the regression for
+// the PR #76 FROM-context tracking: a bare identifier equal to a clause
+// closer keyword (OFFSET/GROUP/…) is a legal UNQUOTED table name in
+// MySQL (these are non-reserved). Such a name arrives in FROM position
+// and is consumed as a relation, so it must NOT also close the FROM
+// region — otherwise the following comma-joined relation loses its ','
+// predecessor and runs to EOF (Loc=-1), degrading guard precision in the
+// very locator #76 hardened.
+func TestLocateRelations_NonReservedKeywordTableName(t *testing.T) {
+	t.Run("offset as leading table keeps comma join located", func(t *testing.T) {
+		// SELECT * FROM offset o, t2 — pre-fix `t2` got Loc=-1 because
+		// `offset` (matched in FROM position) flipped inFrom=false.
+		sql := "SELECT * FROM offset o, t2"
+		rels := []dialect.RelRef{{Table: "offset"}, {Table: "t2"}}
+		locateRelations(sql, rels)
+		if want := strings.Index(sql, "offset"); rels[0].Loc != want {
+			t.Errorf("offset Loc = %d (%q), want %d", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+		if want := strings.Index(sql, "t2"); rels[1].Loc != want {
+			t.Errorf("t2 Loc = %d (%q), want %d (%q)", rels[1].Loc, sliceAt(sql, rels[1].Loc), want, sliceAt(sql, want))
+		}
+	})
+
+	t.Run("offset in the middle keeps trailing comma join located", func(t *testing.T) {
+		// SELECT * FROM t1, offset o, t2 — pre-fix `t2` got Loc=-1.
+		sql := "SELECT * FROM t1, offset o, t2"
+		rels := []dialect.RelRef{{Table: "t1"}, {Table: "offset"}, {Table: "t2"}}
+		locateRelations(sql, rels)
+		for i, n := range []string{"t1", "offset", "t2"} {
+			if want := strings.Index(sql, n); rels[i].Loc != want {
+				t.Errorf("%s Loc = %d (%q), want %d (%q)", n, rels[i].Loc, sliceAt(sql, rels[i].Loc), want, sliceAt(sql, want))
+			}
+		}
+	})
+
+	t.Run("real clause keyword still closes the from region", func(t *testing.T) {
+		// Control: a genuine WHERE (and GROUP) closes the region, so the
+		// depth-0 comma inside GROUP BY is NOT a table separator — a name
+		// there must NOT be located as a FROM relation.
+		sql := "SELECT * FROM t1 WHERE id > 0 GROUP BY a, notarel"
+		rels := []dialect.RelRef{{Table: "t1"}, {Table: "notarel"}}
+		locateRelations(sql, rels)
+		if want := strings.Index(sql, "t1"); rels[0].Loc != want {
+			t.Errorf("t1 Loc = %d (%q), want %d", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+		if rels[1].Loc != -1 {
+			t.Errorf("notarel Loc = %d (%q), want -1 (region closed by WHERE)", rels[1].Loc, sliceAt(sql, rels[1].Loc))
+		}
+	})
+}
+
 func sliceAt(s string, off int) string {
 	if off < 0 || off >= len(s) {
 		return "<none>"

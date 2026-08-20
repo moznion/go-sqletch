@@ -573,10 +573,19 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 					// FROM-region state: openers enter it, clause-enders
 					// leave it. This gates the structural ',' predecessor so
 					// a `GROUP BY a, b` comma is never a table separator.
-					if isFromOpener(u) {
-						inFrom = true
-					} else if isFromCloser(u) {
-						inFrom = false
+					// A keyword that ARRIVED in FROM position (inPos) is
+					// being used as a non-reserved UNQUOTED table name —
+					// MySQL allows `FROM offset o, t2`, where `offset` is a
+					// relation, not the OFFSET clause. It is consumed as a
+					// relation here, so it must NOT also close the region and
+					// orphan the following comma-joined relation (Loc=-1).
+					// Only a closer NOT in relation position ends the region.
+					if !inPos {
+						if isFromOpener(u) {
+							inFrom = true
+						} else if isFromCloser(u) {
+							inFrom = false
+						}
 					}
 				} else {
 					// A quoted identifier is never a keyword: keep its

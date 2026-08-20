@@ -86,6 +86,18 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		return mk(dialect.KindLineComment, i)
 
 	case c == '/' && pos+1 < len(src) && src[pos+1] == '*':
+		// MySQL executable comments `/*! ... */` (and version-gated
+		// `/*!NNNNN ... */`) are OUTSIDE sqletch's supported surface: the
+		// server STRIPS the `/*!`/`*/` markers and executes the content as
+		// live SQL, so a `?`/`:param` inside one is counted by the server
+		// but invisible to a lexer that treats it as an inert comment (0
+		// vs 1 placeholders → a bind-slot mismatch and native-oracle
+		// byte-identity divergence). Fail closed: refuse it with a clear
+		// diagnostic rather than silently miscount.
+		if pos+2 < len(src) && src[pos+2] == '!' {
+			return dialect.Token{}, &dialect.LexError{Pos: pos,
+				Msg: "MySQL executable comment /*! ... */ is not supported: the server strips the markers and executes the content, so placeholders inside it are invisible to sqletch; move the SQL out of the comment (drop the /*! and */), or gate the version outside the template"}
+		}
 		// MySQL block comments do NOT nest: the first */ closes.
 		i := pos + 2
 		for i+1 < len(src) {
