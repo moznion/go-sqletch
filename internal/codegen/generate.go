@@ -406,6 +406,40 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		}
 	}
 
+	// ---- required-argument name gate -------------------------------------
+	// The required arguments (policy-woven params and/or a @filter-tree!
+	// tree) become positional parameters of the generated method, between
+	// the fixed `ctx` and `arg`. argIdent gives each a Go name, but it is
+	// a many-to-one fold: a reserved/import/frags collision is escaped by
+	// a fixed "Arg" suffix, so two DIFFERENT template params can land on
+	// the SAME name — e.g. :ctx (reserved -> ctxArg) and :ctx_arg
+	// (-> ctxArg). The method would then declare two parameters of the
+	// same name, which is a Go compile error, while nothing downstream
+	// notices. The type-name space is gated above (policyTypes /
+	// generatedPkgNames); this closes the argument-name space. The fixed
+	// receiver+signature identifiers (ctx/arg/q) are seeded so a fold onto
+	// one of them is caught too (argIdent already suffixes them away, so
+	// this is defensive).
+	argOwner := map[string]string{}
+	fixedSigNames := map[string]bool{"ctx": true, "arg": true, "q": true}
+	for _, ra := range requiredArgs {
+		if fixedSigNames[ra.name] {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeInvalidColumnIdentifier, paramSpanOf(q, ra.param),
+				"required argument %q of query %s generates the method parameter name %q, which collides with a fixed method identifier (ctx/arg/q); rename the parameter",
+				ra.param, q.Name, ra.name).
+				WithHint("rename %q so its generated argument name differs from the method's ctx/arg/q identifiers", ra.param))
+			continue
+		}
+		if prev, ok := argOwner[ra.name]; ok {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeInvalidColumnIdentifier, paramSpanOf(q, ra.param),
+				"required arguments %q and %q of query %s both generate the method parameter name %q; two parameters cannot share a name, so the generated method would not compile — rename one",
+				prev, ra.param, q.Name, ra.name).
+				WithHint("rename %q or %q so their generated argument names differ", prev, ra.param))
+			continue
+		}
+		argOwner[ra.name] = ra.param
+	}
+
 	// ---- row struct ------------------------------------------------------
 	rowName := q.Name + "Row"
 	hasRows := q.Annotation == template.AnnotationOne || q.Annotation == template.AnnotationMaybeOne ||
