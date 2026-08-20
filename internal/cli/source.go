@@ -24,9 +24,11 @@ func scanSource(sc *template.Scanner, path string, src []byte) (*template.QueryF
 	var diags []diagnostics.Diagnostic
 	// The view is only valid inside the callback — gosrc reuses one
 	// backing buffer across views to stay O(file size). The scanner
-	// keeps only copies, so scanning eagerly here is safe.
-	extractDiags := gosrc.Views(path, src, func(v []byte) {
-		f, ds := sc.ScanFile(path, v)
+	// keeps only copies, so scanning eagerly here is safe. start is the
+	// literal's offset in v: scanning from it skips the blank prefix
+	// (byte-identical to scanning from 0, but not O(consts × file)).
+	extractDiags := gosrc.Views(path, src, func(v []byte, start int) {
+		f, ds := sc.ScanFileFrom(path, v, start)
 		file.Queries = append(file.Queries, f.Queries...)
 		diags = append(diags, ds...)
 	})

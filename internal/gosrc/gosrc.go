@@ -37,19 +37,27 @@ const marker = "//sqletch:query"
 func IsGoSource(path string) bool { return filepath.Ext(path) == ".go" }
 
 // Views calls yield once per marked template literal, in source order,
-// with an offset-preserving view of the file, and returns diagnostics
-// for markers that do not name an extractable template.
+// with an offset-preserving view of the file and the byte offset at
+// which that literal's content begins, and returns diagnostics for
+// markers that do not name an extractable template.
+//
+// start is where the scanner should begin: the view's bytes before it
+// are blank trivia (§view), so scanning is equivalent whether it starts
+// at 0 or at start, but starting at start avoids re-lexing — and
+// re-copying, as one whitespace token's Text — the blank prefix once
+// per literal, which would be O(literals × len(src)) quadratic CPU (and
+// hang the LSP on open through cli.scanSource). The caller passes it to
+// template.Scanner.ScanFileFrom.
 //
 // The []byte handed to yield is a single backing buffer reused across
 // every view — it is only valid until yield returns. This keeps total
 // memory O(len(src)) instead of O(literals × len(src)): a file with
 // thousands of marked consts would otherwise allocate a full
-// file-length prefix copy per const and exhaust memory (and, through
-// cli.scanSource, take the LSP down on open). Reuse is sound because
-// the scanner copies out everything it retains — skeleton and body
-// texts are string copies and spans are byte offsets, never slices
+// file-length prefix copy per const and exhaust memory. Reuse is sound
+// because the scanner copies out everything it retains — skeleton and
+// body texts are string copies and spans are byte offsets, never slices
 // into the source — so nothing observes the buffer after yield returns.
-func Views(path string, src []byte, yield func(view []byte)) []diagnostics.Diagnostic {
+func Views(path string, src []byte, yield func(view []byte, start int)) []diagnostics.Diagnostic {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
@@ -74,7 +82,7 @@ type extractor struct {
 	path  string
 	src   []byte
 	fset  *token.FileSet
-	yield func(view []byte)
+	yield func(view []byte, start int)
 	buf   []byte // reused view buffer; blank outside a live literal
 	diags []diagnostics.Diagnostic
 }
@@ -144,11 +152,13 @@ func (e *extractor) view(lit *ast.BasicLit) {
 		blank(e.buf, e.src, 0, len(e.src))
 	}
 	// Splice the literal's real bytes in at their true offsets, hand the
-	// truncated view to yield, then restore just that region to blanks
-	// so the next view sees a clean prefix. Only O(literal) work per
-	// view, so the whole file costs O(len(src)) regardless of count.
+	// truncated view to yield along with start so the scanner can begin
+	// at the literal rather than re-lex the blank prefix, then restore
+	// just that region to blanks so the next view sees a clean prefix.
+	// Only O(literal) work per view, so the whole file costs O(len(src))
+	// regardless of count.
 	copy(e.buf[start:end], e.src[start:end])
-	e.yield(e.buf[:end])
+	e.yield(e.buf[:end], start)
 	blank(e.buf, e.src, start, end)
 }
 

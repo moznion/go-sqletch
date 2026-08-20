@@ -148,16 +148,42 @@ type queryBuilder struct {
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
+	return s.ScanFileFrom(path, src, 0)
+}
+
+// ScanFileFrom is ScanFile that begins scanning at byte offset start,
+// while still treating src as the whole offset-preserving buffer: every
+// emitted span and offset indexes src exactly as ScanFile would, so for
+// any start whose skipped prefix src[:start] is scan-inert trivia the
+// result is byte-identical to ScanFile(path, src).
+//
+// It exists for gosrc's Go-source views (docs/design/13 §3): a marked
+// const's view is the whole file with everything but that one literal
+// blanked to spaces/newlines. Scanning such a view from 0 re-lexes the
+// blank prefix — and copies it whole as a single whitespace token's
+// Text — once per const, which is O(consts × file size) quadratic CPU
+// (and hangs the LSP on file-open through cli.scanSource). Starting at
+// the literal's own offset skips that inert prefix without moving any
+// span. start is clamped to [0, len(src)].
+func (s *Scanner) ScanFileFrom(path string, src []byte, start int) (*QueryFile, []diagnostics.Diagnostic) {
 	fs := &fileScan{path: path, src: src, profile: s.profile, names: map[string]diagnostics.Span{}}
 	file := &QueryFile{Path: path}
 
-	pos := 0
+	if start < 0 {
+		start = 0
+	}
+	if start > len(src) {
+		start = len(src)
+	}
+	pos := start
 	// A leading UTF-8 BOM (EF BB BF) is editor byte-order noise, not
 	// template content. Skip it as leading trivia WITHOUT rewriting the
 	// buffer, so every span/offset (and the LSP's UTF-16 mapping) still
 	// indexes the original bytes. Otherwise the BOM lexes as an
 	// identifier and trips SQLETCH003 "statement without a query header".
-	if len(src) >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF {
+	// Only meaningful at the true file start; a windowed start (start>0)
+	// begins inside a template literal, past any BOM.
+	if start == 0 && len(src) >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF {
 		pos = 3
 	}
 	for pos <= len(src) {

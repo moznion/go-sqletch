@@ -17,7 +17,7 @@ func bt(s string) []byte { return []byte(strings.ReplaceAll(s, "~", "`")) }
 // can hold every view at once.
 func collectViews(path string, src []byte) ([][]byte, []diagnostics.Diagnostic) {
 	var out [][]byte
-	ds := Views(path, src, func(v []byte) {
+	ds := Views(path, src, func(v []byte, _ int) {
 		out = append(out, append([]byte(nil), v...))
 	})
 	return out, ds
@@ -422,7 +422,7 @@ func TestViewsShareOneReusedBuffer(t *testing.T) {
 
 	var count int
 	var firstPtr *byte
-	ds := Views("repo/users.go", src, func(v []byte) {
+	ds := Views("repo/users.go", src, func(v []byte, start int) {
 		idx := count
 		count++
 		if len(v) == 0 {
@@ -432,6 +432,17 @@ func TestViewsShareOneReusedBuffer(t *testing.T) {
 			firstPtr = &v[0]
 		} else if &v[0] != firstPtr {
 			t.Fatalf("view %d uses a different backing buffer; the buffer is not reused", idx)
+		}
+		// start must point at this literal's content, and everything
+		// before it must be blank trivia — that is what makes skipping
+		// the prefix (rather than re-lexing it) byte-identical.
+		if start <= 0 || start > len(v) {
+			t.Fatalf("view %d: start %d is not inside the view (len %d)", idx, start, len(v))
+		}
+		for i := range start {
+			if b := v[i]; b != ' ' && b != '\n' {
+				t.Fatalf("view %d: prefix byte %d = %q, want blank trivia before start", idx, i, b)
+			}
 		}
 		want := fmt.Sprintf("-- name: Q%d :one\nSELECT %d", idx, idx)
 		if !bytes.Contains(v, []byte(want)) {
