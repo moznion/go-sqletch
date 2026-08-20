@@ -142,6 +142,16 @@ func (d *describer) scopeFrom(refs *ast.TableRefsClause) ([]nativeRel, error) {
 				Construct: "a derived table (subquery in FROM)",
 				Hint:      "flatten the query or switch to database.oracle: \"server\""}
 		}
+		if r.Schema != "" {
+			// The native backend models a SINGLE DDL-built database with
+			// no DSN: a cross-database reference (`otherdb.users`) is
+			// unmodelable. Looking it up by the bare table name would type
+			// columns from the WRONG (local) table, so fail closed here —
+			// the FROM twin of the schema-qualified column/star refusals.
+			return nil, &dialect.NativeUnsupportedError{Pos: r.Loc,
+				Construct: "a schema-qualified FROM table",
+				Hint:      "drop the schema qualifier, or switch to database.oracle: \"server\""}
+		}
 		tb := d.cat.Lookup(r.Table)
 		if tb == nil {
 			return nil, &dialect.OracleError{Pos: -1,

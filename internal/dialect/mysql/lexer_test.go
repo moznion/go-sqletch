@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/moznion/go-sqletch/internal/dialect"
@@ -213,6 +214,48 @@ func TestLexer_Unterminated(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected lex error for %q, got none", src)
 		}
+	}
+}
+
+// TestLexer_RefusesExecutableComment pins the fail-closed handling of
+// MySQL's /*! ... */ (and /*!NNNNN ... */) executable comments. The
+// server STRIPS the markers and executes the content, so a `?`/`:param`
+// inside such a comment is counted by the server but was invisible to
+// sqletch when it lexed as an ordinary block comment (0 vs 1
+// placeholders → bind-slot mismatch and native-oracle byte-identity
+// divergence). It must be REFUSED with a clear diagnostic.
+func TestLexer_RefusesExecutableComment(t *testing.T) {
+	for _, src := range []string{
+		"SELECT /*! ? */ 1 FROM t1 WHERE id = ?",
+		"SELECT /*!40000 ? */ 1 FROM t1",
+		"/*!*/",
+		"/*!50000 SQL_NO_CACHE */",
+	} {
+		p := Profile{}
+		pos := 0
+		var err error
+		var tok dialect.Token
+		for {
+			tok, err = p.NextToken([]byte(src), pos)
+			if err != nil || tok.Kind == dialect.KindEOF {
+				break
+			}
+			pos = tok.End
+		}
+		le, ok := err.(*dialect.LexError)
+		if !ok {
+			t.Errorf("expected *dialect.LexError for %q, got %T: %v", src, err, err)
+			continue
+		}
+		if !strings.Contains(le.Msg, "executable comment") {
+			t.Errorf("refusal for %q should mention the executable comment: %q", src, le.Msg)
+		}
+	}
+
+	// A plain block comment (no '!') still lexes fine.
+	toks := lexAll(t, "SELECT /* plain */ 1")
+	if len(toks) == 0 {
+		t.Fatal("plain block comment must not be refused")
 	}
 }
 

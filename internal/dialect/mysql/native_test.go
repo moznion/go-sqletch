@@ -236,6 +236,32 @@ func TestNativeDescribeRefusesWithClause(t *testing.T) {
 	}
 }
 
+func TestNativeDescribeRefusesSchemaQualifiedFrom(t *testing.T) {
+	// The native backend models a SINGLE DDL-built database with no DSN;
+	// a cross-database FROM reference (`otherdb.users`) is unmodelable.
+	// Pre-fix scopeFrom looked up `r.Table` ignoring `r.Schema`, so
+	// `SELECT id FROM otherdb.users` silently resolved to the LOCAL
+	// `users` and typed `id` from the wrong table (err=nil). It must be
+	// REFUSED as a NativeUnsupportedError (SQLETCH214), matching the
+	// existing schema-qualified column/star refusals — never a guess.
+	for _, tt := range []struct{ name, sql string }{
+		{"schema-qualified from table", "SELECT id FROM otherdb.users"},
+		{"schema-qualified from with alias", "SELECT u.id FROM otherdb.users u"},
+		{"schema-qualified comma join", "SELECT o.id FROM orgs o, otherdb.users u"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError for %q, got %T: %v", tt.sql, err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "schema-qualified") {
+				t.Errorf("refusal %q/%q should mention schema-qualified", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
 func TestNativeDescribeRefusesNamedWindow(t *testing.T) {
 	// A statement-level named WINDOW clause is the same sail-through
 	// class as WITH: its body lives only in SelectStmt.WindowSpecs, so a
