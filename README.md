@@ -159,8 +159,8 @@ static queries in sqlc; move the conditional ones to sqletch.
 
 ## Quick start
 
-Requirements: Go 1.27+ (currently the 1.27 rc; `go.mod` pins the
-toolchain). Cold generates need a disposable dev database — Docker, or
+Requirements: Go 1.27+ (`go.mod` requires it; `GOTOOLCHAIN=auto`
+fetches it). Cold generates need a disposable dev database — Docker, or
 a DSN you point at via `database.dsn`. On SQLite there is nothing to
 install: the oracle is the real engine, in-process.
 
