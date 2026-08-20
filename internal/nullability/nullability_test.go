@@ -325,6 +325,75 @@ SELECT b.org_name FROM b;
 	assertNullable(t, got, []bool{false})
 }
 
+// The forward reference reached from a DEEPER level: `a` is referenced
+// from inside a derived table, one level below its definition, and its
+// body LEFT JOINs `orgs` — a name a LATER same-level CTE shadows. The
+// body's scope is a property of where `a` was DEFINED (top level: orgs
+// is still the base table), not of the deeper site the reference sits
+// in. The old code reconstructed the body scope from the referencing
+// level, whose environment already carried the forward CTE `orgs`, so
+// the body bound `orgs` to the empty CTE, dropped the LEFT JOIN null
+// extension, and left orgs a single clean instance via `public.orgs` —
+// unsoundly narrowing org_name. Binding the definition to its own
+// positional body env keeps orgs the null-extended base table.
+func TestAnalyze_DeeperForwardCTEReferenceNeverNarrows(t *testing.T) {
+	src := `-- name: Q :many
+WITH a AS (
+  SELECT o.name AS org_name
+  FROM users AS u LEFT JOIN orgs AS o ON o.id = u.org_id
+),
+orgs AS (SELECT 1 AS one)
+SELECT p.org_name
+FROM (SELECT a.org_name FROM a) AS p, public.orgs AS po
+WHERE po.id = 1;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_name", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
+// A view marked in the catalog (as all three oracle snapshots now do:
+// PG relkind v/m, MySQL information_schema.tables.table_type='VIEW',
+// SQLite) poisons narrowing for the whole statement: the view attributes
+// its result columns through to a base table (orgs.name, NOT NULL), and
+// a sibling base-table instance would otherwise vouch for that column
+// even though the view's invisible body may null-extend it. The
+// kill-switch must fire regardless of dialect, keying only on IsView.
+func TestAnalyze_ViewInCatalogNeverNarrows(t *testing.T) {
+	viewCat := &cache.Catalog{Tables: []cache.Table{
+		{Schema: "public", Name: "orgs", OID: 200, Cols: []cache.Column{
+			{Name: "id", Att: 1, NotNull: true},
+			{Name: "name", Att: 2, NotNull: true},
+		}},
+		{Schema: "public", Name: "members_orgs", OID: 400, IsView: true,
+			Cols: []cache.Column{{Name: "org_name", Att: 1, NotNull: true}}},
+	}}
+	src := `-- name: Q :many
+SELECT v.org_name, o2.name
+FROM members_orgs AS v JOIN orgs AS o2 ON o2.id = 1;
+`
+	f, diags := template.NewScanner(postgres.Profile{}).ScanFile("t.sql", []byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("scan: %+v", diags)
+	}
+	rs, err := ast.Renderings(postgres.Profile{}, f.Queries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// v.org_name attributes through the view to orgs.name; o2.name is the
+	// direct base-table column. Both must stay nullable: the view poisons
+	// the statement wholesale.
+	got := Analyze(tree, rs[0], dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_name", 200, 2), col("name", 200, 2),
+	}}, viewCat, nil)
+	assertNullable(t, got, []bool{true, true})
+}
+
 // The dual-instance trap: the same table is both directly present
 // (not null-extended) and wrapped in a null-extended derived table.
 // Presence alone would narrow the derived column; the opaque
