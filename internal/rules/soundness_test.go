@@ -243,3 +243,73 @@ WHERE TRUE
 		t.Fatalf("guarded ON-clause ref wrongly flagged: %+v", diags)
 	}
 }
+
+// ---- R7 companion warning (SQLETCH212) must fold identifier case ----------
+
+// checkResolvedCat runs CheckResolved under an arbitrary dialect/catalog.
+func checkResolvedCat(t *testing.T, profile dialect.LexerProfile, fe dialect.Frontend,
+	cat *cache.Catalog, src string) []diagnostics.Diagnostic {
+	t.Helper()
+	f, diags := template.NewScanner(profile).ScanFile("t.sql", []byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("scan: %+v", diags)
+	}
+	q := f.Queries[0]
+	rs, err := ast.Renderings(profile, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := CheckR1(profile, fe, q, rs); len(d) != 0 {
+		t.Fatalf("R1 diagnostics (test precondition): %+v", d)
+	}
+	tree, err := fe.Parse(rs[0].SQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CheckResolved(profile, q, rs[0], tree, cat)
+}
+
+// widgetsCat holds a mixed-case NOT-NULL column with no default; the
+// template spells it in a different case, which resolves at runtime on a
+// case-insensitive dialect. The R7 companion warning must fold both
+// sides like the rest of R2/R3, or it silently misses the column.
+func widgetsCat() *cache.Catalog {
+	return &cache.Catalog{
+		SchemaFP: "widgets",
+		Tables: []cache.Table{{
+			Schema: "public", Name: "widgets", OID: 2001,
+			Cols: []cache.Column{
+				{Name: "id", Att: 1, NotNull: true, HasDefault: true},
+				{Name: "Status", Att: 2, NotNull: true, HasDefault: false},
+			},
+		}},
+	}
+}
+
+const widgetsInsert = `-- name: Ins :exec
+INSERT INTO widgets (
+    id
+@if-present(status)
+  , status
+@endif
+) VALUES (
+    :id
+@if-present(status)
+  , :status
+@endif
+);
+`
+
+func TestR7Fold_MySQLMixedCaseNotNullColumnWarns(t *testing.T) {
+	diags := checkResolvedCat(t, mysql.Profile{}, mysql.Frontend{}, widgetsCat(), widgetsInsert)
+	if !hasCode(diags, diagnostics.CodeOptionalInsertNotNull) {
+		t.Fatalf("want SQLETCH212 for the mixed-case NOT NULL column, got %+v", diags)
+	}
+}
+
+func TestR7Fold_SQLiteMixedCaseNotNullColumnWarns(t *testing.T) {
+	diags := checkResolvedCat(t, sqlite.Profile{}, sqlite.Frontend{}, widgetsCat(), widgetsInsert)
+	if !hasCode(diags, diagnostics.CodeOptionalInsertNotNull) {
+		t.Fatalf("want SQLETCH212 for the mixed-case NOT NULL column, got %+v", diags)
+	}
+}

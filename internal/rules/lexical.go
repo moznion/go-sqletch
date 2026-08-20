@@ -181,6 +181,30 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 			}
 			continue
 		}
+		// An @in(:p) list parameter expands to a variable-arity IN list
+		// (or `= ANY($n)` on PostgreSQL). Reusing the same name as a plain
+		// scalar bind would feed the whole slice into a scalar placeholder:
+		// on expanding dialects (MySQL/SQLite) the `?` collides with the
+		// per-element expansion, so a statically-verified query fails at
+		// runtime — the core guarantee. (PostgreSQL's oracle catches the
+		// $n-as-array-and-scalar conflict, but Tier-2 leaves params
+		// untyped, so it must be caught here.)
+		inIn, scalar := false, false
+		for _, occ := range p.Occurrences {
+			if occ.InIn {
+				inIn = true
+			} else {
+				scalar = true
+			}
+		}
+		if inIn && scalar {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeInParamScalarMix,
+				p.Occurrences[0].Span,
+				"%q is bound by @in as a variable-arity list and also as a plain scalar value; the scalar bind would receive the whole list and fail at runtime (R9)", ":"+name).
+				WithHint("use distinct parameter names for the @in list and the scalar bind"))
+			continue
+		}
+
 		// Predicate params are constructor arguments; mixing them with
 		// non-tree bind sites would need two sources for one name.
 		inFT, outFT := false, false

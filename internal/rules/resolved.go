@@ -129,7 +129,11 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 			if tbl := cat.Lookup(rels[0].Table); tbl != nil {
 				for _, gi := range q.InsertColGuards {
 					name := strings.Trim(gi.Name, `"`)
-					if c := tbl.Col(name); c != nil && c.NotNull && !c.HasDefault {
+					// Fold both sides like R2/R3: a mixed-case NOT NULL
+					// column resolves at runtime on a case-insensitive
+					// dialect, so an exact-string lookup would silently miss
+					// it (F3).
+					if c := res.col(tbl, name); c != nil && c.NotNull && !c.HasDefault {
 						diags = append(diags, diagnostics.Warnf(diagnostics.CodeOptionalInsertNotNull, gi.Span,
 							"column %q is NOT NULL without a default; shapes omitting it will fail at execution time", name).
 							WithHint("add a database default, or make the column unconditional"))
@@ -265,6 +269,19 @@ func (res *resolver) fragAt(loc int) *template.IfPresent {
 func (res *resolver) guardsAt(loc int) []template.GuardAtom {
 	if frag := res.fragAt(loc); frag != nil {
 		return frag.Guards
+	}
+	return nil
+}
+
+// col looks a column up in a catalog table under the dialect's
+// identifier folding, so a mixed-case name matches on a
+// case-insensitive dialect (F3).
+func (res *resolver) col(tbl *cache.Table, name string) *cache.Column {
+	folded := res.fold(name)
+	for i := range tbl.Cols {
+		if res.fold(tbl.Cols[i].Name) == folded {
+			return &tbl.Cols[i]
+		}
 	}
 	return nil
 }

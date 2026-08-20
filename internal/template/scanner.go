@@ -1337,6 +1337,11 @@ func (fs *fileScan) parseIn(pos, nameEnd int) int {
 			"@in is allowed in WHERE/HAVING expressions (e.g. `u.status @in(:statuses)`)")
 	}
 	fs.recordParam(qb.q, name, fs.span(tok.Start, tok.End), nil, false, false)
+	// Mark this occurrence as an @in list bind so R9 can forbid the same
+	// parameter also appearing as a plain scalar (SQLETCH120).
+	if p := qb.q.Params[name]; p != nil && len(p.Occurrences) > 0 {
+		p.Occurrences[len(p.Occurrences)-1].InIn = true
+	}
 
 	qb.flushSkeleton(fs, pos)
 	qb.q.Items = append(qb.q.Items, &InExpr{Param: name, Span: fs.span(pos, rp.End)})

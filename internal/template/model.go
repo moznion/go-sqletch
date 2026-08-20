@@ -203,6 +203,7 @@ type Occurrence struct {
 	Guards       []GuardAtom // guard set of the enclosing fragment; nil in skeleton
 	InChooseCase bool        // inside a @choose case body (empty guard set, R3)
 	InFilterTree bool        // inside a @predicate body (constructor arg)
+	InIn         bool        // the parameter of an @in(:param) list occurrence
 }
 
 type Param struct {

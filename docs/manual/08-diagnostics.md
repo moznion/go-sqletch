@@ -53,6 +53,7 @@ codes).
 | SQLETCH117 | `SELECT *` (or `t.*`) would include an optional join's columns (rule R2): the result shape must be constant across shapes. |
 | SQLETCH118 | Every `SET` item (or `INSERT` list item) is optional (rule R6): the minimal shape would be syntactically invalid. Keep one unconditional item. |
 | SQLETCH119 | `INSERT` guarded column/value pairing is broken (rule R7): for each guard set, column items and `VALUES` items must be equinumerous, positionally aligned, and at the tail of their clauses. |
+| SQLETCH120 | A parameter bound by `@in` (a variable-arity list) is also bound as a plain scalar value (rule R9): the scalar placeholder would receive the whole list and fail at runtime on expanding dialects. Use distinct parameter names for the list and the scalar bind. |
 | SQLETCH122 | `@order-by` under `DISTINCT ON` (PostgreSQL): validity there depends on the sort prefix, which reordering breaks. Use `@choose` with whole verified cases instead. |
 | SQLETCH123 | The skeleton uses `FETCH FIRST … WITH TIES`, so `ORDER BY` may never vanish: the `@order-by` needs a `@default`. |
 | SQLETCH124 | A query touches a policy-designated table without the policy's scoping conjunct present in every reachable shape (in WHERE, or in the relation's own `ON` clause for a null-extended outer-join occurrence), and carries no opt-out. A hand-written copy inside `@if-present` does not count — it vanishes in guard-off shapes. |

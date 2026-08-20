@@ -88,6 +88,7 @@ const (
 	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
 	CodeUnanchoredSet    Code = "SQLETCH118" // every SET/INSERT-list item optional, no anchor (R6)
 	CodePairedGuards     Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
+	CodeInParamScalarMix Code = "SQLETCH120" // an @in list param also bound as a plain scalar (R9)
 	CodeOrderByDistinct  Code = "SQLETCH122" // @order-by under DISTINCT ON (prefix-sensitive)
 	CodeOrderByNeedsDflt Code = "SQLETCH123" // WITH TIES requires an @order-by @default
 	CodePolicyUnscoped   Code = "SQLETCH124" // designated table without the scoping conjunct in every shape

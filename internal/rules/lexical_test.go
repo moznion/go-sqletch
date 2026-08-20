@@ -141,6 +141,57 @@ ORDER BY t.a
 	}
 }
 
+// A parameter bound by @in (a variable-arity list) may not ALSO bind as
+// a plain scalar value: on expanding dialects the scalar placeholder
+// would receive the whole slice, so a statically-verified query fails at
+// runtime (the PostgreSQL oracle catches the array/scalar conflict, but
+// Tier-2 params are untyped, so rules must catch it).
+func TestCheckLexical_InParamScalarMix(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bool // expect SQLETCH120
+	}{
+		{
+			name: "reused as scalar and @in",
+			want: true,
+			src: `-- name: Q :many
+SELECT t.id FROM t
+WHERE t.owner = :x
+  AND t.id @in(:x)
+;
+`,
+		},
+		{
+			name: "@in only",
+			want: false,
+			src: `-- name: Q :many
+SELECT t.id FROM t
+WHERE t.id @in(:x)
+;
+`,
+		},
+		{
+			name: "scalar only",
+			want: false,
+			src: `-- name: Q :many
+SELECT t.id FROM t
+WHERE t.owner = :x
+;
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := scanOne(t, tt.src)
+			diags := CheckLexical(postgres.Profile{}, q)
+			if got := hasCode(diags, diagnostics.CodeInParamScalarMix); got != tt.want {
+				t.Errorf("SQLETCH120 = %v, want %v (diags: %+v)", got, tt.want, diags)
+			}
+		})
+	}
+}
+
 func TestCheckLexical_OptionalClassification(t *testing.T) {
 	src := `-- name: Q :many
 SELECT 1 FROM t
