@@ -440,8 +440,21 @@ func (t *tree) CTEs() []dialect.CTEDef {
 			continue
 		}
 		def := dialect.CTEDef{Name: cte.Ctename, Recursive: wc.Recursive}
-		if cte.Ctequery != nil && cte.Ctequery.GetSelectStmt() != nil {
+		switch {
+		case cte.Ctequery == nil:
+		case cte.Ctequery.GetSelectStmt() != nil:
 			def.Tree = subTree(cte.Ctequery)
+		default:
+			// A data-modifying body (DELETE/UPDATE/INSERT … RETURNING):
+			// no plain-query Tree. PostgreSQL attributes its wCTE columns
+			// through the RETURNING list to the base tables the DML reads,
+			// and one of those may sit on a null-extended join side inside
+			// the DML. Expose every table the body mentions so the analyzer
+			// poisons them (design 05 §2b) — granting nothing is not enough
+			// when a clean outer instance can vouch for the OID.
+			var refs []dialect.TableRef
+			collectRangeVars(cte.Ctequery.ProtoReflect(), &refs)
+			def.PoisonTables = refs
 		}
 		out = append(out, def)
 	}

@@ -57,6 +57,12 @@ CREATE TABLE aux.orgs (
 CREATE TABLE inh_parent (x bigint NOT NULL);
 CREATE TABLE inh_child () INHERITS (inh_parent);
 ALTER TABLE inh_child ALTER COLUMN x DROP NOT NULL;
+-- del_members is dedicated to the data-modifying-CTE case: its DELETE
+-- consumes rows, so no other case may read it.
+CREATE TABLE del_members (
+    id     bigint PRIMARY KEY,
+    org_id bigint
+);
 `
 
 const nullSoundSeedSQL = `
@@ -65,6 +71,9 @@ INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
 -- aux.orgs stays empty: every LEFT JOIN against it misses.
 INSERT INTO inh_parent VALUES (1);
 INSERT INTO inh_child VALUES (NULL);
+-- one del_members row whose org_id matches no org: the RIGHT JOIN
+-- null-extends orgs, so RETURNING o2.name is NULL.
+INSERT INTO del_members VALUES (1, NULL);
 `
 
 var nullSoundCases = []struct {
@@ -289,6 +298,22 @@ FROM members_orgs AS v JOIN orgs AS o2 ON o2.id = 1
 ORDER BY v.member_id;
 `,
 		note: "the view attributes org_name through to orgs.name (NOT NULL); the sibling base instance orgs AS o2 grants presence, so without IsView on the PG snapshot the view's invisible internal LEFT JOIN is missed and org_name narrows unsoundly",
+	},
+	// ---- data-modifying CTE provenance (design 05 §2b) ----
+	{
+		name: "data_modifying_cte_returning_null_side",
+		src: `-- name: DMLCTEPoison :many
+WITH m AS (
+  DELETE FROM del_members AS m2
+  USING orgs AS o2 RIGHT JOIN del_members AS m3 ON o2.id = m3.org_id
+  WHERE m2.id = m3.id
+  RETURNING o2.name AS oname
+)
+SELECT o.name AS oname_direct, m.oname
+FROM orgs AS o, m
+ORDER BY m.oname NULLS LAST;
+`,
+		note: "PostgreSQL attributes the wCTE column m.oname through GetCTETargetList (the RETURNING list) to orgs.name (NOT NULL), but orgs o2 is the null-extended LEFT operand of the DML's RIGHT JOIN, so RETURNING o2.name is NULL. The clean outer orgs o instance shares that OID; without poisoning the DML body's tables, m.oname narrows unsoundly",
 	},
 }
 
