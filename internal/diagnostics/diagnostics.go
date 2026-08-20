@@ -219,6 +219,23 @@ func (d Diagnostic) RenderExcerpt(src []byte) string {
 // (see RenderWith / PrintDiags). Output is byte-identical to
 // RenderExcerpt.
 func (d Diagnostic) RenderExcerptWith(src []byte, lm *LineMap) string {
+	// Defense in depth: every in-tree Span constructor clamps offsets
+	// into [0,len(src)], but this exported renderer must never panic on
+	// a hand-built out-of-range span — a negative Start would index
+	// src[-1] below. Mirror the constructors' clamp here so the CLI/LSP
+	// printer stays panic-free whatever span it is handed.
+	if d.Span.Start < 0 {
+		d.Span.Start = 0
+	}
+	if d.Span.Start > len(src) {
+		d.Span.Start = len(src)
+	}
+	if d.Span.End < d.Span.Start {
+		d.Span.End = d.Span.Start
+	}
+	if d.Span.End > len(src) {
+		d.Span.End = len(src)
+	}
 	if len(src) == 0 || d.Span.Start >= len(src) {
 		return d.RenderWith(src, lm)
 	}

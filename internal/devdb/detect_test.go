@@ -26,7 +26,7 @@ func TestConfig_RecordVersion(t *testing.T) {
 	// form is what the drift diagnostic must be able to quote.
 	var det Detected
 	cfg := Config{ServerVersion: "16", Detected: &det}
-	if err := cfg.recordVersion("16.4 (Debian 16.4-1.pgdg120+1)", "PostgreSQL", false); err != nil {
+	if err := cfg.recordVersion("16.4 (Debian 16.4-1.pgdg120+1)", "PostgreSQL"); err != nil {
 		t.Fatal(err)
 	}
 	if det.ServerVersion != "16.4 (Debian 16.4-1.pgdg120+1)" {
@@ -36,7 +36,7 @@ func TestConfig_RecordVersion(t *testing.T) {
 
 func TestConfig_RecordVersion_FillsSinkWithoutAPin(t *testing.T) {
 	var det Detected
-	if err := (Config{Detected: &det}).recordVersion("8.0.36-log", "MySQL", false); err != nil {
+	if err := (Config{Detected: &det}).recordVersion("8.0.36-log", "MySQL"); err != nil {
 		t.Fatal(err)
 	}
 	if det.ServerVersion != "8.0.36-log" {
@@ -47,7 +47,7 @@ func TestConfig_RecordVersion_FillsSinkWithoutAPin(t *testing.T) {
 func TestConfig_RecordVersion_PinStillEnforced(t *testing.T) {
 	// Detection must not weaken the existing pin check (SQLETCH200).
 	var det Detected
-	err := (Config{ServerVersion: "16", Detected: &det}).recordVersion("15.2", "PostgreSQL", false)
+	err := (Config{ServerVersion: "16", Detected: &det}).recordVersion("15.2", "PostgreSQL")
 	var vme *VersionMismatchError
 	if !errors.As(err, &vme) {
 		t.Fatalf("pin mismatch must still fail, got %v", err)
@@ -57,17 +57,39 @@ func TestConfig_RecordVersion_PinStillEnforced(t *testing.T) {
 	}
 }
 
-func TestConfig_RecordVersion_PrefixMatchIsSQLiteOnly(t *testing.T) {
-	// SQLite's major is always 3, so its pin compares as a dotted
-	// prefix; the other engines compare majors.
-	if err := (Config{ServerVersion: "3.50"}).recordVersion("3.50.4", "SQLite", true); err != nil {
-		t.Errorf("3.50 must accept 3.50.4: %v", err)
+func TestConfig_RecordVersion_DottedPrefix(t *testing.T) {
+	// Every engine's pin compares as a dotted prefix: a pin equals the
+	// reported version's leading dotted-numeric run, or extends it by a
+	// further component. A base-image suffix ("16.4 (Debian …)",
+	// "8.0.36-log") must NOT read as a mismatch, but a differing patch
+	// must — the native MySQL catalog builder models >= 8.0.19
+	// COLUMN_TYPE rendering, so 8.0.19 vs 8.0.11 cannot be waved through.
+	accept := []struct{ pin, actual, server string }{
+		{"3.50", "3.50.4", "SQLite"},
+		{"16", "16.4", "PostgreSQL"},                             // major pin accepts any minor
+		{"16.4", "16.4 (Debian 16.4-1.pgdg120+1)", "PostgreSQL"}, // base-image suffix
+		{"8.0.19", "8.0.19", "MySQL"},
+		{"8.0.19", "8.0.19 (whatever)", "MySQL"},
+		{"8.0.19", "8.0.19-log", "MySQL"},
 	}
-	if err := (Config{ServerVersion: "3.50"}).recordVersion("3.5.4", "SQLite", true); err == nil {
-		t.Error("3.50 must reject 3.5.4")
+	for _, c := range accept {
+		if err := (Config{ServerVersion: c.pin}).recordVersion(c.actual, c.server); err != nil {
+			t.Errorf("%s pin %q must accept %q: %v", c.server, c.pin, c.actual, err)
+		}
 	}
-	if err := (Config{ServerVersion: "16"}).recordVersion("16.4", "PostgreSQL", false); err != nil {
-		t.Errorf("major pin 16 must accept 16.4: %v", err)
+
+	reject := []struct{ pin, actual, server string }{
+		{"3.50", "3.5.4", "SQLite"},
+		{"8.0.19", "8.0.11", "MySQL"}, // patch mismatch straddling the 8.0.19 boundary
+		{"8.0.19", "8.4.0", "MySQL"},
+		{"16", "15.2", "PostgreSQL"},
+		{"16.4", "16.5", "PostgreSQL"},
+	}
+	for _, c := range reject {
+		var vme *VersionMismatchError
+		if err := (Config{ServerVersion: c.pin}).recordVersion(c.actual, c.server); !errors.As(err, &vme) {
+			t.Errorf("%s pin %q must reject %q, got %v", c.server, c.pin, c.actual, err)
+		}
 	}
 }
 
