@@ -212,19 +212,19 @@ t.tenant_id = :scope_tenant_id
 	if err != nil {
 		t.Fatal(err)
 	}
-	ver := func(mod string) string {
-		m := regexp.MustCompile(regexp.QuoteMeta(mod) + ` (v[0-9A-Za-z.\-+]+)`).FindStringSubmatch(string(parentMod))
-		if m == nil {
-			t.Fatalf("%s version not found in parent go.mod", mod)
-		}
-		return m[1]
-	}
-	goMod := "module sqletchgen\n\ngo 1.27.0\n\nrequire (\n" +
-		"\tgithub.com/jackc/pgx/v5 " + ver("github.com/jackc/pgx/v5") + "\n" +
-		"\tgithub.com/moznion/go-optional " + ver("github.com/moznion/go-optional") + "\n" +
-		"\tgithub.com/moznion/go-sqletch v0.0.0\n)\n\n" +
+	// Reuse the parent module's COMPLETE (pruned) require graph rather than a
+	// hand-written minimal one. A minimal go.mod forces -mod=mod to recompute
+	// the module graph, at which point pgx's transitive github.com/jackc/pgpassfile
+	// pulls in its own test-only github.com/stretchr/testify@v1.3.0 requirement;
+	// with GOPROXY=off (CI has no module-cache entry for a version the parent
+	// never selects) that lookup fails. Carrying the parent's require block pins
+	// testify to the version the parent already selects, so a read-only build
+	// resolves everything from the module cache offline.
+	moduleLine := regexp.MustCompile(`(?m)^module .*$`)
+	childMod := moduleLine.ReplaceAllString(string(parentMod), "module sqletchgen")
+	childMod += "\nrequire github.com/moznion/go-sqletch v0.0.0\n" +
 		"replace github.com/moznion/go-sqletch => " + repoRoot + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(childMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	parentSum, err := os.ReadFile(filepath.Join(repoRoot, "go.sum"))
@@ -235,9 +235,11 @@ t.tenant_id = :scope_tenant_id
 		t.Fatal(err)
 	}
 
+	// Read-only build (the default): the require graph above is complete, so no
+	// module resolution is attempted and GOPROXY=off keeps it hermetic/offline.
 	cmd := exec.Command("go", "build", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=readonly", "GOPROXY=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated module failed to build: %v\n%s", err, out)
 	}
