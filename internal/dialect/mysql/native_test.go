@@ -202,6 +202,65 @@ func TestNativeDescribeSubsetRefusals(t *testing.T) {
 	}
 }
 
+func TestNativeDescribeRefusesWithClause(t *testing.T) {
+	// A WITH (CTE) clause is outside the native subset. It must be
+	// REFUSED as a NativeUnsupportedError (SQLETCH214), never silently
+	// ignored: the describers used to skip s.With entirely, so a query
+	// whose CTE the main statement does not reference (or whose CTE body
+	// is broken) verified offline and then failed at execution on a
+	// real server — exactly what fail-closed refusal exists to prevent.
+	for _, tt := range []struct{ name, sql string }{
+		// Unused CTE: the pre-fix sail-through — the main query is
+		// wholly valid, so describe returned a clean Desc (err=nil).
+		{"select unused cte", "WITH x AS (SELECT id FROM users) SELECT o.id FROM orgs o"},
+		// CTE body references a nonexistent table/column: pre-fix this
+		// was neither validated nor refused when unreferenced.
+		{"select unused broken cte", "WITH x AS (SELECT bogus FROM nonexistent) SELECT o.id FROM orgs o"},
+		// Referenced CTE: pre-fix failed with the wrong message
+		// ("table x doesn't exist"), an OracleError not a 214.
+		{"select referenced cte", "WITH x AS (SELECT id FROM users) SELECT x.id FROM x"},
+		{"recursive cte", "WITH RECURSIVE x AS (SELECT 1 AS n) SELECT o.id FROM orgs o"},
+		{"update with cte", "WITH x AS (SELECT id FROM users) UPDATE orgs SET name = 'a'"},
+		{"delete with cte", "WITH x AS (SELECT id FROM users) DELETE FROM orgs"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError for %q, got %T: %v", tt.sql, err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "WITH") {
+				t.Errorf("refusal %q/%q should mention WITH", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
+func TestNativeDescribeRefusesNamedWindow(t *testing.T) {
+	// A statement-level named WINDOW clause is the same sail-through
+	// class as WITH: its body lives only in SelectStmt.WindowSpecs, so a
+	// broken or unused named window used to pass describe with err=nil.
+	// It must be REFUSED (SQLETCH214). An inline OVER(...) in the select
+	// list is walked normally and stays out of this refusal.
+	for _, tt := range []struct{ name, sql string }{
+		// Unused named window whose body references a ghost column:
+		// pre-fix this returned a clean Desc.
+		{"unused named window", "SELECT o.id FROM orgs o WINDOW w AS (ORDER BY ghost)"},
+		{"named window referenced by name", "SELECT COUNT(*) OVER w AS c FROM orgs o WINDOW w AS (ORDER BY o.id)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError for %q, got %T: %v", tt.sql, err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "WINDOW") {
+				t.Errorf("refusal %q/%q should mention WINDOW", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
 func TestNativeDescribeInertInSubquery(t *testing.T) {
 	// The dialect's own arity-0 @in emission must pass: it is pinned
 	// skeleton text (dialect.InEmptySQL), not an authored subquery.
