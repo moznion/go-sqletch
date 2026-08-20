@@ -128,6 +128,143 @@ func TestOracle_Snapshot(t *testing.T) {
 	}
 }
 
+// SQLite marks a genuine INTEGER PRIMARY KEY rowid alias as implicitly
+// NOT NULL + auto-assigned, but that treatment is UNSOUND for the
+// look-alikes `pragma table_info` cannot distinguish from it: `INTEGER
+// PRIMARY KEY DESC` (not a rowid alias — accepts NULL), the first
+// INTEGER column of a composite `PRIMARY KEY(a,b)` (pk==1 is a position
+// within the key, not aliasing), and a WITHOUT ROWID single INTEGER PK
+// (no auto rowid, so no implicit default). Narrowing those to NOT NULL
+// scans a genuine NULL into a non-Option field; a spurious HasDefault
+// lets an INSERT that omits the column verify offline yet fail on the
+// engine.
+func TestOracle_Snapshot_RowidAliasHeuristic(t *testing.T) {
+	cases := []struct {
+		name       string
+		ddl        string
+		col        string
+		notNull    bool
+		hasDefault bool
+	}{
+		{
+			// Genuine rowid alias — behavior must be UNCHANGED.
+			name: "single INTEGER PRIMARY KEY (rowid alias)",
+			ddl:  "CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT)",
+			col:  "id", notNull: true, hasDefault: true,
+		},
+		{
+			name: "INTEGER PRIMARY KEY ASC (still a rowid alias)",
+			ddl:  "CREATE TABLE t (id INTEGER PRIMARY KEY ASC, x TEXT)",
+			col:  "id", notNull: true, hasDefault: true,
+		},
+		{
+			name: "INTEGER PRIMARY KEY AUTOINCREMENT (rowid alias)",
+			ddl:  "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, x TEXT)",
+			col:  "id", notNull: true, hasDefault: true,
+		},
+		{
+			// DESC disables the alias — the column accepts NULL.
+			name: "INTEGER PRIMARY KEY DESC (NOT a rowid alias)",
+			ddl:  "CREATE TABLE t (id INTEGER PRIMARY KEY DESC, x TEXT)",
+			col:  "id", notNull: false, hasDefault: false,
+		},
+		{
+			// pk==1 is the position within the composite key, not aliasing.
+			name: "composite PRIMARY KEY(a,b), first INTEGER col",
+			ddl:  "CREATE TABLE t (a INTEGER, b TEXT, PRIMARY KEY (a, b))",
+			col:  "a", notNull: false, hasDefault: false,
+		},
+		{
+			// No auto rowid: NotNull is real (table_info reports it), but
+			// there is NO implicit default — the INSERT must supply it.
+			name: "WITHOUT ROWID single INTEGER PK",
+			ddl:  "CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT) WITHOUT ROWID",
+			col:  "id", notNull: true, hasDefault: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := sqlite3.Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			if err := conn.Exec(tc.ddl); err != nil {
+				t.Fatalf("ddl: %v", err)
+			}
+			o := NewOracle(conn)
+			cat, err := o.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tbl := cat.Lookup("t")
+			if tbl == nil {
+				t.Fatal("table t missing from snapshot")
+			}
+			c := tbl.Col(tc.col)
+			if c == nil {
+				t.Fatalf("column %s missing", tc.col)
+			}
+			if c.NotNull != tc.notNull {
+				t.Errorf("%s.NotNull = %v, want %v", tc.col, c.NotNull, tc.notNull)
+			}
+			if c.HasDefault != tc.hasDefault {
+				t.Errorf("%s.HasDefault = %v, want %v", tc.col, c.HasDefault, tc.hasDefault)
+			}
+		})
+	}
+}
+
+// The metadata the heuristic produces must agree with the live engine:
+// a column marked nullable must actually accept NULL, and a column
+// without a default must actually be required by an INSERT that omits
+// it. This closes the loop the pure-metadata assertions above leave open.
+func TestOracle_Snapshot_RowidAliasMatchesEngine(t *testing.T) {
+	t.Run("DESC PK accepts NULL yet metadata said NOT NULL before the fix", func(t *testing.T) {
+		conn, err := sqlite3.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		if err := conn.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY DESC, x TEXT)"); err != nil {
+			t.Fatal(err)
+		}
+		// The engine really does store a NULL in this "PRIMARY KEY" column.
+		if err := conn.Exec("INSERT INTO t (id, x) VALUES (NULL, 'a')"); err != nil {
+			t.Fatalf("engine rejected NULL PK insert: %v", err)
+		}
+		cat, err := NewOracle(conn).Snapshot(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := cat.Lookup("t").Col("id"); c == nil || c.NotNull {
+			t.Errorf("id must be nullable to match the engine: %+v", c)
+		}
+	})
+
+	t.Run("WITHOUT ROWID PK is required at INSERT so HasDefault must be false", func(t *testing.T) {
+		conn, err := sqlite3.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		if err := conn.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT) WITHOUT ROWID"); err != nil {
+			t.Fatal(err)
+		}
+		// Omitting the PK fails on the engine — there is no auto rowid.
+		if err := conn.Exec("INSERT INTO t (x) VALUES ('a')"); err == nil {
+			t.Fatal("engine unexpectedly allowed a WITHOUT ROWID insert omitting the PK")
+		}
+		cat, err := NewOracle(conn).Snapshot(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := cat.Lookup("t").Col("id"); c == nil || c.HasDefault {
+			t.Errorf("id must not be defaulted to match the engine: %+v", c)
+		}
+	})
+}
+
 func TestOracle_ServerVersion(t *testing.T) {
 	o := NewOracle(testConn(t))
 	v, err := o.ServerVersion(context.Background())
