@@ -73,6 +73,35 @@ func TestRenderExcerpt_FallbackWithoutSource(t *testing.T) {
 	}
 }
 
+func TestRenderExcerpt_NegativeSpanNoPanic(t *testing.T) {
+	// Defense in depth: the span constructors clamp <0 to 0, but this
+	// exported renderer must not panic on a hand-built out-of-range span
+	// (a negative Start would index src[-1]). The CLI/LSP printer must
+	// never panic.
+	src := []byte("SELECT 1\nFROM t;")
+	cases := []Span{
+		{File: "q.sql", Start: -1},           // negative Start
+		{File: "q.sql", Start: -5, End: -3},  // negative Start and End
+		{File: "q.sql", Start: 2, End: -1},   // End < Start (negative)
+		{File: "q.sql", Start: -1, End: 100}, // negative Start, End past EOF
+	}
+	for _, sp := range cases {
+		d := Errorf(CodeMissingHeader, sp, "boom")
+		var got string
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("RenderExcerpt panicked on span %+v: %v", sp, r)
+				}
+			}()
+			got = d.RenderExcerpt(src)
+		}()
+		if !strings.Contains(got, "SQLETCH003") {
+			t.Errorf("span %+v: rendering must still carry the code: %q", sp, got)
+		}
+	}
+}
+
 func TestSortAndHasErrors(t *testing.T) {
 	diags := []Diagnostic{
 		Errorf(CodePositionalParam, Span{File: "b.sql", Start: 5}, "x"),

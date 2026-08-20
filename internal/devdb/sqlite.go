@@ -46,7 +46,7 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 			closeAll()
 			return nil, func() {}, err
 		}
-		if err := cfg.recordVersion(actual, "SQLite", true); err != nil {
+		if err := cfg.recordVersion(actual, "SQLite"); err != nil {
 			closeAll()
 			return nil, func() {}, err
 		}
@@ -86,12 +86,6 @@ func querySQLiteVersion(conn *sqlite3.Conn) (string, error) {
 		return "", fmt.Errorf("sqlite_version returned no row: %w", stmt.Err())
 	}
 	return stmt.ColumnText(0), nil
-}
-
-// versionPrefixMatch: SQLite's major is always 3, so the pin compares
-// as a dotted prefix ("3.50" matches "3.50.4" but not "3.5.x").
-func versionPrefixMatch(pinned, actual string) bool {
-	return actual == pinned || strings.HasPrefix(actual, pinned+".")
 }
 
 // resetSQLite drops every table and view in the main database.
