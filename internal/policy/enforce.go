@@ -26,12 +26,22 @@ import (
 // cli.resolvedChecks). Unweavable positions are not re-checked here:
 // they are SQLETCH125 at weave time, which already stops the
 // pipeline before this pass.
-func Enforce(profile dialect.LexerProfile, pols []Policy, q *template.QueryTemplate, tree dialect.Tree) []diagnostics.Diagnostic {
+func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *template.QueryTemplate, tree dialect.Tree) []diagnostics.Diagnostic {
 	var diags []diagnostics.Diagnostic
 
 	kind := tree.Kind()
 	rels := tree.Relations()
 	deep := tree.DeepTables()
+	// Independently re-derive the non-maximal overread set (a designated
+	// read living only in a non-first @choose alternative or @order-by
+	// @default). A correct weaver refuses these at weave time (SQLETCH125,
+	// which stops the pipeline before this pass), so this fires only if
+	// the weaver regressed and let one through — the same
+	// catch-the-weaver role the conjunct re-derivation below plays.
+	over := overreadDeep(profile, fe, q, deep)
+	applies := func(p *Policy) bool {
+		return analyzeApplicability(p, kind, rels, deep).active || len(designatedOverread(p, over, kind)) > 0
+	}
 
 	byName := map[string]*Policy{}
 	for i := range pols {
@@ -47,7 +57,7 @@ func Enforce(profile dialect.LexerProfile, pols []Policy, q *template.QueryTempl
 				WithHint("declared policies come from sqletch.yaml `policies:`; remove the opt-out or fix the name"))
 			continue
 		}
-		if !analyzeApplicability(p, kind, rels, deep).active {
+		if !applies(p) {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, o.Span,
 				"@policy-optout: policy %q does not apply to this query", o.Policy).
 				WithHint("the query touches no table designated by %q (in a kind it covers); remove the opt-out", o.Policy))
@@ -58,10 +68,21 @@ func Enforce(profile dialect.LexerProfile, pols []Policy, q *template.QueryTempl
 	for i := range pols {
 		p := &pols[i]
 		a := analyzeApplicability(p, kind, rels, deep)
-		if !a.active || a.hidden || kind == dialect.StmtInsert {
+		if _, ok := optOutFor(q, p.Name); ok {
 			continue
 		}
-		if _, ok := optOutFor(q, p.Name); ok {
+		// Weaver-regression backstop: a designated read confined to a
+		// non-maximal rendering should have been refused at weave time.
+		// If it reached here, the woven output ships it unscoped — report
+		// it rather than let it leak.
+		if names := designatedOverread(p, over, kind); len(names) > 0 {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+				"query reads policy-designated table %q inside a non-maximal rendering (a @choose alternative or @order-by @default) that policy %q cannot scope",
+				names[0], p.Name).
+				WithHint("that rendering is invisible to the weaver; restructure so the designated read appears in every shape, or opt out with `-- @policy-optout: %s (reason)`", p.Name))
+			continue
+		}
+		if !a.active || a.hidden || kind == dialect.StmtInsert {
 			continue
 		}
 		for _, r := range a.topOcc {

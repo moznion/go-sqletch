@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
@@ -63,6 +64,7 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	w := &weaver{profile: profile, q: q, maxR: maxR, tree: tree, kind: tree.Kind()}
 	w.rels = tree.Relations()
 	w.deep = tree.DeepTables()
+	w.overread = overreadDeep(profile, fe, q, w.deep)
 	w.segments, w.segmentable = skeletonConjuncts(profile, q)
 
 	res := Result{Query: q}
@@ -94,6 +96,15 @@ type weaver struct {
 	kind    dialect.StmtKind
 	rels    []dialect.RelRef
 	deep    []dialect.TableRef
+
+	// overread is the set of lowercased base-table names that some
+	// non-maximal verified rendering reads more often than the maximal
+	// rendering does — a designated read living only in a non-first
+	// @choose alternative or an @order-by @default body, invisible to
+	// the maximal rendering the weaver scopes from. Any policy
+	// designating such a name is refused (SQLETCH125): it cannot be
+	// woven and must not ship unscoped.
+	overread map[string]bool
 
 	// segments are the query's unconditional skeleton WHERE conjuncts
 	// as normalized token sequences (the idempotence input);
@@ -143,6 +154,110 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []dialect.RelRe
 	return a
 }
 
+// overreadDeep returns the set of lowercased base-table names that some
+// non-maximal verified rendering reads more often than the maximal
+// rendering does. Only @choose alternatives and @order-by @default
+// bodies can introduce such a read: an @in arity-0 rendering emits a
+// table-free placeholder and an empty @filter-tree emits TRUE, so
+// neither adds a base-table reference the maximal rendering lacks. The
+// maximal rendering itself provides the baseline (maxDeep).
+//
+// Candidate renderings are materialised and discarded one at a time, so
+// peak memory is a single rendering regardless of the (linear) rendering
+// count — the SQLETCH302 shape cap guards the simultaneous Renderings
+// set, which this scan never builds. A rendering that fails to render or
+// parse is skipped: the ordinary pipeline diagnostics own that failure,
+// and an unparseable alternative cannot ship valid unscoped SQL.
+func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template.QueryTemplate, maxDeep []dialect.TableRef) map[string]bool {
+	base := map[string]int{}
+	for _, tr := range maxDeep {
+		base[strings.ToLower(tr.Name)]++
+	}
+	over := map[string]bool{}
+	note := func(r ast.Rendering, err error) {
+		if err != nil {
+			return
+		}
+		t, perr := fe.Parse(r.SQL)
+		if perr != nil || t.StmtCount() != 1 {
+			return
+		}
+		cur := map[string]int{}
+		for _, tr := range t.DeepTables() {
+			cur[strings.ToLower(tr.Name)]++
+		}
+		for name, cnt := range cur {
+			if cnt > base[name] {
+				over[name] = true
+			}
+		}
+	}
+
+	chooseIdx, orderCount := 0, 0
+	for _, it := range q.Items {
+		switch c := it.(type) {
+		case *template.Choose:
+			n := len(c.Cases)
+			if c.Default != nil {
+				n++
+			}
+			for ord := 1; ord < n; ord++ {
+				r, err := ast.Render(profile, q, ast.CaseSelection{chooseIdx: ord})
+				note(r, err)
+			}
+			chooseIdx++
+		case *template.OrderBy:
+			orderCount++
+		}
+	}
+	if orderCount > 0 {
+		orderIdx := 0
+		for _, it := range q.Items {
+			o, ok := it.(*template.OrderBy)
+			if !ok {
+				continue
+			}
+			if o.Default != nil {
+				orders := make(ast.OrderSelection, orderCount)
+				orders[orderIdx] = []uint8{} // empty non-nil = @default body
+				r, err := ast.RenderShape(profile, q, ^uint64(0), nil, orders, nil)
+				note(r, err)
+			}
+			orderIdx++
+		}
+	}
+	if len(over) == 0 {
+		return nil
+	}
+	return over
+}
+
+// designatedOverread returns, in sorted order, the overread table names
+// a policy designates — the designated reads that live only in a
+// non-maximal rendering. It is empty unless the policy covers the
+// statement's kind (an INSERT's overread is a read in an INSERT … SELECT
+// case body, gated on coversSelect like every other read).
+func designatedOverread(p *Policy, over map[string]bool, kind dialect.StmtKind) []string {
+	if len(over) == 0 {
+		return nil
+	}
+	applies := p.appliesTo(kind)
+	if kind == dialect.StmtInsert {
+		applies = p.coversSelect()
+	}
+	if !applies {
+		return nil
+	}
+	var out []string
+	for name := range over {
+		if p.designates(name) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // optOutFor returns the query's first opt-out naming the policy.
 func optOutFor(q *template.QueryTemplate, name string) (template.PolicyOptOut, bool) {
 	for _, o := range q.PolicyOptOuts {
@@ -158,7 +273,8 @@ func optOutFor(q *template.QueryTemplate, name string) (template.PolicyOptOut, b
 // texts to insert, and diagnostics.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnostic) {
 	a := analyzeApplicability(p, w.kind, w.rels, w.deep)
-	if !a.active {
+	over := designatedOverread(p, w.overread, w.kind)
+	if !a.active && len(over) == 0 {
 		return nil, nil, nil
 	}
 	// An honored opt-out suppresses weaving and the unweavable
@@ -166,6 +282,16 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []diagnostics.Diagnos
 	// touch is SQLETCH126, owned by the enforcement pass.
 	if o, ok := optOutFor(w.q, p.Name); ok {
 		return &WovenPolicy{Policy: p, OptedOut: true, OptOutReason: o.Reason}, nil, nil
+	}
+	// A designated table read only in a non-maximal rendering — a
+	// non-first @choose alternative or an @order-by @default body — is
+	// invisible to the maximal rendering the weaver scopes from, so no
+	// spliced WHERE conjunct reaches it. Refuse rather than ship it
+	// completely unscoped (a silent tenant-scoping leak); this holds
+	// whether or not the policy also bites the maximal rendering.
+	if len(over) > 0 {
+		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
+			fmt.Sprintf("designated table %q is read only inside a non-first @choose alternative or an @order-by @default body, a rendering the weaver cannot see or scope (it works from the maximal rendering)", over[0]))}
 	}
 	if w.kind == dialect.StmtInsert {
 		return nil, nil, []diagnostics.Diagnostic{w.unweavable(p, w.q.HeaderSpan,
