@@ -170,11 +170,13 @@ type joinOnResult struct {
 	// the join that null-extends this occurrence — gating it would not
 	// remove the designated table's own rows (a FULL join preserves both
 	// sides; a table on the preserved side of its own join is
-	// null-extended farther out). Weaving there is a silent tenant leak,
-	// so the weaver refuses (SQLETCH125) and the enforcer treats the
-	// conjunct as absent (SQLETCH124). The proven-equivalent inner/cross
-	// crossings (scoping the inner ON removes the rows before the group
-	// is null-extended) do NOT set it.
+	// null-extended farther out; or the reference's own join is an
+	// ON-less CROSS join and the located ON belongs to a later enclosing
+	// join). Weaving there is a silent tenant leak, so the weaver refuses
+	// (SQLETCH125) and the enforcer treats the conjunct as absent
+	// (SQLETCH124). The proven-equivalent inner-join crossings (scoping
+	// the inner ON removes the rows before the group is null-extended) do
+	// NOT set it.
 	wrongJoin bool
 	cs        clauseScan
 }
@@ -207,7 +209,10 @@ type joinOnResult struct {
 // so finish() can flag wrongJoin (a FULL join preserves both sides; a
 // table on the preserved side of its own outer join is null-extended
 // farther out) — for those the weaver refuses rather than weave a
-// leaking conjunct.
+// leaking conjunct. It also flags wrongJoin when the reference's own
+// introducing join is an ON-less CROSS join: the forward scan then
+// reaches a LATER enclosing join's ON (a SECOND join-introducing keyword
+// is crossed before the ON), which does not gate the reference's rows.
 func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int, ownJoin dialect.JoinType) joinOnResult {
 	res := joinOnResult{cs: clauseScan{lexOK: true, start: -1, end: -1}}
 	startItem := -1
@@ -231,13 +236,25 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	// join); crossedJoinKw distinguishes "not yet crossed" from a value.
 	crossedJoinKw := false
 	crossedJoin := dialect.JoinInner
+	// firstJoinAnchored becomes true once the reference's own introducing
+	// join is complete — its JOIN/STRAIGHT_JOIN anchor token has been
+	// crossed (the modifier keywords LEFT/RIGHT/FULL/INNER/CROSS precede
+	// that anchor). secondJoin then records that ANOTHER join-introducing
+	// keyword was crossed before reaching the ON: the reference's own
+	// join was therefore ON-less (a CROSS join, which has no ON) and the
+	// located ON belongs to a later, enclosing join whose preserve/
+	// null-extend relationship to the reference is not modeled. Weaving a
+	// scoping conjunct into that mis-attributed ON gates nothing and
+	// leaks the designated table's own rows, so it is a wrongJoin.
+	firstJoinAnchored := false
+	secondJoin := false
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
 		res.found = inOn
 		res.noOn = !inOn
 		if inOn {
-			res.wrongJoin = !onGates(ownJoin, crossedJoinKw, crossedJoin)
+			res.wrongJoin = secondJoin || !onGates(ownJoin, crossedJoinKw, crossedJoin)
 		}
 		return res
 	}
@@ -300,9 +317,27 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 						// relation. The FIRST such keyword names its
 						// introducing join (LEFT/RIGHT/FULL are outer;
 						// everything else in joinKeywords is inner/cross).
-						if !crossedJoinKw {
+						switch {
+						case !crossedJoinKw:
 							crossedJoinKw = true
 							crossedJoin = joinKindOf(up)
+							if up == "JOIN" || up == "STRAIGHT_JOIN" {
+								firstJoinAnchored = true
+							}
+						case !firstJoinAnchored:
+							// Still inside the first join's keyword group
+							// (e.g. the JOIN of a `CROSS JOIN`, or a `LEFT
+							// OUTER JOIN`): the anchor completes it.
+							if up == "JOIN" || up == "STRAIGHT_JOIN" {
+								firstJoinAnchored = true
+							}
+						default:
+							// The first join was already complete and its
+							// relation crossed: this keyword introduces a
+							// SECOND join whose ON we are about to locate. The
+							// reference's own join was ON-less, so that ON
+							// cannot scope the reference's rows.
+							secondJoin = true
 						}
 						continue
 					case inOn && (joinKeywords[up] || tailKeywords[up] || up == "WHERE"):
