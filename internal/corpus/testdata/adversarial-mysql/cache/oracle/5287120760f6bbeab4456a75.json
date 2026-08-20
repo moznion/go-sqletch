@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT s.id FROM second AS s WHERE s.label IN (SELECT NULL FROM DUAL WHERE FALSE)",
+  "params": null,
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 2,
+      "src_att": 1
+    }
+  ]
+}

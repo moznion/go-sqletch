@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT t.c_dec, t.c_float, t.c_dbl FROM every_type AS t",
+  "params": null,
+  "columns": [
+    {
+      "name": "c_dec",
+      "oid": 246,
+      "type_name": "decimal",
+      "src_rel": 1,
+      "src_att": 21
+    },
+    {
+      "name": "c_float",
+      "oid": 4,
+      "type_name": "float",
+      "src_rel": 1,
+      "src_att": 22
+    },
+    {
+      "name": "c_dbl",
+      "oid": 5,
+      "type_name": "double",
+      "src_rel": 1,
+      "src_att": 23
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "-- @column total: bigint\nSELECT count(*) AS total FROM second",
+  "params": null,
+  "columns": [
+    {
+      "name": "total",
+      "oid": 8,
+      "type_name": "bigint"
+    }
+  ]
+}

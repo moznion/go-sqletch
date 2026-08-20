@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,4 +207,179 @@ func TestNativeDifferential(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("generative", func(t *testing.T) {
+		for _, sql := range generativeSQL() {
+			want, err := entryBytes(t, server, sql)
+			if err != nil {
+				t.Errorf("generator emitted server-rejected SQL (generator bug): %s: %v", sql, err)
+				continue
+			}
+			got, err := entryBytes(t, native, sql)
+			if err != nil {
+				t.Errorf("native rejects a generated subset statement: %s: %v", sql, err)
+				continue
+			}
+			if !bytes.Equal(want, got) {
+				t.Errorf("generative drift on %s:\nserver: %s\nnative: %s", sql, want, got)
+			}
+		}
+	})
+}
+
+// ---- seeded generative differential (design 15 §7.3) -----------------------
+//
+// A deterministic generator over the v1 subset grammar; every
+// generated statement must be accepted by BOTH backends with
+// byte-identical answers. Implemented as a seeded generator rather
+// than a go-fuzz target because each verdict needs the live server —
+// the offline robustness half is FuzzNativeDescribe.
+
+type sqlGen struct{ r *rand.Rand }
+
+// Projection-safe every_type columns (ENUM/SET excluded by design).
+var etCols = []string{
+	"id", "c_int", "c_uint", "c_tiny", "c_bool", "c_small", "c_med",
+	"c_ubig", "c_vchar", "c_char", "c_text", "c_ttext", "c_mtext",
+	"c_ltext", "c_blob", "c_tblob", "c_mblob", "c_lblob", "c_vbin",
+	"c_bin", "c_dec", "c_float", "c_dbl", "c_date", "c_dt", "c_ts",
+	"c_time", "c_year", "c_json", "c_bit",
+}
+var etNullable = []string{"c_vchar", "c_text", "c_blob", "c_date", "c_ts", "c_json"}
+var secondCols = []string{"id", "ref", "label"}
+
+func (g *sqlGen) pick(ss []string) string { return ss[g.r.IntN(len(ss))] }
+
+func (g *sqlGen) next() string {
+	switch g.r.IntN(10) {
+	case 0:
+		return g.insert()
+	case 1:
+		return g.update()
+	case 2:
+		return g.delete()
+	case 3, 4:
+		return g.aggregateSelect()
+	default:
+		return g.plainSelect()
+	}
+}
+
+func (g *sqlGen) plainSelect() string {
+	join := g.r.IntN(3) == 0
+	var items, conds []string
+	if join {
+		for n := 1 + g.r.IntN(3); n > 0; n-- {
+			if g.r.IntN(2) == 0 {
+				items = append(items, "s."+g.pick(secondCols))
+			} else {
+				items = append(items, "t."+g.pick(etCols))
+			}
+		}
+	} else {
+		for n := 1 + g.r.IntN(3); n > 0; n-- {
+			col := g.pick(secondCols)
+			if g.r.IntN(3) == 0 {
+				col = "s." + col
+			}
+			items = append(items, col)
+		}
+	}
+	for n := g.r.IntN(3); n > 0; n-- {
+		switch g.r.IntN(4) {
+		case 0:
+			conds = append(conds, "s.id = ?")
+		case 1:
+			conds = append(conds, "s.ref > ?")
+		case 2:
+			conds = append(conds, "s.label IN (?)")
+		default:
+			conds = append(conds, "s.label IN (SELECT NULL FROM DUAL WHERE FALSE)")
+		}
+	}
+	if join && g.r.IntN(2) == 0 {
+		conds = append(conds, "t."+g.pick(etNullable)+" IS NULL")
+	}
+	sql := "SELECT " + strings.Join(items, ", ") + " FROM second AS s"
+	if join {
+		sql += " JOIN every_type AS t ON t.id = s.ref"
+	}
+	if len(conds) > 0 {
+		sql += " WHERE " + strings.Join(conds, " AND ")
+	}
+	if g.r.IntN(2) == 0 {
+		sql += " ORDER BY s.id"
+		if g.r.IntN(2) == 0 {
+			sql += " DESC"
+		}
+	}
+	if g.r.IntN(2) == 0 {
+		sql += " LIMIT ?"
+	}
+	return sql
+}
+
+// aggregateSelect emits aggregate-only projections so
+// ONLY_FULL_GROUP_BY (on by default) accepts every generated shape.
+func (g *sqlGen) aggregateSelect() string {
+	var hints, items []string
+	n := 1 + g.r.IntN(2)
+	for i := range n {
+		alias := fmt.Sprintf("agg_%d", i)
+		switch g.r.IntN(3) {
+		case 0:
+			hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			items = append(items, "count(*) AS "+alias)
+		case 1:
+			hints = append(hints, fmt.Sprintf("-- @column %s: bigint", alias))
+			items = append(items, "max(s.id) AS "+alias)
+		default:
+			hints = append(hints, fmt.Sprintf("-- @column %s: varchar(32)", alias))
+			items = append(items, "min(s.label) AS "+alias)
+		}
+	}
+	sql := strings.Join(hints, "\n") + "\nSELECT " + strings.Join(items, ", ") + " FROM second AS s"
+	grouped := g.r.IntN(2) == 0
+	if grouped {
+		sql += " GROUP BY s.ref"
+		if g.r.IntN(2) == 0 {
+			sql += " HAVING agg_0 > ?"
+		}
+	}
+	if g.r.IntN(2) == 0 {
+		sql += " ORDER BY agg_0"
+	}
+	return sql
+}
+
+func (g *sqlGen) insert() string {
+	if g.r.IntN(2) == 0 {
+		return "INSERT INTO second (id, ref, label) VALUES (?, ?, ?)"
+	}
+	return "INSERT INTO second (id, ref, label) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE label = ?, ref = ref + 1"
+}
+
+func (g *sqlGen) update() string {
+	if g.r.IntN(2) == 0 {
+		return "UPDATE second AS s SET s.label = ?, s.ref = s.ref + 1 WHERE s.id = ?"
+	}
+	return "UPDATE second SET label = ? WHERE ref IN (?)"
+}
+
+func (g *sqlGen) delete() string {
+	if g.r.IntN(2) == 0 {
+		return "DELETE FROM second WHERE id = ?"
+	}
+	return "DELETE FROM second WHERE label IN (?) ORDER BY id LIMIT 5"
+}
+
+const generativeCases = 200
+
+func generativeSQL() []string {
+	g := &sqlGen{r: rand.New(rand.NewPCG(20260802, 15))}
+	out := make([]string, 0, generativeCases)
+	for range generativeCases {
+		out = append(out, g.next())
+	}
+	return out
 }

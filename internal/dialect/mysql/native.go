@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -48,7 +47,7 @@ func (o *NativeOracle) Describe(ctx context.Context, sql string) (dialect.Desc, 
 	if err := ctx.Err(); err != nil {
 		return dialect.Desc{}, err
 	}
-	stmts, _, err := parser.New().ParseSQL(sql)
+	stmts, err := parseSQL(sql)
 	if err != nil {
 		return dialect.Desc{}, toParseOracleError(sql, err)
 	}

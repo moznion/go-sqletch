@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "schema_fp": "44d17665cce4d5e44dd2b14be8d402361f288d230137214fecd7edfd2848536f",
+  "rendered_sql": "SELECT t.id, t.c_int, t.c_uint, t.c_tiny, t.c_bool, t.c_small, t.c_med, t.c_ubig FROM every_type AS t",
+  "params": null,
+  "columns": [
+    {
+      "name": "id",
+      "oid": 8,
+      "type_name": "bigint",
+      "src_rel": 1,
+      "src_att": 1
+    },
+    {
+      "name": "c_int",
+      "oid": 3,
+      "type_name": "int",
+      "src_rel": 1,
+      "src_att": 2
+    },
+    {
+      "name": "c_uint",
+      "oid": 259,
+      "type_name": "int unsigned",
+      "src_rel": 1,
+      "src_att": 3
+    },
+    {
+      "name": "c_tiny",
+      "oid": 1,
+      "type_name": "tinyint",
+      "src_rel": 1,
+      "src_att": 4
+    },
+    {
+      "name": "c_bool",
+      "oid": 1,
+      "type_name": "tinyint",
+      "src_rel": 1,
+      "src_att": 5
+    },
+    {
+      "name": "c_small",
+      "oid": 2,
+      "type_name": "smallint",
+      "src_rel": 1,
+      "src_att": 6
+    },
+    {
+      "name": "c_med",
+      "oid": 9,
+      "type_name": "mediumint",
+      "src_rel": 1,
+      "src_att": 7
+    },
+    {
+      "name": "c_ubig",
+      "oid": 264,
+      "type_name": "bigint unsigned",
+      "src_rel": 1,
+      "src_att": 8
+    }
+  ]
+}
