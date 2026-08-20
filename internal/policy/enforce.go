@@ -97,7 +97,12 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 			present := false
 			if r.NullableSide {
 				if res := onScanFor(profile, q, maxR, r, onScans); res != nil {
-					present = res.found && res.cs.lexOK && !res.cs.hasOR &&
+					// wrongJoin: the located ON does not gate this
+					// occurrence's rows (D2a soundness), so a conjunct there
+					// does not scope the table — treat it as absent and
+					// report SQLETCH124, independently re-deriving the same
+					// decision the weaver makes when it refuses (SQLETCH125).
+					present = res.found && !res.wrongJoin && res.cs.lexOK && !res.cs.hasOR &&
 						segsContain(profile, res.cs.segs, conjunct)
 				}
 			} else {
@@ -135,7 +140,7 @@ func onScanFor(profile dialect.LexerProfile, q *template.QueryTemplate, maxR ast
 	if res, ok := memo[tOff]; ok {
 		return res
 	}
-	res := joinOn(profile, q, tOff)
+	res := joinOn(profile, q, tOff, r.Join)
 	memo[tOff] = &res
 	return &res
 }

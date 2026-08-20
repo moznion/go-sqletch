@@ -341,11 +341,11 @@ func (w *weaver) relTemplateOff(r dialect.RelRef) (int, bool) {
 }
 
 // joinOnFor memoizes the ON-clause scan per relation occurrence.
-func (w *weaver) joinOnFor(relOff int) *joinOnResult {
+func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 	if res, ok := w.onInfo[relOff]; ok {
 		return res
 	}
-	res := joinOn(w.profile, w.q, relOff)
+	res := joinOn(w.profile, w.q, relOff, ownJoin)
 	w.onInfo[relOff] = &res
 	return &res
 }
@@ -409,10 +409,21 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []onNeed, []diagnosti
 				return fail(w.unweavable(p, w.relSpan(r),
 					fmt.Sprintf("table %q sits on the null-extended side of an outer join, and its reference cannot be located in the template", r.Table)))
 			}
-			res := w.joinOnFor(relOff)
+			res := w.joinOnFor(relOff, r.Join)
 			if !res.found || !res.cs.lexOK || res.cs.start < 0 {
 				return fail(w.unweavable(p, w.relSpan(r),
 					fmt.Sprintf("table %q sits on the null-extended side of a join with no ON expression to extend (USING/NATURAL/comma join); rewrite it with an explicit ON", r.Table)))
+			}
+			if res.wrongJoin {
+				// The located ON does not belong to the join that
+				// null-extends this occurrence (a FULL join preserves both
+				// sides, or the table is on the preserved side of its own
+				// outer join and null-extended farther out). Weaving there
+				// would silently leak the designated table's own rows;
+				// refuse rather than ship a leak the SQLETCH124 pass would
+				// (correctly) then also reject.
+				return fail(w.unweavable(p, w.relSpan(r),
+					fmt.Sprintf("table %q is null-extended by an outer join whose ON clause cannot scope its own rows (a FULL join preserves both sides, or the table is on the preserved side of its own join and null-extended by an enclosing join); a WHERE conjunct would turn the join inner and an ON conjunct on the wrong join would leak", r.Table)))
 			}
 			onOcc = append(onOcc, struct {
 				rel dialect.RelRef

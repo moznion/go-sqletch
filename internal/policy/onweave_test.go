@@ -32,11 +32,9 @@ func TestWeaveON_Golden(t *testing.T) {
 			src:  "-- name: Q :many\nSELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id WHERE u.ok\n",
 			want: "SELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
 		},
-		{
-			name: "FULL JOIN: designated side gets the ON conjunct",
-			src:  "-- name: Q :many\nSELECT u.id FROM users u FULL JOIN orders o ON o.user_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM users u FULL JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
-		},
+		// NOTE: a FULL JOIN preserves both operands, so no ON clause can
+		// scope the designated table's own rows — that case is REFUSED
+		// (SQLETCH125), asserted in TestWeaveON_WrongJoinRefuses.
 		{
 			name: "mixed: WHERE for the inner table, ON for the outer one",
 			src:  "-- name: Q :many\nSELECT o.id FROM orders o LEFT JOIN order_items i ON i.order_id = o.id WHERE o.ok\n",
