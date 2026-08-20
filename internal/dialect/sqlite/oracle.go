@@ -201,6 +201,28 @@ func (o *Oracle) relations() ([]relInfo, error) {
 }
 
 func (o *Oracle) tableColumns(table string, out *cache.Table) error {
+	// Only a genuine rowid alias gets the implicit-NOT-NULL and
+	// auto-assigned (defaulted) treatment below, and `pragma table_info`
+	// alone cannot tell one apart. `INTEGER PRIMARY KEY DESC` is NOT a
+	// rowid alias (SQLite datatype3 §2.4.2 — DESC disables the alias),
+	// and `table_info.pk` is the 1-based position WITHIN the primary
+	// key, so the first INTEGER column of a composite `PRIMARY KEY(a,b)`
+	// also reports pk==1. Both would be wrongly narrowed to NOT NULL —
+	// SQLite lets a non-alias PRIMARY KEY column hold NULL — and a
+	// WITHOUT ROWID table has no auto rowid, so HasDefault must stay
+	// false or an INSERT that omits the column verifies offline yet
+	// fails NOT NULL on the engine.
+	//
+	// The reliable discriminator: SQLite materializes every one of those
+	// non-alias primary keys as a real `origin='pk'` index (a rowid
+	// alias never gets one). So a column is a rowid alias iff it is a
+	// single INTEGER PRIMARY KEY column (pk==1, INTEGER affinity) AND the
+	// table has no `origin='pk'` index — which at once excludes DESC,
+	// composite, and WITHOUT ROWID primary keys.
+	hasPKIndex, err := o.hasPrimaryKeyIndex(table)
+	if err != nil {
+		return err
+	}
 	stmt, err := o.prepareOne(`SELECT name, type, "notnull", dflt_value IS NOT NULL, pk FROM pragma_table_info(?)`)
 	if err != nil {
 		return err
@@ -221,9 +243,11 @@ func (o *Oracle) tableColumns(table string, out *cache.Table) error {
 		if tr, ok := AffinityRef(declType); ok {
 			typOID = tr.OID
 		}
-		// INTEGER PRIMARY KEY is the rowid alias: implicitly NOT NULL
-		// and auto-assigned (counts as defaulted).
-		rowidAlias := pk == 1 && typOID == TypeInteger
+		// A single INTEGER PRIMARY KEY in a rowid table is the rowid
+		// alias: implicitly NOT NULL and auto-assigned (counts as
+		// defaulted). The pk index guards against DESC/composite/WITHOUT
+		// ROWID false positives (see the discriminator above).
+		rowidAlias := pk == 1 && typOID == TypeInteger && !hasPKIndex
 		out.Cols = append(out.Cols, cache.Column{
 			Name: name, Att: att, TypeOID: typOID, TypeName: declType,
 			NotNull:    notNull || rowidAlias,
@@ -231,6 +255,29 @@ func (o *Oracle) tableColumns(table string, out *cache.Table) error {
 		})
 	}
 	return stmt.Err()
+}
+
+// hasPrimaryKeyIndex reports whether the table has a materialized
+// `origin='pk'` index. SQLite creates one for every primary key that is
+// NOT a rowid alias — a composite key, a WITHOUT ROWID key, a DESC
+// single key, or a non-INTEGER single key — and never for the rowid
+// alias itself, so its absence is the signal that a single INTEGER
+// PRIMARY KEY really is the rowid.
+func (o *Oracle) hasPrimaryKeyIndex(table string) (bool, error) {
+	stmt, err := o.prepareOne(`SELECT origin FROM pragma_index_list(?)`)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = stmt.Close() }()
+	if err := stmt.BindText(1, table); err != nil {
+		return false, err
+	}
+	for stmt.Step() {
+		if stmt.ColumnText(0) == "pk" {
+			return true, stmt.Err()
+		}
+	}
+	return false, stmt.Err()
 }
 
 func (o *Oracle) ServerVersion(ctx context.Context) (string, error) {
