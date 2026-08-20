@@ -547,6 +547,139 @@ func TestLoad_LargeFlatConfigLoads(t *testing.T) {
 	}
 }
 
+// flowNest builds a sqletch.yaml whose queries value is a flow collection
+// nested `depth` levels deep (`[[[ … ]]]`). One byte per level, so a deep
+// document stays well under maxConfigBytes — yet goccy/go-yaml's parser is
+// superlinear in MEMORY in nesting depth (no aliases involved), so parsing
+// it OOM-kills the process. depth 20000 (~40 KB) allocates ~1.28 GiB;
+// near-cap (~500k deep, ~1 MB) OOM-kills after ~71s. This is why the depth
+// pre-scan MUST run before any goccy parse.
+func flowNest(depth int) string {
+	return validYAML + "queries: " + strings.Repeat("[", depth) + strings.Repeat("]", depth) + "\n"
+}
+
+// TestLoad_YAMLDeepNestingRejected pins the deep-nesting DoS fix: a deeply
+// nested flow document is refused with SQLETCH300 by the raw-byte depth
+// pre-scan, in O(input), never parsed. The depth used here (200000,
+// ~400 KB, still under the 1 MiB cap) is one that on the UNFIXED code is
+// grossly superlinear — measured ~3s at depth 120k and OOM near the cap —
+// so the deadline both proves the fix works and guarantees a regression
+// fails by TIMEOUT rather than wedging (or OOMing) CI. Do not remove the
+// deadline: without the pre-scan this input takes the parser to gigabytes.
+func TestLoad_YAMLDeepNestingRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, dir, "sqletch.yaml", flowNest(200000))
+
+	done := make(chan []diagnostics.Diagnostic, 1)
+	go func() {
+		_, diags := Load(path)
+		done <- diags
+	}()
+
+	select {
+	case diags := <-done:
+		refused := false
+		for _, d := range diags {
+			if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error &&
+				strings.Contains(d.Message, "nesting is too deep") {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Fatalf("deep-nesting doc must be refused with SQLETCH300 (nesting too deep), got %+v", diags)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Load did not reject a deeply nested doc within 2s (deep-nesting OOM DoS regression): the raw-byte depth pre-scan must refuse it before any goccy parse")
+	}
+}
+
+// TestLoad_YAMLDeepNestingCurlyRejected pins that the pre-scan also bounds
+// flow-MAPPING nesting ({{{ … }}}), not just sequences.
+func TestLoad_YAMLDeepNestingCurlyRejected(t *testing.T) {
+	dir := t.TempDir()
+	yaml := validYAML + "database: " + strings.Repeat("{a: ", 200000) + "1" + strings.Repeat("}", 200000) + "\n"
+	path := write(t, dir, "sqletch.yaml", yaml)
+
+	done := make(chan []diagnostics.Diagnostic, 1)
+	go func() {
+		_, diags := Load(path)
+		done <- diags
+	}()
+
+	select {
+	case diags := <-done:
+		refused := false
+		for _, d := range diags {
+			if d.Code == diagnostics.CodeConfigParse && strings.Contains(d.Message, "nesting is too deep") {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Fatalf("deep flow-mapping doc must be refused with SQLETCH300, got %+v", diags)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Load did not reject a deeply nested flow-mapping doc within 2s")
+	}
+}
+
+// TestLoad_ModestNestingLoads makes sure the depth cap does not reject an
+// ordinary config that uses a handful of flow-collection levels and string
+// values that merely CONTAIN brackets — the pre-scan must mask brackets
+// inside quoted strings and comments, and tolerate balanced brackets in
+// plain scalars, so a real config still loads.
+func TestLoad_ModestNestingLoads(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `version: 1
+dialect: postgres
+server_version: "16" # a comment with a [bracket] { that must not count
+database:
+  dsn: "postgres://x?opt=[a,b,c]"
+schema:
+  files: [db/schema.sql]
+queries: [queries/*.sql, "lit[0][1][2]"]
+output:
+  package: gen
+  path: gen
+overrides:
+  - {query: q, column: c, nullable: true}
+`
+	_, diags := Load(write(t, dir, "sqletch.yaml", yaml))
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse {
+			t.Fatalf("modestly nested config wrongly refused: %+v", d)
+		}
+	}
+}
+
+// TestExceedsNestingDepth unit-tests the raw-byte pre-scan directly: it
+// must count only structural (unquoted, uncommented) brackets, and must
+// not run away on a legitimate scalar that contains brackets.
+func TestExceedsNestingDepth(t *testing.T) {
+	deep := strings.Repeat("[", maxNestingDepth+5)
+	cases := []struct {
+		name string
+		in   string
+		over bool
+	}{
+		{"flat", "queries: [a, b, c]", false},
+		{"nested-ok", "queries: " + strings.Repeat("[", maxNestingDepth) + strings.Repeat("]", maxNestingDepth), false},
+		{"too-deep", "queries: " + deep, true},
+		{"curly-too-deep", "x: " + strings.Repeat("{", maxNestingDepth+1), true},
+		{"brackets-in-double-quote", `x: "` + deep + `"`, false},
+		{"brackets-in-single-quote", "x: '" + deep + "'", false},
+		{"brackets-in-comment", "x: 1 # " + deep, false},
+		{"balanced-plain-scalar", "x: a[0][1][2][3]", false},
+		{"escaped-single-quote", "x: 'it''s [fine]'", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, over := exceedsNestingDepth([]byte(tc.in)); over != tc.over {
+				t.Errorf("exceedsNestingDepth(%q) over = %v, want %v", tc.in, over, tc.over)
+			}
+		})
+	}
+}
+
 // TestExpandGlobs_PathEscape pins the MEDIUM fix: a glob whose matches
 // resolve outside the project directory is refused (SQLETCH306), so a
 // clone-and-run cannot read arbitrary host files through queries/
