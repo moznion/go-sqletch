@@ -266,6 +266,70 @@ func TestLocateRelations_NonReservedKeywordTableName(t *testing.T) {
 	})
 }
 
+// TestLocateRelations_KeywordAlias is the regression for the alias twin of
+// the PR #76 fix: a table ALIAS that is a non-reserved closer keyword
+// (`FROM t1 offset` / `FROM t1 AS offset`) is NOT in FROM position (its
+// predecessor is the table it aliases, or `AS`), so it used to run
+// isFromCloser and flip inFrom=false — orphaning a following `, t2`
+// (Loc=-1). An alias slot must not close the FROM region; a RESERVED
+// closer directly after a relation still closes.
+func TestLocateRelations_KeywordAlias(t *testing.T) {
+	locAll := func(t *testing.T, sql string, names ...string) []dialect.RelRef {
+		t.Helper()
+		rels := make([]dialect.RelRef, len(names))
+		for i, n := range names {
+			rels[i].Table = n
+		}
+		locateRelations(sql, rels)
+		return rels
+	}
+	wantAt := func(t *testing.T, sql string, r dialect.RelRef, name string) {
+		t.Helper()
+		if want := strings.Index(sql, name); r.Loc != want {
+			t.Errorf("%s Loc = %d (%q), want %d (%q)", name, r.Loc, sliceAt(sql, r.Loc), want, sliceAt(sql, want))
+		}
+	}
+
+	t.Run("bare keyword alias keeps comma join located", func(t *testing.T) {
+		// `offset` here ALIASES t1; t1 and t2 are the relations.
+		sql := "SELECT * FROM t1 offset, t2"
+		rels := locAll(t, sql, "t1", "t2")
+		wantAt(t, sql, rels[0], "t1")
+		wantAt(t, sql, rels[1], "t2")
+	})
+
+	t.Run("AS keyword alias keeps comma join located", func(t *testing.T) {
+		sql := "SELECT * FROM t1 AS offset, t2"
+		rels := locAll(t, sql, "t1", "t2")
+		wantAt(t, sql, rels[0], "t1")
+		wantAt(t, sql, rels[1], "t2")
+	})
+
+	t.Run("reserved closer after a relation still closes", func(t *testing.T) {
+		// `FROM offset GROUP BY …`: offset is the relation and GROUP is a
+		// RESERVED closer (never a bare alias), so the region closes and the
+		// depth-0 comma in GROUP BY is NOT a table separator — notarel must
+		// stay unlocated.
+		sql := "SELECT * FROM offset GROUP BY a, notarel"
+		rels := locAll(t, sql, "offset", "notarel")
+		wantAt(t, sql, rels[0], "offset")
+		if rels[1].Loc != -1 {
+			t.Errorf("notarel Loc = %d (%q), want -1 (region closed by GROUP)", rels[1].Loc, sliceAt(sql, rels[1].Loc))
+		}
+	})
+
+	t.Run("real clause after an alias still closes", func(t *testing.T) {
+		// `FROM t1 o WHERE …`: o is the alias, WHERE closes; the later
+		// GROUP BY comma is not a separator.
+		sql := "SELECT * FROM t1 o WHERE id > 0 GROUP BY a, notarel"
+		rels := locAll(t, sql, "t1", "notarel")
+		wantAt(t, sql, rels[0], "t1")
+		if rels[1].Loc != -1 {
+			t.Errorf("notarel Loc = %d (%q), want -1 (region closed by WHERE)", rels[1].Loc, sliceAt(sql, rels[1].Loc))
+		}
+	})
+}
+
 func sliceAt(s string, off int) string {
 	if off < 0 || off >= len(s) {
 		return "<none>"

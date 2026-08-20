@@ -487,6 +487,7 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 	inFrom := false             // are we inside a FROM/JOIN table-reference region
 	prevIdentInFrom := false    // was the previous ident in FROM position
 	dotQualifierInFrom := false // set when a '.' follows such an ident
+	aliasSlot := false          // an optional table-alias slot is open here
 
 	next := func() (dialect.Token, bool) {
 		for {
@@ -536,6 +537,7 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 				// table-factor start inside a FROM region; every other paren
 				// (function call, expression, index/partition hint, ON
 				// condition) is opaque so its contents never match.
+				aliasSlot = false
 				save := pos
 				peek, ok2 := next()
 				if ok2 && peek.Kind == dialect.KindIdent {
@@ -567,6 +569,16 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 					prev == "(" || // set only for a transparent grouping paren
 					(prev == "." && dotQualifierInFrom)
 				match := tokName == name && inPos
+				// aliasSlot: the previous token left an optional table-alias
+				// slot open — either a relation in FROM position, or a
+				// `relation AS` pair. A NON-RESERVED keyword landing here is
+				// that bare alias, not a clause, so it must not close the
+				// FROM region (`FROM t1 offset, t2` / `FROM t1 AS offset,
+				// t2`: `offset` aliases t1, and closing here would orphan t2
+				// at Loc=-1). A RESERVED closer (WHERE/GROUP/…) can never be
+				// a bare alias, so it still closes even in this slot.
+				curAlias := aliasSlot
+				aliasSlot = false
 				if tok.Kind == dialect.KindIdent {
 					u := strings.ToUpper(tok.Text)
 					prev = u
@@ -579,13 +591,21 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 					// relation, not the OFFSET clause. It is consumed as a
 					// relation here, so it must NOT also close the region and
 					// orphan the following comma-joined relation (Loc=-1).
-					// Only a closer NOT in relation position ends the region.
+					// Likewise an alias-capable keyword filling an alias slot.
+					// Only a closer NOT in relation position and NOT filling
+					// an alias slot ends the region.
 					if !inPos {
 						if isFromOpener(u) {
 							inFrom = true
-						} else if isFromCloser(u) {
+						} else if isFromCloser(u) && !(curAlias && isAliasCapableCloser(u)) {
 							inFrom = false
 						}
+					}
+					// Reopen the alias slot for the NEXT token: after a
+					// relation in FROM position, or after an `AS` that itself
+					// sat in an alias slot (`relation AS <alias>`).
+					if inPos || (curAlias && u == "AS") {
+						aliasSlot = true
 					}
 				} else {
 					// A quoted identifier is never a keyword: keep its
@@ -595,12 +615,19 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 					// FROM-position status still flows through
 					// prevIdentInFrom for a following qualified name.
 					prev = quotedIdentPrev
+					// A quoted relation may still take an alias next.
+					if inPos {
+						aliasSlot = true
+					}
 				}
 				prevIdentInFrom = inPos
 				if match {
 					return tok.Start
 				}
 			default:
+				// Punctuation (',', '.', operators) never fills an alias
+				// slot; the next relation after a ',' opens a fresh one.
+				aliasSlot = false
 				if tok.Text == "." {
 					dotQualifierInFrom = prevIdentInFrom
 				}
@@ -672,6 +699,18 @@ func isFromCloser(u string) bool {
 		return true
 	}
 	return false
+}
+
+// isAliasCapableCloser reports whether a FROM-region closer keyword is
+// ALSO a non-reserved MySQL keyword, hence a legal bare table alias. Only
+// such a keyword may fill an alias slot; when it does it is the alias, not
+// the clause, so it must NOT close the region (`FROM t1 offset, t2`).
+// Among the closer set only OFFSET is non-reserved — WHERE/GROUP/HAVING/
+// ORDER/LIMIT/WINDOW/UNION/EXCEPT/INTERSECT/FOR/LOCK/SET/VALUES/PROCEDURE
+// are all reserved and so can never stand as a bare alias (they still
+// close even directly after a relation, e.g. `FROM offset GROUP BY …`).
+func isAliasCapableCloser(u string) bool {
+	return u == "OFFSET"
 }
 
 // ColumnRefs walks the statement collecting every column reference,

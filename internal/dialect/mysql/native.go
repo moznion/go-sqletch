@@ -86,7 +86,22 @@ func (o *NativeOracle) Describe(ctx context.Context, sql string) (dialect.Desc, 
 	// Parameter slots are untyped by the protocol on MySQL; the
 	// pipeline fills them from the mandatory `-- @param` annotations.
 	// Emitting the same zero slots keeps entries byte-identical.
-	if n := countPlaceholders(sql); n > 0 {
+	n, err := countPlaceholders(sql)
+	if err != nil {
+		// A lex error here means a construct whose placeholders the lexer
+		// cannot see (a `/*! … */` executable comment). Refuse rather than
+		// size the wrong number of param slots. Preserve the offset when
+		// the lexer reported one.
+		var le *dialect.LexError
+		pos := -1
+		if errors.As(err, &le) {
+			pos = le.Pos
+		}
+		return dialect.Desc{}, &dialect.NativeUnsupportedError{Pos: pos,
+			Construct: "a MySQL executable comment (/*! … */) in the bind stream",
+			Hint:      "drop the /*! and */ markers so every placeholder is visible to sqletch, or switch to database.oracle: \"server\""}
+	}
+	if n > 0 {
 		desc.Params = make([]dialect.TypeRef, n)
 	}
 	return desc, nil
@@ -772,15 +787,25 @@ func parseColumnHints(sql string) map[string]dialect.TypeRef {
 }
 
 // countPlaceholders counts '?' binds lexically (strings and comments
-// excluded by the profile).
-func countPlaceholders(sql string) int {
+// excluded by the profile). A lex error (e.g. a `/*! … */` executable
+// comment, whose markers the server strips so any placeholder inside is
+// invisible to the lexer) is PROPAGATED, never swallowed as EOF:
+// returning the partial count would size fewer param slots than the
+// server binds. This path is not reachable through the normal pipeline
+// (the template scanner rejects `/*!` as SQLETCH001 before rendering),
+// so this is a fail-closed backstop for its sibling — the oracle must
+// refuse rather than miscount.
+func countPlaceholders(sql string) (int, error) {
 	src := []byte(sql)
 	profile := Profile{}
 	n, pos := 0, 0
 	for {
 		tok, err := profile.NextToken(src, pos)
-		if err != nil || tok.Kind == dialect.KindEOF {
-			return n
+		if err != nil {
+			return n, err
+		}
+		if tok.Kind == dialect.KindEOF {
+			return n, nil
 		}
 		if tok.Kind == dialect.KindPositionalParam && tok.Text == "?" {
 			n++

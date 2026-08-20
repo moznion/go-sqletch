@@ -322,6 +322,45 @@ func TestNativeDescribeQuestionCountsIgnoreStringsAndComments(t *testing.T) {
 	}
 }
 
+func TestCountPlaceholdersFailsClosedOnExecutableComment(t *testing.T) {
+	// PR #84 Fix C makes the lexer refuse `/*! … */` (the server strips the
+	// markers and executes the content, so a placeholder inside it is
+	// invisible to sqletch). countPlaceholders must PROPAGATE that lex
+	// error, never return the partial count accumulated before it — a
+	// short count would size fewer param slots than the server binds.
+	sql := "SELECT id FROM users WHERE a = ? AND b = /*! ? */ 1"
+	n, err := countPlaceholders(sql)
+	if err == nil {
+		t.Fatalf("countPlaceholders swallowed the executable-comment lex error and returned a partial count %d; want an error", n)
+	}
+	var le *dialect.LexError
+	if !errors.As(err, &le) {
+		t.Fatalf("countPlaceholders error = %T (%v), want *dialect.LexError", err, err)
+	}
+	if !strings.Contains(le.Msg, "executable comment") {
+		t.Errorf("lex error should mention the executable comment, got %q", le.Msg)
+	}
+}
+
+func TestNativeDescribeFailsClosedOnExecutableComment(t *testing.T) {
+	// Defense-in-depth sibling of the countPlaceholders backstop: a `/*! …
+	// */` that somehow reaches the oracle (parseSQL strips it and describes
+	// fine) must make Describe REFUSE, not silently emit too few param
+	// slots. Here the server binds two '?', but only one is lexer-visible.
+	sql := "SELECT u.id FROM users AS u WHERE u.id = ? /*! AND u.org_id = ? */"
+	_, err := describe(t, sql)
+	if err == nil {
+		t.Fatal("Describe must fail closed on an executable comment, got nil error")
+	}
+	var ue *dialect.NativeUnsupportedError
+	if !errors.As(err, &ue) {
+		t.Fatalf("Describe error = %T (%v), want *dialect.NativeUnsupportedError", err, err)
+	}
+	if !strings.Contains(ue.Construct, "executable comment") {
+		t.Errorf("refusal should name the executable comment, got %q", ue.Construct)
+	}
+}
+
 func TestNativeDescribeJoinOnConditionsResolve(t *testing.T) {
 	// H1: scopeFrom flattens the FROM tree but drops the join
 	// conditions, so a JOIN ON referencing a nonexistent column used to
