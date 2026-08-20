@@ -651,6 +651,73 @@ overrides:
 	}
 }
 
+// TestLoad_YAMLStrayQuoteBypassRejected pins the HIGH bypass fix: a stray
+// unbalanced quote in a plain scalar (`server_version: a"`) must NOT hide
+// the deep flow nesting on a later line. goccy's parser treats those
+// brackets as STRUCTURAL (the quote is part of a plain scalar, not a string
+// delimiter), so if the depth guard is fooled into masking them Load falls
+// through to the superlinear parse the guard exists to stop. The guard must
+// classify tokens exactly as goccy's own lexer does, so the nesting is seen
+// and the doc refused with SQLETCH300 fast. The deadline both proves the fix
+// and makes a regression fail by TIMEOUT rather than OOMing CI.
+func TestLoad_YAMLStrayQuoteBypassRejected(t *testing.T) {
+	dir := t.TempDir()
+	// A stray double-quote in a plain scalar, then a deep flow collection on
+	// the next line. On the fooled guard the brackets are invisible and the
+	// parse blows up; the fix sees depth ~200000 and refuses.
+	yaml := "version: 1\ndialect: postgres\nserver_version: a\"\n" +
+		"queries: " + strings.Repeat("[", 200000) + strings.Repeat("]", 200000) + "\n"
+	path := write(t, dir, "sqletch.yaml", yaml)
+
+	done := make(chan []diagnostics.Diagnostic, 1)
+	go func() {
+		_, diags := Load(path)
+		done <- diags
+	}()
+
+	select {
+	case diags := <-done:
+		refused := false
+		for _, d := range diags {
+			if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error &&
+				strings.Contains(d.Message, "nesting is too deep") {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Fatalf("stray-quote deep-nesting doc must be refused with SQLETCH300 (nesting too deep), got %+v", diags)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Load did not reject the stray-quote deep-nesting bypass within 2s: a stray quote must not mask structural flow brackets from the depth guard")
+	}
+}
+
+// TestLoad_YAMLBlockScalarBracketsLoad pins the LOW false-reject fix: a
+// VALID config whose value is a `|` block scalar containing many literal
+// `[` must LOAD — those brackets are string content, not flow-collection
+// opens, so counting them structurally wrongly rejected the document. The
+// depth guard must skip block-scalar bodies (goccy's lexer emits them as a
+// single string token), so 200 literal `[` inside a block scalar do not
+// trip the cap.
+func TestLoad_YAMLBlockScalarBracketsLoad(t *testing.T) {
+	dir := t.TempDir()
+	// server_version is a string field; give it a `|` block scalar whose
+	// 200 lines each carry unbalanced `[` — far past maxNestingDepth if the
+	// guard miscounted them structurally. The document is otherwise valid
+	// and must load with no SQLETCH300 nesting refusal.
+	yaml := "version: 1\ndialect: postgres\nserver_version: |\n" +
+		strings.Repeat("  [[[[[ literal brackets in a block scalar\n", 200) +
+		"database:\n  dsn: postgres://x\nschema:\n  files: [db/schema.sql]\n" +
+		"queries: [queries/*.sql]\noutput:\n  package: gen\n  path: gen\n"
+	path := write(t, dir, "sqletch.yaml", yaml)
+	_, diags := Load(path)
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse && strings.Contains(d.Message, "nesting is too deep") {
+			t.Fatalf("valid block-scalar config wrongly refused for nesting depth: %+v", d)
+		}
+	}
+}
+
 // TestExceedsNestingDepth unit-tests the raw-byte pre-scan directly: it
 // must count only structural (unquoted, uncommented) brackets, and must
 // not run away on a legitimate scalar that contains brackets.
@@ -670,6 +737,14 @@ func TestExceedsNestingDepth(t *testing.T) {
 		{"brackets-in-comment", "x: 1 # " + deep, false},
 		{"balanced-plain-scalar", "x: a[0][1][2][3]", false},
 		{"escaped-single-quote", "x: 'it''s [fine]'", false},
+		// HIGH: a stray quote in a plain scalar must NOT mask the deep
+		// nesting that follows — goccy parses those brackets structurally.
+		{"stray-quote-then-deep", "server_version: a\"\nqueries: " + deep, true},
+		{"stray-single-quote-then-deep", "server_version: a'\nqueries: " + deep, true},
+		// LOW: literal brackets inside a `|`/`>` block scalar are string
+		// content and must not be counted structurally.
+		{"block-literal-brackets", "server_version: |\n" + strings.Repeat("  "+deep+"\n", 3), false},
+		{"block-folded-brackets", "server_version: >\n" + strings.Repeat("  "+deep+"\n", 3), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
