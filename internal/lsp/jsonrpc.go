@@ -38,6 +38,7 @@ const (
 	codeParseError     = -32700
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
+	codeInternalError  = -32603
 )
 
 // errMalformedBody marks a framed body that failed to decode as a

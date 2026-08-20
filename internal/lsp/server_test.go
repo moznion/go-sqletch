@@ -301,6 +301,116 @@ func TestServer_DegradedConfigFailure(t *testing.T) {
 	tc.shutdownExit(0)
 }
 
+// crashWS models an analysis stack (scanner, policy weaver, rules,
+// pg_query cgo bindings) that crashes on a hostile buffer. Content
+// containing "PANIC" panics from Check itself (the notification path:
+// didOpen/didChange → check → Check). Any other content is checked
+// cleanly but its snapshot exposes a nil *QueryTemplate, so a subsequent
+// textDocument/definition request panics deep inside request handling
+// (definitionAt ranges over Queries). One workspace thus drives both a
+// notification-path panic and a request-path panic.
+type crashWS struct{}
+
+func (crashWS) Check(overlay map[string][]byte) (WorkspaceResult, error) {
+	res := WorkspaceResult{
+		Diags:   map[string][]diagnostics.Diagnostic{},
+		Files:   map[string]*template.QueryFile{},
+		Sources: map[string][]byte{},
+	}
+	for p, src := range overlay {
+		if bytes.Contains(src, []byte("PANIC")) {
+			panic("boom: analysis exploded on a hostile buffer")
+		}
+		res.Sources[p] = src
+		// A nil query in the snapshot makes definitionAt dereference a
+		// nil *QueryTemplate — a panic reached only on the request path.
+		res.Files[p] = &template.QueryFile{Queries: []*template.QueryTemplate{nil}}
+	}
+	return res, nil
+}
+
+// A panic in message handling — here in the injected checker, standing in
+// for the scanner/weaver/rules/pg_query stack — must never kill the
+// server or corrupt the connection framing. Editors auto-restart their
+// LSP server, so a fatal panic replaying the same hostile buffer becomes
+// a persistent restart loop. The server must catch it per message:
+// swallow it for a notification (no reply exists), answer a -32603
+// internal error for a request, and keep serving subsequent messages.
+func TestServer_PanicIsolation(t *testing.T) {
+	tc := startServer(t, crashWS{}, "")
+	tc.initialize()
+
+	// Open a clean doc: the snapshot now holds the crafted nil-query
+	// file for this path (one publishDiagnostics notification).
+	uri := pathToURI("/ws/queries/q.sql")
+	tc.notify("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{"uri": uri, "languageId": "sql", "version": 1, "text": "select 1"},
+	})
+	tc.readNotification() // publishDiagnostics for the opened doc
+
+	// Request path: a textDocument/definition over that doc panics inside
+	// definitionAt (nil *QueryTemplate). It must be answered with a
+	// -32603 internal error, not hang or close the connection.
+	tc.next++
+	idBytes, _ := json.Marshal(tc.next)
+	if err := tc.c.writeRequest(rawID(string(idBytes)), "textDocument/definition", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 0, "character": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Pump until this request's response arrives (skip any interleaved
+	// notification). It must be a -32603 internal error.
+	var resp *Message
+	for {
+		msg := tc.readNotification()
+		if msg.ID != nil && string(*msg.ID) == string(idBytes) {
+			resp = msg
+			break
+		}
+	}
+	if resp.Error == nil || resp.Error.Code != codeInternalError {
+		t.Fatalf("panicking request must answer a %d internal error, got %+v", codeInternalError, resp)
+	}
+
+	// The server survived the request-path panic: a well-formed follow-up
+	// request is still served (request() fails the test if the response
+	// never arrives, so reaching it proves survival).
+	if result, _ := tc.request("initialize", map[string]any{}); len(result) == 0 {
+		t.Fatal("server must keep serving after a panicking request")
+	}
+
+	// Notification path: didChange the doc to a buffer whose analysis
+	// panics (check → Check → panic). A notification has no reply, so it
+	// is swallowed rather than answered. The run loop must survive.
+	tc.notify("textDocument/didChange", map[string]any{
+		"textDocument":   map[string]any{"uri": uri, "version": 2},
+		"contentChanges": []map[string]any{{"text": "PANIC here"}},
+	})
+	if result, _ := tc.request("initialize", map[string]any{}); len(result) == 0 {
+		t.Fatal("server must keep serving after a panicking notification")
+	}
+	tc.shutdownExit(0)
+}
+
+// A non-panicking request keeps its normal behavior: the recover must not
+// swallow ordinary error returns or otherwise alter a clean path. An
+// unknown method still yields MethodNotFound, not the internal-error code.
+func TestServer_RecoverDoesNotAlterCleanPaths(t *testing.T) {
+	tc := startServer(t, &fakeWS{}, "")
+	tc.initialize()
+	tc.next++
+	idBytes, _ := json.Marshal(tc.next)
+	if err := tc.c.writeRequest(rawID(string(idBytes)), "workspace/nope", nil); err != nil {
+		t.Fatal(err)
+	}
+	msg := tc.readNotification()
+	if msg.Error == nil || msg.Error.Code != codeMethodNotFound {
+		t.Fatalf("clean unknown-method path must stay MethodNotFound, got %+v", msg)
+	}
+	tc.shutdownExit(0)
+}
+
 // assertNoGoroutineLeaks pins the server's exit paths with the
 // runtime's goroutine-leak profile (stable since Go 1.27): collecting
 // it runs a GC reachability analysis, so a Serve goroutine still
