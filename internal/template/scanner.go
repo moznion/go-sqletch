@@ -52,6 +52,7 @@ const (
 	ctxInsertAfterCol // after the column list, before VALUES
 	ctxValues         // between VALUES rows (depth 0)
 	ctxInsertValueRow // inside one VALUES row's parens (depth 1)
+	ctxInsertTail     // after a closed VALUES list (ON CONFLICT, …): no more rows
 	ctxReturning
 )
 
@@ -119,6 +120,14 @@ type fileScan struct {
 	names         map[string]diagnostics.Span
 	strayReported bool
 
+	// pendingDirectives buffers directive comments (`-- @param`,
+	// `-- @column`, `-- @policy-optout`) until their target query is
+	// known. A directive attaches to a query only once a real SQL token
+	// of that query is seen (in-body directives) or, in the gap before
+	// the next `-- name:` header, to the FOLLOWING query — never the
+	// previous one, whose queryBuilder is still current at that point.
+	pendingDirectives []dialect.Token
+
 	// Per-code emission cap. A pathological input (e.g. a file that is
 	// nothing but `$1$1$1…` positional params) would otherwise emit one
 	// diagnostic per token — millions of structs, gigabytes of memory —
@@ -145,6 +154,13 @@ type queryBuilder struct {
 	// their clause (after every unconditional item).
 	colGuardSeen bool
 	rowGuardSeen bool
+	// prevKw is the previous top-level keyword seen by transition, used
+	// to recognize the two-token `ON CONFLICT` sequence. afterOnConflict
+	// records that the INSERT conflict clause has begun: a WHERE inside
+	// it (partial-index predicate or DO UPDATE row filter) is not the
+	// statement's row filter and must not become WhereKwEnd.
+	prevKw          string
+	afterOnConflict bool
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
@@ -181,6 +197,10 @@ func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.D
 		}
 		fs.handleToken(file, tok)
 		pos = tok.End
+	}
+	// Trailing directives with no following query belong to the last one.
+	if fs.qb != nil {
+		fs.applyDirectives(fs.qb.q)
 	}
 	fs.finalize(file, len(src))
 	fs.flushOverflow()
@@ -264,34 +284,16 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 		if m := headerRe.FindStringSubmatch(tok.Text); m != nil {
 			fs.finalize(file, tok.Start)
 			fs.startQuery(m[1], m[2], tok)
+			// Directives seen in the gap since the previous query's last
+			// real token belong to THIS new query, not the previous one.
+			fs.applyDirectives(fs.qb.q)
 			return
 		}
-		if m := paramHintRe.FindStringSubmatch(tok.Text); m != nil && fs.qb != nil {
-			q := fs.qb.q
-			if q.TypeHints == nil {
-				q.TypeHints = map[string]TypeHint{}
-			}
-			q.TypeHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
-			// fall through: the comment remains skeleton text.
-		}
-		if m := colHintRe.FindStringSubmatch(tok.Text); m != nil && fs.qb != nil {
-			q := fs.qb.q
-			if q.ColumnHints == nil {
-				q.ColumnHints = map[string]TypeHint{}
-			}
-			q.ColumnHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
-			// fall through: the comment remains skeleton text.
-		}
-		if optOutRe.MatchString(tok.Text) && fs.qb != nil {
-			if m := optOutFormRe.FindStringSubmatch(tok.Text); m != nil {
-				q := fs.qb.q
-				q.PolicyOptOuts = append(q.PolicyOptOuts, PolicyOptOut{
-					Policy: m[1], Reason: strings.TrimSpace(m[2]), Span: fs.span(tok.Start, tok.End),
-				})
-			} else {
-				fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
-					"malformed @policy-optout; the reason is mandatory: `-- @policy-optout: policy_name (reason)`")
-			}
+		if isDirectiveComment(tok.Text) && fs.qb != nil {
+			// Buffer, don't attach yet: the target query is settled once a
+			// real SQL token or the next header arrives. (Directives before
+			// the first header, fs.qb == nil, stay ignored as before.)
+			fs.pendingDirectives = append(fs.pendingDirectives, tok)
 			// fall through: the comment remains skeleton text.
 		}
 	}
@@ -308,7 +310,64 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 			return
 		}
 	}
+	// A real (non-trivia) SQL token of the current query claims any
+	// buffered directives: they annotate THIS query, since its body
+	// continues past them.
+	switch tok.Kind {
+	case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
+	default:
+		fs.applyDirectives(fs.qb.q)
+	}
 	fs.qb.feed(fs, tok)
+}
+
+// isDirectiveComment reports whether a line comment is one of the
+// per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`),
+// including a malformed @policy-optout (which still targets a query, so
+// its diagnostic must attach there too).
+func isDirectiveComment(text string) bool {
+	return paramHintRe.MatchString(text) ||
+		colHintRe.MatchString(text) ||
+		optOutRe.MatchString(text)
+}
+
+// applyDirectives attaches every buffered directive to q (in source
+// order) and clears the buffer.
+func (fs *fileScan) applyDirectives(q *QueryTemplate) {
+	for _, tok := range fs.pendingDirectives {
+		fs.applyDirective(q, tok)
+	}
+	fs.pendingDirectives = nil
+}
+
+// applyDirective records one buffered directive comment against q. The
+// comment stays in the skeleton verbatim (handled separately); this only
+// populates the parsed directive fields.
+func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
+	if m := paramHintRe.FindStringSubmatch(tok.Text); m != nil {
+		if q.TypeHints == nil {
+			q.TypeHints = map[string]TypeHint{}
+		}
+		q.TypeHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
+		return
+	}
+	if m := colHintRe.FindStringSubmatch(tok.Text); m != nil {
+		if q.ColumnHints == nil {
+			q.ColumnHints = map[string]TypeHint{}
+		}
+		q.ColumnHints[m[1]] = TypeHint{SQLType: m[2], Span: fs.span(tok.Start, tok.End)}
+		return
+	}
+	if optOutRe.MatchString(tok.Text) {
+		if m := optOutFormRe.FindStringSubmatch(tok.Text); m != nil {
+			q.PolicyOptOuts = append(q.PolicyOptOuts, PolicyOptOut{
+				Policy: m[1], Reason: strings.TrimSpace(m[2]), Span: fs.span(tok.Start, tok.End),
+			})
+		} else {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
+				"malformed @policy-optout; the reason is mandatory: `-- @policy-optout: policy_name (reason)`")
+		}
+	}
 }
 
 func (fs *fileScan) startQuery(name, ann string, headerTok dialect.Token) {
@@ -410,6 +469,23 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 }
 
 func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
+	prevKw := qb.prevKw
+	qb.prevKw = kw
+	// A closed VALUES list ends at the first top-level keyword after it
+	// (ON CONFLICT, RETURNING, …). Leaving ctxValues here stops the
+	// conflict-target / partial-index parens from being read as another
+	// VALUES row, which appended a phantom InsertValGuards entry and then
+	// false-rejected legitimate upserts under R7 (SQLETCH119). Rows are
+	// separated by commas, never keywords, so no real row is lost.
+	if qb.ctx == ctxValues && kw != "VALUES" {
+		qb.ctx = ctxInsertTail
+	}
+	// `ON CONFLICT` opens the INSERT conflict clause: a WHERE within it
+	// (a partial-index predicate or the DO UPDATE row filter) is not the
+	// statement's row filter, so it must never be recorded as WhereKwEnd.
+	if prevKw == "ON" && kw == "CONFLICT" {
+		qb.afterOnConflict = true
+	}
 	switch kw {
 	case "SELECT":
 		qb.ctx = ctxProjection
@@ -417,7 +493,7 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		qb.ctx = ctxFrom
 	case "WHERE":
 		qb.ctx = ctxWhere
-		if qb.q.WhereKwEnd < 0 {
+		if qb.q.WhereKwEnd < 0 && !qb.afterOnConflict {
 			qb.q.WhereKwEnd = tok.End
 		}
 	case "GROUP":
