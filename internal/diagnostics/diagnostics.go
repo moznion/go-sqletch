@@ -298,3 +298,17 @@ func (m *LineMap) LineCol(off int) (line, col int) {
 	idx := sort.Search(len(m.starts), func(i int) bool { return m.starts[i] > off }) - 1
 	return idx + 1, off - m.starts[idx] + 1
 }
+
+// LineStartOffset returns the byte offset at which the 0-based line
+// begins. A line index at or past the last line clamps to len(src), so
+// a position past EOF resolves to EOF — matching the previous linear
+// walk that returned len(src) when the requested line ran off the end.
+func (m *LineMap) LineStartOffset(line0 int) int {
+	if line0 < 0 {
+		line0 = 0
+	}
+	if line0 >= len(m.starts) {
+		return m.n
+	}
+	return m.starts[line0]
+}

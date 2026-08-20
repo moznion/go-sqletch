@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"sort"
@@ -201,21 +202,49 @@ func (s *server) check() {
 	for _, p := range paths {
 		ds := res.Diags[p]
 		src := res.Sources[p]
+		// One line index per file, shared across all its diagnostics:
+		// converting each span rescanned the whole buffer from offset 0
+		// before, making a large file with many diagnostics quadratic.
+		pm := newPosMapper(src)
+		truncated := 0
+		if len(ds) > maxPublishedDiagnostics {
+			truncated = len(ds) - maxPublishedDiagnostics
+			ds = ds[:maxPublishedDiagnostics]
+		}
 		out := make([]Diagnostic, 0, len(ds))
 		for _, d := range ds {
-			out = append(out, toLSPDiagnostic(src, d))
+			out = append(out, toLSPDiagnostic(pm, d))
+		}
+		// Defense in depth: an adversarial or pathological file must not
+		// flood the client with an unbounded frame. A trailing summary
+		// keeps the truncation visible rather than silently complete.
+		if truncated > 0 {
+			out = append(out, Diagnostic{
+				Range:    pm.spanRange(0, 0),
+				Severity: severityWarning,
+				Source:   "sqletch",
+				Message: fmt.Sprintf(
+					"%d further diagnostics suppressed (over the %d-per-file publish cap)",
+					truncated, maxPublishedDiagnostics),
+			})
 		}
 		s.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 			URI: pathToURI(p), Diagnostics: out,
 		})
-		if len(ds) > 0 {
+		if len(out) > 0 {
 			published[p] = true
 		}
 	}
 	s.published = published
 }
 
-func toLSPDiagnostic(src []byte, d diagnostics.Diagnostic) Diagnostic {
+// maxPublishedDiagnostics bounds the diagnostics converted and sent for
+// one file in a single publish, so a pathological file cannot produce an
+// unbounded outbound frame. The scanner-side cap on diagnostic
+// generation is a separate concern; this is the transport backstop.
+const maxPublishedDiagnostics = 2000
+
+func toLSPDiagnostic(pm *posMapper, d diagnostics.Diagnostic) Diagnostic {
 	sev := severityError
 	if d.Severity == diagnostics.Warning {
 		sev = severityWarning
@@ -225,7 +254,7 @@ func toLSPDiagnostic(src []byte, d diagnostics.Diagnostic) Diagnostic {
 		msg += "\nhelp: " + d.Hint
 	}
 	return Diagnostic{
-		Range:    spanToRange(src, d.Span.Start, d.Span.End),
+		Range:    pm.spanRange(d.Span.Start, d.Span.End),
 		Severity: sev,
 		Code:     string(d.Code),
 		Source:   "sqletch",
@@ -256,12 +285,13 @@ func (s *server) definition(msg *Message) {
 		s.respond(msg.ID, nil)
 		return
 	}
-	span, ok := definitionAt(file, positionToOffset(src, p.Position))
+	pm := newPosMapper(src)
+	span, ok := definitionAt(file, pm.offset(p.Position))
 	if !ok {
 		s.respond(msg.ID, nil)
 		return
 	}
-	s.respond(msg.ID, Location{URI: pathToURI(path), Range: spanToRange(src, span.Start, span.End)})
+	s.respond(msg.ID, Location{URI: pathToURI(path), Range: pm.spanRange(span.Start, span.End)})
 }
 
 // definitionAt implements docs/design/10-lsp.md §5: a parameter

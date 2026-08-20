@@ -79,6 +79,23 @@ func resolvedID(p string) string {
 	return filepath.Clean(p)
 }
 
+// absClean absolutizes p against the process working directory. The LSP
+// receives open-buffer paths as absolute file:// URIs, while config globs
+// expand relative to a relative cfg.Dir (the shipped default is
+// `--config sqletch.yaml`, cwd = workspace root). Comparing the two on a
+// common absolute footing is what lets resolvedID dedupe a file reached
+// both ways; keying WorkspaceCheck (and thus every published diagnostic
+// URI) on the absolute path is also what keeps a config/policy diagnostic
+// from publishing to an invalid authority-bearing URI like
+// file://sqletch.yaml. A path that cannot be absolutized keeps its
+// cleaned form.
+func absClean(p string) string {
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return filepath.Clean(p)
+}
+
 type schemaStat struct {
 	path string
 	sig  statSig
@@ -163,7 +180,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	if len(overlay) > 0 {
 		canon := make(map[string][]byte, len(overlay))
 		for p, src := range overlay {
-			canon[filepath.Clean(p)] = src
+			canon[absClean(p)] = src
 		}
 		overlay = canon
 	}
@@ -198,7 +215,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	}
 	if globbed, err := c.cfg.ExpandGlobs(c.cfg.Queries); err == nil {
 		for _, p := range globbed {
-			add(filepath.Clean(p))
+			add(absClean(p))
 		}
 	}
 	sort.Strings(paths)
@@ -234,7 +251,11 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	// Broken policies degrade to unwoven checking (never a crash),
 	// with the SQLETCH303s pinned to the config file on every snapshot.
 	if len(c.polDiags) > 0 {
-		res.Diags[c.cfg.Path] = append(res.Diags[c.cfg.Path], c.polDiags...)
+		// Absolute key so the config diagnostic publishes to a valid
+		// file:///abs URI (a relative cfg.Path would yield the invalid
+		// authority-bearing file://sqletch.yaml).
+		cfgKey := absClean(c.cfg.Path)
+		res.Diags[cfgKey] = append(res.Diags[cfgKey], c.polDiags...)
 	}
 
 	// Workspace phase: duplicate query names, first definition in

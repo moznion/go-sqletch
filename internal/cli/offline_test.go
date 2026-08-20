@@ -89,6 +89,54 @@ func anyCode(res WorkspaceCheck, code diagnostics.Code) bool {
 	return false
 }
 
+// The shipped LSP default is `--config sqletch.yaml` (relative) with cwd
+// = workspace root, so cfg.Dir is relative and config globs expand
+// relative. The editor opens buffers under ABSOLUTE file:// paths. The
+// same file reached both ways must enter the snapshot ONCE: otherwise the
+// relative glob twin and the absolute overlay collide and every query is
+// flagged a false SQLETCH004 duplicate, checked against the stale disk
+// copy, and its diagnostics publish to an invalid authority-bearing URI
+// (file://queries/a.sql). All result keys must be absolute so the
+// published file:///abs URI is valid.
+func TestOfflineChecker_RelativeConfigNoFalseDuplicate(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{
+		"queries/a.sql": validQuery,
+	})
+	t.Chdir(cfg.Dir) // emulate the LSP's cwd = workspace root
+	relCfg, diags := config.Load("sqletch.yaml")
+	if len(diags) > 0 {
+		t.Fatalf("config diags: %v", diags)
+	}
+	if filepath.IsAbs(relCfg.Dir) {
+		t.Fatalf("precondition: relative config load should leave a relative Dir, got %q", relCfg.Dir)
+	}
+	absQuery, err := filepath.Abs(filepath.Join("queries", "a.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Overlay keyed by the absolute path, exactly as the LSP passes it
+	// after uriToPath on a file:// URI.
+	res, err := NewOfflineChecker(relCfg).Check(map[string][]byte{
+		absQuery: []byte(validQuery),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anyCode(res, diagnostics.CodeDuplicateQueryName) {
+		t.Fatalf("relative config produced a false duplicate: %v", res.Diags)
+	}
+	for p := range res.Sources {
+		if !filepath.IsAbs(p) {
+			t.Errorf("source key %q is not absolute (publishes to an invalid URI)", p)
+		}
+	}
+	for p := range res.Files {
+		if !filepath.IsAbs(p) {
+			t.Errorf("file key %q is not absolute", p)
+		}
+	}
+}
+
 // Cold cache: scanner + lexical + R1 diagnostics are reported, and the
 // good file stays clean; oracle-dependent passes stay silent.
 func TestOfflineChecker_ColdCache(t *testing.T) {
