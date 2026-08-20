@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"sort"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
@@ -90,6 +91,28 @@ func (s *server) run() int {
 }
 
 func (s *server) dispatch(msg *Message) {
+	// Per-message panic isolation. Handling a message runs the whole
+	// analysis stack (scanner, policy weaver, rules, pg_query cgo
+	// bindings) on attacker-controlled buffer contents; a panic anywhere
+	// in it must not kill the process. Editors auto-restart their LSP
+	// server, so a fatal panic replaying the same hostile buffer degrades
+	// into a persistent restart loop (a weaponizable editor hang). Catch
+	// the panic here, log it, and — for a request — answer a JSON-RPC
+	// internal error (-32603) so the client is not left waiting; a
+	// notification has no reply, so it is swallowed. The message frame is
+	// already fully read, so the connection framing is intact and the run
+	// loop keeps serving subsequent messages. This never fires on a
+	// normal error return: analysis reports those as diagnostics or via
+	// the degraded-config path, both of which return cleanly.
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Printf("recovered panic handling %q: %v\n%s", msg.Method, r, debug.Stack())
+			if msg.ID != nil {
+				s.writeErr(msg.ID, codeInternalError, "internal error")
+			}
+		}
+	}()
+
 	// A message with no method is a response (result/error to a request)
 	// or otherwise not a call. This server issues no requests, and
 	// JSON-RPC has no reply to a response — so drop it rather than
