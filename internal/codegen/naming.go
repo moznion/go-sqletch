@@ -3,6 +3,7 @@ package codegen
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Common initialisms rendered in caps, sqlc-compatible.
@@ -33,7 +34,11 @@ func GoName(name string) string {
 		return "X"
 	}
 	out := b.String()
-	if !unicode.IsLetter(rune(out[0])) {
+	// A Go identifier must begin with a letter (or '_'). Decode the first
+	// rune properly: out[0] is a UTF-8 lead byte, and testing it as a rune
+	// misclassifies every multibyte first letter (e.g. Hebrew, which then
+	// wrongly acquired an "X" prefix).
+	if r0, _ := utf8.DecodeRuneInString(out); !unicode.IsLetter(r0) {
 		return "X" + out
 	}
 	return out

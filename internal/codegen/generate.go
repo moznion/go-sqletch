@@ -200,12 +200,24 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		diags = append(diags, diagnostics.Errorf(code, span, format, args...))
 	}
 	claimType := func(name string) {
+		if generatedPkgNames[name] {
+			fail(diagnostics.CodeInvalidColumnIdentifier, q.HeaderSpan,
+				"query %s generates the name %q, which the generated package already declares at package level; rename the query (or its @choose/@order-by/@predicate parameter)", q.Name, name)
+			return
+		}
 		if prev, ok := typeNames[name]; ok {
 			fail(diagnostics.CodeNameCollision, q.HeaderSpan,
 				"generated type %q collides between queries %s and %s", name, prev, q.Name)
 			return
 		}
 		typeNames[name] = q.Name
+	}
+
+	// A query becomes a method on *Queries; a name that lands on one of
+	// the fixed methods declares that method twice and does not compile.
+	if queriesMethodNames[q.Name] {
+		fail(diagnostics.CodeInvalidColumnIdentifier, q.HeaderSpan,
+			"query %q would generate a method that collides with the generated %q method on *Queries; rename the query", q.Name, q.Name)
 	}
 
 	// ---- choose / order-by / filter-tree / @in metadata ------------------
@@ -312,13 +324,13 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			// mismatch. The named type never reaches the driver — the
 			// bind site converts back to the underlying type.
 			tn := GoName(name)
-			switch tn {
-			case "Queries", "Querier", "DBTX", "New":
-				// db.gen.go / querier.gen.go declare these; the collision
-				// would otherwise surface as generated code that does not
-				// compile in the user's module.
-				fail(diagnostics.CodeNameCollision, paramSpanOf(q, name),
-					"policy parameter %q would generate type %q, which the generated package already declares; rename the parameter", name, tn)
+			if generatedPkgNames[tn] {
+				// db.gen.go / querier.gen.go declare these package-level
+				// names (types, New, the And/Or combinators, ShapeSpace);
+				// the collision would otherwise surface as generated code
+				// that does not compile in the user's module.
+				fail(diagnostics.CodeInvalidColumnIdentifier, paramSpanOf(q, name),
+					"policy parameter %q would generate type %q, which the generated package already declares at package level; rename the parameter", name, tn)
 				continue
 			}
 			if pt, ok := policyTypes[tn]; ok {
@@ -340,9 +352,9 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				}
 			}
 			requiredArgs = append(requiredArgs, requiredArg{
-				name:  argIdent(name),
+				name:  argIdent(name, q.Name),
 				typ:   tn,
-				expr:  convertExpr(typ, argIdent(name)),
+				expr:  convertExpr(typ, argIdent(name, q.Name)),
 				doc:   fmt.Sprintf("policy %s", p.Policy),
 				param: name,
 			})
@@ -380,9 +392,9 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			// compiler lets them skip.
 			g.sigImports[runtimeImport] = true
 			requiredArgs = append(requiredArgs, requiredArg{
-				name:  argIdent(filter.Param),
+				name:  argIdent(filter.Param, q.Name),
 				typ:   "runtime.Tree",
-				expr:  argIdent(filter.Param),
+				expr:  argIdent(filter.Param, q.Name),
 				doc:   "@filter-tree!; " + q.Name + "Unscoped() opts out",
 				param: filter.Param,
 			})
@@ -422,10 +434,14 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 			// gated by snakeRe at scan time — is unconstrained. If it does
 			// not map to a valid Go identifier, emitting it verbatim would
 			// at best fail gofmt with no span and at worst splice arbitrary
-			// text into the generated struct/scan target. Refuse it here.
-			if !token.IsIdentifier(goName) {
+			// text into the generated struct/scan target. It must also be
+			// EXPORTED: a struct field the consumer reads from another
+			// package is unreachable otherwise (a column whose first rune
+			// has no upper-case form — CJK, Hebrew, a leading '_' — maps to
+			// a valid but unexported identifier). Refuse both here.
+			if !token.IsIdentifier(goName) || !token.IsExported(goName) {
 				fail(diagnostics.CodeInvalidColumnIdentifier, q.HeaderSpan,
-					"result column %q maps to Go identifier %q, which is not valid; give it an `AS` alias (or a `-- @column` name) that is a valid Go identifier",
+					"result column %q maps to Go identifier %q, which is not a valid exported field name; give it an `AS` alias (or a `-- @column` name) that is a valid exported Go identifier",
 					col.Name, goName)
 				continue
 			}
@@ -612,14 +628,56 @@ func policyFile(pkg string, types map[string]*policyType) string {
 // shadow it in the query method's body.
 var reservedLocal = regexp.MustCompile(`^(?:ord|oseq|nul)[0-9]+$`)
 
+// generatedPkgNames are the package-level identifiers db.gen.go and
+// querier.gen.go always declare, independent of any query: the DBTX /
+// Queries / Querier types, the New constructor, the And / Or predicate
+// combinators, and the ShapeSpace registry. A user-derived generated
+// name (a query's Params/Row/enum/order/predicate/Unscoped name, or a
+// policy parameter's named type) landing on one of them produces a
+// package that redeclares the identifier and does not compile; refuse it
+// with SQLETCH307.
+var generatedPkgNames = map[string]bool{
+	"DBTX": true, "Queries": true, "Querier": true, "New": true,
+	"And": true, "Or": true, "ShapeSpace": true,
+}
+
+// queriesMethodNames are the methods every generated *Queries carries
+// besides the per-query methods themselves (the union over dialects and
+// features, so the gate is independent of style and whether a
+// @filter-tree query is present). A query whose name lands on one of
+// them declares a second method of the same name on *Queries — which
+// does not compile. headerRe admits lowercase query names too, so the
+// unexported helpers are reserved as well.
+var queriesMethodNames = map[string]bool{
+	"WithTx": true, "OnQuery": true, "SetObserver": true, "Cache": true,
+	"hook": true, "hookTree": true, "observeExec": true,
+	"observeReject": true, "observeExecResult": true, "observeExecTree": true,
+}
+
+// importPkgIdents are the package identifiers a generated query body may
+// reference by selector (runtime.ShapeKey, time.Now, optional.Some, …).
+// A required argument spelled like one of them shadows the import in the
+// method body, so the body's selector resolves to the argument and the
+// generated code does not compile. The set is the union over every
+// dialect/annotation so argIdent stays independent of which imports a
+// particular query happens to pull in.
+var importPkgIdents = map[string]bool{
+	"context": true, "runtime": true, "fmt": true, "time": true,
+	"optional": true, "errors": true, "sql": true, "pgx": true,
+}
+
 // argIdent names a required argument. A required argument shares the
-// query method's outermost scope with every local writeFunc declares,
-// so any collision would produce generated Go that fails to compile (or
-// silently clobbers the argument) in the consumer's module. Reserved
-// names get an "Arg" suffix. Keep this in sync with the locals writeFunc
-// emits: ctx/arg/q (signature + receiver), the fixed locals below, and
-// the indexed ord/oseq/nul families (reservedLocal).
-func argIdent(param string) string {
+// query method's outermost scope with every local writeFunc declares AND
+// with the package-level identifiers the body names — imports and the
+// per-query <query>Frags / <query>Shapes table — so any collision would
+// produce generated Go that fails to compile (or silently clobbers the
+// argument) in the consumer's module. Reserved names get an "Arg"
+// suffix; no reserved name ends in "Arg", so one suffix always escapes
+// every set. Keep this in sync with the locals writeFunc emits:
+// ctx/arg/q (signature + receiver), the fixed locals below, the indexed
+// ord/oseq/nul families (reservedLocal), the imports (importPkgIdents),
+// and the frags/shapes vars writeFragsVar/writeShapesVar declare.
+func argIdent(param, queryName string) string {
 	name := lowerCamel(GoName(param))
 	switch name {
 	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds",
@@ -627,7 +685,11 @@ func argIdent(param string) string {
 		"execStart", "res", "n", "rerr", "tag":
 		return name + "Arg"
 	}
-	if reservedLocal.MatchString(name) {
+	if reservedLocal.MatchString(name) || importPkgIdents[name] {
+		return name + "Arg"
+	}
+	lc := lowerCamel(queryName)
+	if name == lc+"Frags" || name == lc+"Shapes" {
 		return name + "Arg"
 	}
 	return name
