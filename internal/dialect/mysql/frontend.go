@@ -464,16 +464,29 @@ func (t *tree) HasGroupingSets() bool {
 }
 
 // locateRelations assigns Loc to each named relation by scanning the
-// SQL token stream left to right. A relation name in FROM position is
-// preceded by FROM/JOIN/STRAIGHT_JOIN/','/'('/'.'/INTO/UPDATE, which
-// distinguishes it from column references of the same name; subqueries
-// (parens whose first token is SELECT/WITH) are skipped whole so
-// derived-table internals never match.
+// SQL token stream left to right, tracking FROM-clause context. A
+// relation name in FROM position is preceded by
+// FROM/JOIN/STRAIGHT_JOIN/INTO/UPDATE (keyword predecessors, always
+// valid), or by ','/'(' — but those two are structural ONLY inside a
+// FROM/JOIN region: a comma in the SELECT list or a function-argument
+// list, and parens introducing a SELECT-list/expression/function-call
+// value or an index hint, are NOT FROM openings. A '.' predecessor
+// introduces the table half of a db-qualified name whose qualifier was
+// itself in FROM position (`db.t`). Subqueries and (VALUES …) table
+// constructors (parens whose first token is SELECT/WITH/VALUES) are
+// skipped whole; so are opaque parens outside table-factor position.
+//
+// The scan is a single forward pass: scanFor resumes the shared position
+// and context, so the relations must be supplied in source order
+// (collectJoin produces them left to right).
 func locateRelations(sql string, rels []dialect.RelRef) {
 	src := []byte(sql)
 	profile := Profile{}
 	pos := 0
-	prev := "" // previous significant token, uppercased for idents
+	prev := ""                  // previous significant token, uppercased for idents
+	inFrom := false             // are we inside a FROM/JOIN table-reference region
+	prevIdentInFrom := false    // was the previous ident in FROM position
+	dotQualifierInFrom := false // set when a '.' follows such an ident
 
 	next := func() (dialect.Token, bool) {
 		for {
@@ -508,14 +521,8 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 	}
 
 	// scanFor advances until an ident token equal to name in FROM
-	// position; returns its start offset or -1 when the stream ends. A
-	// relation follows FROM/JOIN/','/'('/INTO/UPDATE, or a '.' whose
-	// qualifier was itself in FROM position (a db-qualified name like
-	// `db.t`). A bare `x.y` column reference — whose qualifier `x` is NOT
-	// in FROM position — must not be mistaken for a relation.
+	// position; returns its start offset or -1 when the stream ends.
 	scanFor := func(name string) int {
-		prevIdentInFrom := false    // was the previous ident in FROM position
-		dotQualifierInFrom := false // set when a '.' follows such an ident
 		for {
 			tok, ok := next()
 			if !ok {
@@ -524,8 +531,11 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 			switch tok.Kind {
 			case dialect.KindLParen:
 				// Peek: subqueries and (VALUES …) table constructors are
-				// opaque; parenthesized joins are transparent (the '('
-				// itself is a valid predecessor).
+				// opaque and skipped whole. A parenthesized table-references
+				// group is transparent ONLY when the '(' sits at a
+				// table-factor start inside a FROM region; every other paren
+				// (function call, expression, index/partition hint, ON
+				// condition) is opaque so its contents never match.
 				save := pos
 				peek, ok2 := next()
 				if ok2 && peek.Kind == dialect.KindIdent {
@@ -537,26 +547,47 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 					}
 				}
 				pos = save
-				prev = "("
-				prevIdentInFrom = false
+				if inFrom && tableFactorStart(prev) {
+					// Transparent grouping paren: the '(' is a valid
+					// predecessor for the table factor that follows.
+					prev = "("
+					prevIdentInFrom = false
+				} else {
+					skipParen()
+					prev = ")"
+					prevIdentInFrom = false
+				}
 			case dialect.KindIdent, dialect.KindQuotedIdent:
 				tokName := tok.Text
 				if tok.Kind == dialect.KindQuotedIdent {
 					tokName = strings.ReplaceAll(tokName[1:len(tokName)-1], "``", "`")
 				}
-				inFrom := fromPositionKeyword(prev) || (prev == "." && dotQualifierInFrom)
-				match := tokName == name && inFrom
+				inPos := keywordPred(prev) ||
+					(prev == "," && inFrom) ||
+					prev == "(" || // set only for a transparent grouping paren
+					(prev == "." && dotQualifierInFrom)
+				match := tokName == name && inPos
 				if tok.Kind == dialect.KindIdent {
-					prev = strings.ToUpper(tok.Text)
+					u := strings.ToUpper(tok.Text)
+					prev = u
+					// FROM-region state: openers enter it, clause-enders
+					// leave it. This gates the structural ',' predecessor so
+					// a `GROUP BY a, b` comma is never a table separator.
+					if isFromOpener(u) {
+						inFrom = true
+					} else if isFromCloser(u) {
+						inFrom = false
+					}
 				} else {
 					// A quoted identifier is never a keyword: keep its
 					// content out of `prev` so a relation named e.g.
 					// `FROM` cannot act as the FROM keyword for the next
-					// token. Its FROM-position status still flows through
+					// token, and it never opens/closes the FROM region. Its
+					// FROM-position status still flows through
 					// prevIdentInFrom for a following qualified name.
 					prev = quotedIdentPrev
 				}
-				prevIdentInFrom = inFrom
+				prevIdentInFrom = inPos
 				if match {
 					return tok.Start
 				}
@@ -583,13 +614,52 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 // never be read as a FROM-introducing token.
 const quotedIdentPrev = "\x00quoted"
 
-// fromPositionKeyword reports whether prev directly introduces a relation
-// name. '.' is deliberately excluded: a qualified name's '.' is handled
-// with a qualifier-in-FROM check so a `x.y` column reference is not
-// mistaken for a relation.
-func fromPositionKeyword(prev string) bool {
+// keywordPred reports whether prev is a keyword that directly introduces
+// a relation name, valid anywhere (these keywords only appear as FROM
+// openers at statement depth; nested occurrences are skipped whole).
+// '.' is deliberately excluded: a qualified name's '.' is handled with a
+// qualifier-in-FROM check so a `x.y` column reference is not mistaken for
+// a relation. ','/'(' are excluded here — they are structural predecessors
+// gated on FROM context by the caller.
+func keywordPred(prev string) bool {
 	switch prev {
-	case "FROM", "JOIN", "STRAIGHT_JOIN", ",", "(", "INTO", "UPDATE":
+	case "FROM", "JOIN", "STRAIGHT_JOIN", "INTO", "UPDATE":
+		return true
+	}
+	return false
+}
+
+// tableFactorStart reports whether prev marks the start of a table factor,
+// where a '(' opens a parenthesized table-references group (transparent)
+// rather than an expression or index hint (opaque).
+func tableFactorStart(prev string) bool {
+	switch prev {
+	case "FROM", "JOIN", "STRAIGHT_JOIN", "INTO", "UPDATE", ",", "(":
+		return true
+	}
+	return false
+}
+
+// isFromOpener reports whether the uppercased keyword opens a FROM/JOIN
+// table-reference region.
+func isFromOpener(u string) bool {
+	switch u {
+	case "FROM", "JOIN", "STRAIGHT_JOIN", "INTO", "UPDATE":
+		return true
+	}
+	return false
+}
+
+// isFromCloser reports whether the uppercased keyword ends the FROM/JOIN
+// region at statement depth (the following ','/'(' are no longer
+// structural). ON/USING are deliberately NOT closers: a comma after a
+// join condition resumes the table-reference list (a cross join), and ON
+// parens are already opaque because ON is not a table-factor start.
+func isFromCloser(u string) bool {
+	switch u {
+	case "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET",
+		"WINDOW", "UNION", "EXCEPT", "INTERSECT", "FOR", "LOCK",
+		"SET", "VALUES", "PROCEDURE":
 		return true
 	}
 	return false
