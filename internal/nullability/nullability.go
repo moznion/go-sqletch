@@ -445,6 +445,18 @@ func collectPresence(t dialect.Tree, env map[string]cteBinding,
 			continue
 		}
 		if b, ok := env[rel.Table]; ok && rel.Schema == "" {
+			if b.def.Tree == nil {
+				// A data-modifying CTE (DELETE/UPDATE/INSERT … RETURNING).
+				// The engine attributes its RETURNING columns to the base
+				// tables the DML reads, and one of those may be null-
+				// extended by a join INSIDE the DML (e.g. RETURNING a RIGHT
+				// JOIN's null side). Granting nothing is insufficient: any
+				// OTHER clean instance of that table in the outer FROM would
+				// vouch for the OID. Poison every table the body mentions so
+				// no path narrows it (design 05 §2b).
+				poison(b.def.PoisonTables, cat, present)
+				continue
+			}
 			// Always descend with the definition's OWN captured body env,
 			// never one reconstructed from this (possibly deeper)
 			// reference level. A non-recursive body's scope excludes its
@@ -485,10 +497,10 @@ func collectPresence(t dialect.Tree, env map[string]cteBinding,
 	}
 }
 
-// descend enters one subquery. A nil tree is a data-modifying CTE:
-// it exposes only RETURNING rows of its target table, whose
-// constraints were enforced at write time — grant nothing, poison
-// nothing. A hazardous body (recursive CTE, set operation, grouping
+// descend enters one subquery. A nil tree cannot occur here: a
+// data-modifying CTE never reaches descend (its poisoning is handled
+// at the reference site in collectPresence, where its PoisonTables are
+// in scope). A hazardous body (recursive CTE, set operation, grouping
 // sets) poisons every table it mentions: its output can carry those
 // tables' attribution while breaking their declared constraints
 // (SQLite attributes compound output to the FIRST branch's table;
@@ -501,19 +513,29 @@ func descend(sub dialect.Tree, recursive bool, env map[string]cteBinding,
 		return
 	}
 	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() {
-		for _, tr := range sub.DeepTables() {
-			if tbl := cat.LookupQualified(tr.Schema, tr.Name); tbl != nil {
-				p := present[tbl.OID]
-				if p == nil {
-					p = &presence{}
-					present[tbl.OID] = p
-				}
-				p.poisoned = true
-			}
-		}
+		poison(sub.DeepTables(), cat, present)
 		return
 	}
 	collectPresence(sub, env, maxR, cat, nullExt, present, res, false)
+}
+
+// poison marks every catalog-resolvable table in refs as poisoned: a
+// poisoned OID never narrows, on ANY exposing path, because a
+// hazardous or data-modifying subquery can carry that table's column
+// attribution while breaking its declared NOT NULL (a set operation's
+// branch attribution, grouping-set nulling, or a DML body's RETURNING
+// of a null-extended join side).
+func poison(refs []dialect.TableRef, cat *cache.Catalog, present map[uint32]*presence) {
+	for _, tr := range refs {
+		if tbl := cat.LookupQualified(tr.Schema, tr.Name); tbl != nil {
+			p := present[tbl.OID]
+			if p == nil {
+				p = &presence{}
+				present[tbl.OID] = p
+			}
+			p.poisoned = true
+		}
+	}
 }
 
 // AnalyzeAll runs Analyze over every verified rendering and unions the

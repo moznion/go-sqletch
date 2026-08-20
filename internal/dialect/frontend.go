@@ -80,10 +80,19 @@ type CTEDef struct {
 	Recursive bool
 	// Tree is the facade over the body, nil when the body is not a
 	// plain query (a data-modifying CTE): such bodies expose only
-	// RETURNING rows of their target table, whose constraints were
-	// enforced at write time — the analyzer grants them nothing and
-	// poisons nothing.
+	// RETURNING rows via a target list the engine attributes to the
+	// base tables the DML reads.
 	Tree Tree
+	// PoisonTables lists every base-table name a data-modifying body
+	// (nil Tree) mentions. PostgreSQL attributes a wCTE column through
+	// GetCTETargetList — the RETURNING list — to a base table's OID,
+	// and that table may sit on a null-extended side of a join inside
+	// the DML (e.g. RETURNING a RIGHT JOIN's null-extended side). The
+	// analyzer must POISON these OIDs so no clean OUTER instance of the
+	// same table can vouch for the null-extended provenance (design 05
+	// §2b). Populated only by the PostgreSQL facade — MySQL/SQLite CTE
+	// bodies are SELECT-only, so it stays nil there.
+	PoisonTables []TableRef
 }
 
 // StmtKind is the statement class sqletch supports.

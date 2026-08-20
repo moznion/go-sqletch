@@ -353,6 +353,33 @@ WHERE po.id = 1;
 	assertNullable(t, got, []bool{true})
 }
 
+// A data-modifying CTE (nil sub-tree) must POISON every base table its
+// DML body mentions. PostgreSQL attributes a wCTE column through
+// GetCTETargetList — the RETURNING list — to a base table's OID, and
+// that table can sit on a null-extended join side inside the DML: here
+// `orgs o2` is the null-extended LEFT operand of a RIGHT JOIN, so
+// `RETURNING o2.name` can be NULL. The engine reports oname's SrcRel as
+// orgs (200). Granting the nil-Tree CTE nothing is not enough — the
+// clean outer `orgs o` instance would vouch for OID 200 and narrow both
+// columns. Poisoning orgs keeps them nullable (a proven NULL-into-value
+// counterexample before the fix; the outer o.name turns into a
+// conservative false positive, which only costs a pointer).
+func TestAnalyze_DataModifyingCTEPoisonsBody(t *testing.T) {
+	src := `-- name: Q :many
+WITH m AS (
+  DELETE FROM users AS u2 USING orgs AS o2 RIGHT JOIN users AS u3 ON o2.id = u3.org_id
+  WHERE u2.id = u3.id RETURNING o2.name AS oname
+)
+SELECT o.name, m.oname FROM orgs AS o, m;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		// The engine attributes both to orgs.name (OID 200, att 2); the
+		// wCTE column can be NULL because o2 is null-extended inside the DML.
+		col("name", 200, 2), col("oname", 200, 2),
+	}}, nil)
+	assertNullable(t, got, []bool{true, true})
+}
+
 // A view marked in the catalog (as all three oracle snapshots now do:
 // PG relkind v/m, MySQL information_schema.tables.table_type='VIEW',
 // SQLite) poisons narrowing for the whole statement: the view attributes
