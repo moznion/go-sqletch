@@ -253,15 +253,29 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	// cache.path and output.path drive every write sqletch performs.
 	// A committed relative path climbing out of the project with `..`
 	// is the clone-and-run write-redirection vector, so it is refused;
-	// an absolute path is a deliberate operator choice and only warns.
-	checkPath := func(field, p string) {
+	// the `..` test is purely lexical, so it misses a committed DIRECTORY
+	// symlink whose path stays in-tree but whose real target escapes; the
+	// symlink-aware pass below closes that (a cloned repo can commit
+	// `link -> /outside` and point the field at `link/...`).
+	//
+	// warnAbsolute distinguishes the two kinds of path this policy covers.
+	// For generated-output paths an absolute path is a deliberate operator
+	// choice that only WARNS ("output belongs in the repo"). For a SQLite
+	// database.dsn an absolute path is entirely normal — a dev database
+	// legitimately lives outside the tree (often /tmp) and is not
+	// generated output — so it must be accepted silently; only the sneaky
+	// in-tree-LOOKING escapes (relative `..`, symlinked directory) are the
+	// committed-repo attack vector worth refusing there.
+	checkPath := func(field, p string, warnAbsolute bool) {
 		if p == "" {
 			return
 		}
 		if filepath.IsAbs(p) {
-			diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
-				"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
-				WithHint("prefer a project-relative path so generated output stays inside the repository"))
+			if warnAbsolute {
+				diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
+					"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
+					WithHint("prefer a project-relative path so generated output stays inside the repository"))
+			}
 			return
 		}
 		resolved := filepath.Clean(filepath.Join(cfg.Dir, p))
@@ -270,12 +284,80 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
 				"%s %q escapes the project directory (resolves to %q): a relative path climbing out with `..` is refused because a cloned repository could otherwise redirect writes to arbitrary locations", field, p, resolved).
 				WithHint("keep %s inside the project directory", field))
+			return
+		}
+		if real, outside := resolvesOutsideRoot(cfg.Dir, resolved); outside {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
+				"%s %q escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise commit a directory symlink to redirect writes to arbitrary locations", field, p, real).
+				WithHint("keep %s inside the project directory and remove any symlinked components", field))
 		}
 	}
-	checkPath("cache.path", cfg.Cache.Path)
-	checkPath("output.path", cfg.Output.Path)
+	checkPath("cache.path", cfg.Cache.Path, true)
+	checkPath("output.path", cfg.Output.Path, true)
+	// For SQLite, database.dsn is a FILE PATH that generate/check creates
+	// and opens, so a committed in-tree-looking path that escapes the
+	// project is the same clone-and-run redirection risk as the output
+	// paths. But an ABSOLUTE dev-database path is a normal operator choice
+	// (not generated output), so it is accepted without the absolute-path
+	// warning — warning here would break the common `dsn: /abs/dev.sqlite3`
+	// setup, since config-load diagnostics are fatal to the run. The URI
+	// spellings (`:memory:`, `file:`) are not paths and are exempt,
+	// matching cli.sqliteDSNPath; for the server dialects the DSN is a
+	// connection URL and must not be path-checked at all.
+	if cfg.Dialect == "sqlite" {
+		if dsn := cfg.Database.DSN; dsn != "" && dsn != ":memory:" &&
+			!strings.HasPrefix(dsn, "file:") {
+			checkPath("database.dsn", dsn, false)
+		}
+	}
 
 	return cfg, diags
+}
+
+// resolvesOutsideRoot reports whether target — after following symlinks in
+// its existing ancestry — lands outside root, and returns the resolved real
+// path. root (the project directory) is itself symlink-resolved so a project
+// legitimately reached through a symlinked ancestor (macOS /tmp ->
+// /private/tmp, a repo under a symlinked home) is not a false positive.
+// Callers must already have ruled out a lexical `..` escape; this adds only
+// the symlinked-directory-component case.
+func resolvesOutsideRoot(root, target string) (string, bool) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = filepath.Clean(root)
+	}
+	real := resolveExistingPrefix(target)
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return real, true
+	}
+	return real, false
+}
+
+// resolveExistingPrefix resolves symlinks over the longest existing prefix
+// of path (the leaf usually does not exist yet — it is what sqletch is about
+// to create) and rejoins the not-yet-existing remainder lexically, so a
+// symlinked directory component anywhere in the existing ancestry is
+// followed while a missing leaf does not defeat resolution.
+func resolveExistingPrefix(path string) string {
+	path = filepath.Clean(path)
+	remainder := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			if remainder == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			// Reached the filesystem root with nothing resolvable; fall
+			// back to the lexical join.
+			return filepath.Join(path, remainder)
+		}
+		remainder = filepath.Join(filepath.Base(path), remainder)
+		path = parent
+	}
 }
 
 // Abs resolves a config-relative path.

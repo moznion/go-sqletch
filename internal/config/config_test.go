@@ -134,6 +134,137 @@ func TestLoad_PathEscape(t *testing.T) {
 			t.Fatalf("want SQLETCH306 error for cache.path, got %+v", diags)
 		}
 	})
+
+	// A committed DIRECTORY symlink whose lexical path stays in-tree (no
+	// `..`) but whose real target escapes the project must be refused:
+	// this is the clone-and-run write-redirection the lexical check alone
+	// misses (a cloned repo commits `link -> /outside`, then points
+	// output.path/cache.path at `link/...`).
+	t.Run("symlinked directory component escape is an error", func(t *testing.T) {
+		for _, field := range []string{"output.path", "cache.path"} {
+			t.Run(field, func(t *testing.T) {
+				dir := t.TempDir()
+				outside := t.TempDir()
+				if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+					t.Skipf("symlink unsupported: %v", err)
+				}
+				var y string
+				switch field {
+				case "output.path":
+					y = strings.Replace(validYAML, "path: gen", "path: link/gen", 1)
+				case "cache.path":
+					y = validYAML + "cache:\n  path: link/cache\n"
+				}
+				_, diags := Load(write(t, dir, "sqletch.yaml", y))
+				if !hasCode(diags, diagnostics.Error) {
+					t.Fatalf("want SQLETCH306 error for %s via symlinked dir, got %+v", field, diags)
+				}
+				if !diagnostics.HasErrors(diags) {
+					t.Errorf("a symlinked-dir escape must fail the load")
+				}
+			})
+		}
+	})
+
+	// No false positive when the PROJECT itself is legitimately reached
+	// through a symlinked ancestor (macOS /tmp -> /private/tmp, a repo
+	// under a symlinked home): both sides resolve into the same real
+	// tree, so an in-tree relative path stays contained.
+	t.Run("symlinked project root is not a false positive", func(t *testing.T) {
+		real := t.TempDir()
+		linkParent := t.TempDir()
+		proj := filepath.Join(linkParent, "proj")
+		if err := os.Symlink(real, proj); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		// Config lives in the symlinked project dir; output.path is a
+		// plain in-tree subdir.
+		_, diags := Load(write(t, proj, "sqletch.yaml", validYAML))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("in-tree path under a symlinked project root must not flag: %+v", d)
+			}
+		}
+	})
+}
+
+// For SQLite, database.dsn is a file path that generate/check creates
+// and opens, so it is subject to the same clone-and-run escape policy as
+// output.path/cache.path. The URI spellings are exempt; server-dialect
+// DSNs (connection URLs) are never path-checked.
+func TestLoad_SQLiteDSNPathEscape(t *testing.T) {
+	hasEscapeError := func(diags []diagnostics.Diagnostic) bool {
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape && d.Severity == diagnostics.Error {
+				return true
+			}
+		}
+		return false
+	}
+	sqliteYAML := func(dsn string) string {
+		return "version: 1\ndialect: sqlite\nserver_version: \"3.50\"\n" +
+			"database:\n  dsn: " + dsn + "\n" +
+			"schema:\n  files: [db/schema.sql]\nqueries: [queries/*.sql]\n" +
+			"output:\n  package: gen\n  path: gen\n"
+	}
+
+	t.Run("relative escape is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML("../../evil.db")))
+		if !hasEscapeError(diags) {
+			t.Fatalf("want SQLETCH306 error for sqlite database.dsn, got %+v", diags)
+		}
+	})
+
+	t.Run("symlinked directory escape is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML("link/dev.sqlite")))
+		if !hasEscapeError(diags) {
+			t.Fatalf("want SQLETCH306 error for sqlite dsn via symlinked dir, got %+v", diags)
+		}
+	})
+
+	// An absolute dev-database path is a normal operator choice (a dev DB
+	// legitimately lives outside the tree, e.g. under /tmp) and is NOT
+	// generated output, so unlike output.path it must NOT even warn —
+	// config-load diagnostics are fatal to the run, so a warning here
+	// would break the common `dsn: /abs/dev.sqlite3` setup.
+	t.Run("absolute dsn is clean (no warning)", func(t *testing.T) {
+		dir := t.TempDir()
+		abs := filepath.Join(t.TempDir(), "dev.sqlite3")
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(abs)))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("absolute sqlite dsn must not produce a path diagnostic: %+v", d)
+			}
+		}
+	})
+
+	t.Run("URI spellings are exempt", func(t *testing.T) {
+		for _, dsn := range []string{":memory:", "file:dev.db?mode=memory"} {
+			dir := t.TempDir()
+			_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(dsn)))
+			for _, d := range diags {
+				if d.Code == diagnostics.CodePathEscape {
+					t.Errorf("dsn %q must be exempt from the path check: %+v", dsn, d)
+				}
+			}
+		}
+	})
+
+	t.Run("in-tree relative dsn is clean", func(t *testing.T) {
+		dir := t.TempDir()
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML("db/dev.sqlite")))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("in-tree sqlite dsn must not flag: %+v", d)
+			}
+		}
+	})
 }
 
 func TestLoad_UnknownKey(t *testing.T) {
