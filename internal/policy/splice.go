@@ -166,23 +166,49 @@ type joinOnResult struct {
 	found     bool // ON expression located
 	noOn      bool // USING/NATURAL/comma join, or no ON at all
 	notInSkel bool // the relation reference is not in skeleton text
+	// wrongJoin is set when an ON WAS located but it does not belong to
+	// the join that null-extends this occurrence — gating it would not
+	// remove the designated table's own rows (a FULL join preserves both
+	// sides; a table on the preserved side of its own join is
+	// null-extended farther out). Weaving there is a silent tenant leak,
+	// so the weaver refuses (SQLETCH125) and the enforcer treats the
+	// conjunct as absent (SQLETCH124). The proven-equivalent inner/cross
+	// crossings (scoping the inner ON removes the rows before the group
+	// is null-extended) do NOT set it.
+	wrongJoin bool
 	cs        clauseScan
 }
 
 // joinOn scans forward from the relation reference at template offset
 // relOff to the first ON expression at the reference's paren depth,
 // and collects it exactly like whereClause collects the WHERE clause.
+// ownJoin is the join type that directly binds the reference as its
+// RIGHT operand (dialect.RelRef.Join); it is authoritative only when
+// no join keyword is crossed before the ON (the reference is a right
+// operand). When a join keyword IS crossed first the reference is a
+// left operand and its introducing join is read from that first
+// crossed keyword instead — ownJoin is unreliable there (the frontend
+// inherits it from an enclosing level).
+//
 // For a LEFT JOIN's right operand that is the join's own ON; for a
-// RIGHT/FULL JOIN's left operand the scan crosses the join keywords
-// and the joined relation to the same clause; and for a relation
-// nested in an inner join group under an outer join it finds the
-// inner ON — scoping there filters the designated rows before the
-// group is null-extended, which is equivalent. USING and NATURAL
-// quals terminate the search (nothing to extend). The expression ends
-// at a depth-0 join/tail/WHERE keyword, a depth-0 comma, a closing
-// parenthesis beyond the reference's depth, a semicolon, any
-// construct item, or the end of the statement.
-func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int) joinOnResult {
+// RIGHT JOIN's left operand the scan crosses the join keywords and the
+// joined relation to the same clause; and for a relation nested in an
+// inner join group under an outer join it finds the inner ON — scoping
+// there filters the designated rows before the group is null-extended,
+// which is equivalent. USING and NATURAL quals terminate the search
+// (nothing to extend). The expression ends at a depth-0
+// join/tail/WHERE keyword, a depth-0 comma, a closing parenthesis
+// beyond the reference's depth, a semicolon, any construct item, or
+// the end of the statement.
+//
+// Soundness (D2a): weaving into the located ON removes the designated
+// table's own rows ONLY when that ON belongs to the join that
+// null-extends this occurrence. The scan records the introducing join
+// so finish() can flag wrongJoin (a FULL join preserves both sides; a
+// table on the preserved side of its own outer join is null-extended
+// farther out) — for those the weaver refuses rather than weave a
+// leaking conjunct.
+func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int, ownJoin dialect.JoinType) joinOnResult {
 	res := joinOnResult{cs: clauseScan{lexOK: true, start: -1, end: -1}}
 	startItem := -1
 	for i, it := range q.Items {
@@ -200,11 +226,19 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int)
 	col := &segCollector{cs: res.cs}
 	depth := 0
 	inOn := false
+	// crossedJoin records the first join keyword crossed before the ON
+	// (the reference is then a left operand and this is its introducing
+	// join); crossedJoinKw distinguishes "not yet crossed" from a value.
+	crossedJoinKw := false
+	crossedJoin := dialect.JoinInner
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
 		res.found = inOn
 		res.noOn = !inOn
+		if inOn {
+			res.wrongJoin = !onGates(ownJoin, crossedJoinKw, crossedJoin)
+		}
 		return res
 	}
 	for i := startItem; i < len(q.Items); i++ {
@@ -263,7 +297,13 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int)
 					case !inOn && joinKeywords[up]:
 						// The reference is a left operand: its ON lies
 						// past the join keywords and the joined
-						// relation. Keep scanning.
+						// relation. The FIRST such keyword names its
+						// introducing join (LEFT/RIGHT/FULL are outer;
+						// everything else in joinKeywords is inner/cross).
+						if !crossedJoinKw {
+							crossedJoinKw = true
+							crossedJoin = joinKindOf(up)
+						}
 						continue
 					case inOn && (joinKeywords[up] || tailKeywords[up] || up == "WHERE"):
 						return finish()
@@ -283,6 +323,62 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int)
 		}
 	}
 	return finish()
+}
+
+// joinKindOf maps a crossed join keyword to its dialect.JoinType. Only
+// the outer keywords need to be distinguished; every other join keyword
+// (JOIN/INNER/CROSS/STRAIGHT_JOIN) is an inner/cross crossing, which the
+// gating decision treats as proven-equivalent. NATURAL never reaches
+// here — it terminates the scan (no ON to extend).
+func joinKindOf(up string) dialect.JoinType {
+	switch up {
+	case "LEFT":
+		return dialect.JoinLeft
+	case "RIGHT":
+		return dialect.JoinRight
+	case "FULL":
+		return dialect.JoinFull
+	default:
+		return dialect.JoinInner
+	}
+}
+
+// onGates reports whether weaving into the located ON removes the
+// designated table's own rows — the D2a soundness condition. The
+// located ON belongs to the occurrence's introducing join: when a join
+// keyword was crossed the reference is that join's LEFT operand
+// (introducing = crossedJoin), otherwise it is ownJoin's RIGHT operand.
+//
+//   - Inner/cross joins always gate: scoping the inner ON physically
+//     removes the rows before any enclosing outer join null-extends the
+//     group (proven-equivalent to a WHERE conjunct on the inner result).
+//   - A LEFT join null-extends its RIGHT operand only; a RIGHT join its
+//     LEFT operand only. Gating the ON there removes the unmatched
+//     designated rows (they are never preserved on that side).
+//   - A FULL join preserves BOTH sides, so its ON gates neither; a table
+//     on the preserved side of any outer join is null-extended farther
+//     out and its own ON does not gate it. Those are the leak cases.
+func onGates(ownJoin dialect.JoinType, crossedJoinKw bool, crossedJoin dialect.JoinType) bool {
+	if crossedJoinKw {
+		// Left operand of crossedJoin.
+		switch crossedJoin {
+		case dialect.JoinInner, dialect.JoinCross:
+			return true
+		case dialect.JoinRight:
+			return true
+		default: // JoinLeft, JoinFull, and anything unexpected: refuse.
+			return false
+		}
+	}
+	// Right operand of ownJoin.
+	switch ownJoin {
+	case dialect.JoinInner, dialect.JoinCross:
+		return true
+	case dialect.JoinLeft:
+		return true
+	default: // JoinRight, JoinFull, and anything unexpected: refuse.
+		return false
+	}
 }
 
 // normalizedTokens lexes text into the same normalized form the
