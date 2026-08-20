@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,11 +32,29 @@ type Frontend struct{}
 var _ dialect.Frontend = Frontend{}
 
 func (Frontend) Parse(sql string) (dialect.Tree, error) {
-	stmts, _, err := parser.New().ParseSQL(sql)
+	stmts, err := parseSQL(sql)
 	if err != nil {
 		return nil, toParseError(sql, err)
 	}
 	return &tree{sql: sql, stmts: stmts}, nil
+}
+
+// parseSQL wraps parser.ParseSQL with a panic guard. The test_driver
+// value backend the parser requires (see the blank import) panics on
+// literals its stub arithmetic does not model — MyDecimal.FromString
+// on an integer literal wide enough to overflow into the decimal
+// path, for one — and the parser's lexer folds such literals during
+// scanning, so the panic is reachable from ANY parse of adversarial
+// input. It must surface as an ordinary parse error, never a crash.
+func parseSQL(sql string) (stmts []ast.StmtNode, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stmts = nil
+			err = fmt.Errorf("parser panic: %v", r)
+		}
+	}()
+	stmts, _, err = parser.New().ParseSQL(sql)
+	return stmts, err
 }
 
 var lineColRe = regexp.MustCompile(`line (\d+) column (\d+)`)

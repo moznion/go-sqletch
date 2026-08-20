@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	parsertypes "github.com/pingcap/tidb/pkg/parser/types"
 
@@ -58,7 +57,7 @@ func BuildCatalog(schema []cache.SchemaFile) (*cache.Catalog, error) {
 	tables := map[string]*cache.Table{}
 	for _, f := range schema {
 		content := string(f.Content)
-		stmts, _, err := parser.New().ParseSQL(content)
+		stmts, err := parseSQL(content)
 		if err != nil {
 			pos := 0
 			var perr *dialect.ParseError
