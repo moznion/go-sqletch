@@ -164,9 +164,21 @@ type queryBuilder struct {
 	// whereas `ON` is the ordinary JOIN keyword, so a bare column named
 	// `conflict` in a SELECT/UPDATE/DELETE join condition would otherwise
 	// spuriously trip afterOnConflict and suppress the real WHERE.
+	//
+	// isInsert alone is not enough inside a genuine INSERT ... SELECT: the
+	// feeding SELECT may itself carry a `JOIN ... ON conflict = …` whose
+	// `ON` is the JOIN keyword, forming the same depth-0 `ON` `CONFLICT`
+	// pair while isInsert is legitimately true. joinPendingOn/onWasJoin
+	// separate the two: a depth-0 JOIN arms joinPendingOn, and the next
+	// depth-0 `ON` that consumes it is a JOIN's ON (onWasJoin), so the
+	// `CONFLICT` following it is a column, not the conflict clause. The
+	// real ON CONFLICT clause's `ON` sits past the completed value source
+	// (no JOIN awaiting it), so it is honored.
 	prevKw          string
 	afterOnConflict bool
 	isInsert        bool
+	joinPendingOn   bool
+	onWasJoin       bool
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
@@ -519,10 +531,33 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 	// keyword, so a bare column named `conflict` must not suppress the
 	// real WHERE (which would splice the policy weaver's conjunct into the
 	// wrong place, or double the WHERE via the tail fallback).
-	if qb.isInsert && prevKw == "ON" && kw == "CONFLICT" {
+	//
+	// Even inside an INSERT the `ON` must not be a JOIN's ON: a genuine
+	// INSERT ... SELECT can feed from `JOIN … ON conflict = …`, and there
+	// the pair is still a join predicate on a column named `conflict`, not
+	// the conflict clause. onWasJoin (set when the preceding `ON` consumed
+	// a pending JOIN) rules that case out; the real ON CONFLICT clause's
+	// `ON` has no JOIN awaiting it.
+	if qb.isInsert && prevKw == "ON" && kw == "CONFLICT" && !qb.onWasJoin {
 		qb.afterOnConflict = true
 	}
 	switch kw {
+	case "JOIN":
+		// A depth-0 JOIN arms the next depth-0 `ON` as its join predicate.
+		qb.joinPendingOn = true
+	case "USING":
+		// A USING/NATURAL-style join consumes the pending join without an
+		// `ON`, so a later `ON` is free to be the conflict clause.
+		qb.joinPendingOn = false
+	case "ON":
+		// This `ON` belongs to a JOIN iff one is awaiting it. Recording
+		// that (and clearing the pending state) lets the CONFLICT check
+		// above distinguish a join predicate on a column named `conflict`
+		// from the real conflict clause. onWasJoin is only ever read on the
+		// token right after an `ON` (the check is guarded by prevKw=="ON"),
+		// and every `ON` re-sets it, so it never goes stale.
+		qb.onWasJoin = qb.joinPendingOn
+		qb.joinPendingOn = false
 	case "SELECT":
 		qb.ctx = ctxProjection
 	case "FROM":

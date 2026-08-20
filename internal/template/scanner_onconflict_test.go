@@ -99,3 +99,51 @@ func TestScan_SelectJoinOnConflictColumnRecordsRealWhere(t *testing.T) {
 		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
 	}
 }
+
+// Regression guard (#90 follow-up): inside a genuine INSERT ... SELECT,
+// isInsert is legitimately true, so gating the depth-0 `ON` `CONFLICT`
+// pair on isInsert ALONE does not block a bare column named `conflict`
+// in the feeding SELECT's `JOIN ... ON conflict = ...`. The real ON
+// CONFLICT clause only appears past the completed value source (the
+// VALUES rows or the feeding SELECT), never inside the feed's join
+// tree — so afterOnConflict must not flip there and the feeding
+// SELECT's own row-filter WHERE must still be recorded.
+func TestScan_InsertSelectJoinOnConflictColumnRecordsRealWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a JOIN b ON conflict = b.id WHERE a.tenant = :ten;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("INSERT ... SELECT with a JOIN column named `conflict` must record the feeding SELECT's real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	// The recorded end must sit just past the real WHERE keyword, i.e.
+	// the tenant predicate follows it.
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}
+
+// Companion to the above: a join in the feeding SELECT whose ON is
+// consumed by a genuine join predicate, followed by the real ON
+// CONFLICT clause, must STILL suppress the DO-UPDATE WHERE. This is the
+// shape a naive "ignore every ON inside the feed" fix would break.
+func TestScan_InsertSelectJoinThenRealOnConflictSuppresses(t *testing.T) {
+	src := "-- name: Up :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a JOIN b ON a.k = b.k ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a WHERE after a real ON CONFLICT (join in feed), got %d", q.WhereKwEnd)
+	}
+}
+
+// The partial-index predicate WHERE inside a conflict target
+// (`ON CONFLICT (a) WHERE <pred> DO UPDATE ...`) is part of the conflict
+// clause, not the statement's row filter, and must not be recorded.
+func TestScan_OnConflictPartialIndexWhereNotStatementWhere(t *testing.T) {
+	src := "-- name: Up :exec\n" +
+		"INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a > 0 DO UPDATE SET b = 2 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a partial-index WHERE inside ON CONFLICT, got %d", q.WhereKwEnd)
+	}
+}
