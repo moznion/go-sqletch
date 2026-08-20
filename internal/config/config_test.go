@@ -228,6 +228,22 @@ func TestLoad_SQLiteDSNPathEscape(t *testing.T) {
 		}
 	})
 
+	// An absolute dev-database path is a normal operator choice (a dev DB
+	// legitimately lives outside the tree, e.g. under /tmp) and is NOT
+	// generated output, so unlike output.path it must NOT even warn —
+	// config-load diagnostics are fatal to the run, so a warning here
+	// would break the common `dsn: /abs/dev.sqlite3` setup.
+	t.Run("absolute dsn is clean (no warning)", func(t *testing.T) {
+		dir := t.TempDir()
+		abs := filepath.Join(t.TempDir(), "dev.sqlite3")
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(abs)))
+		for _, d := range diags {
+			if d.Code == diagnostics.CodePathEscape {
+				t.Errorf("absolute sqlite dsn must not produce a path diagnostic: %+v", d)
+			}
+		}
+	})
+
 	t.Run("URI spellings are exempt", func(t *testing.T) {
 		for _, dsn := range []string{":memory:", "file:dev.db?mode=memory"} {
 			dir := t.TempDir()

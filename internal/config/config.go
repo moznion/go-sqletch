@@ -253,19 +253,29 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	// cache.path and output.path drive every write sqletch performs.
 	// A committed relative path climbing out of the project with `..`
 	// is the clone-and-run write-redirection vector, so it is refused;
-	// an absolute path is a deliberate operator choice and only warns.
-	// The `..` test is purely lexical, so it misses a committed DIRECTORY
+	// the `..` test is purely lexical, so it misses a committed DIRECTORY
 	// symlink whose path stays in-tree but whose real target escapes; the
 	// symlink-aware pass below closes that (a cloned repo can commit
 	// `link -> /outside` and point the field at `link/...`).
-	checkPath := func(field, p string) {
+	//
+	// warnAbsolute distinguishes the two kinds of path this policy covers.
+	// For generated-output paths an absolute path is a deliberate operator
+	// choice that only WARNS ("output belongs in the repo"). For a SQLite
+	// database.dsn an absolute path is entirely normal — a dev database
+	// legitimately lives outside the tree (often /tmp) and is not
+	// generated output — so it must be accepted silently; only the sneaky
+	// in-tree-LOOKING escapes (relative `..`, symlinked directory) are the
+	// committed-repo attack vector worth refusing there.
+	checkPath := func(field, p string, warnAbsolute bool) {
 		if p == "" {
 			return
 		}
 		if filepath.IsAbs(p) {
-			diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
-				"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
-				WithHint("prefer a project-relative path so generated output stays inside the repository"))
+			if warnAbsolute {
+				diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
+					"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
+					WithHint("prefer a project-relative path so generated output stays inside the repository"))
+			}
 			return
 		}
 		resolved := filepath.Clean(filepath.Join(cfg.Dir, p))
@@ -282,18 +292,22 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 				WithHint("keep %s inside the project directory and remove any symlinked components", field))
 		}
 	}
-	checkPath("cache.path", cfg.Cache.Path)
-	checkPath("output.path", cfg.Output.Path)
-	// For SQLite, database.dsn is a FILE PATH that generate/check
-	// creates and opens, so it is subject to the same clone-and-run
-	// write-redirection policy as the other output paths. The URI
+	checkPath("cache.path", cfg.Cache.Path, true)
+	checkPath("output.path", cfg.Output.Path, true)
+	// For SQLite, database.dsn is a FILE PATH that generate/check creates
+	// and opens, so a committed in-tree-looking path that escapes the
+	// project is the same clone-and-run redirection risk as the output
+	// paths. But an ABSOLUTE dev-database path is a normal operator choice
+	// (not generated output), so it is accepted without the absolute-path
+	// warning — warning here would break the common `dsn: /abs/dev.sqlite3`
+	// setup, since config-load diagnostics are fatal to the run. The URI
 	// spellings (`:memory:`, `file:`) are not paths and are exempt,
 	// matching cli.sqliteDSNPath; for the server dialects the DSN is a
 	// connection URL and must not be path-checked at all.
 	if cfg.Dialect == "sqlite" {
 		if dsn := cfg.Database.DSN; dsn != "" && dsn != ":memory:" &&
 			!strings.HasPrefix(dsn, "file:") {
-			checkPath("database.dsn", dsn)
+			checkPath("database.dsn", dsn, false)
 		}
 	}
 
