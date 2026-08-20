@@ -119,7 +119,12 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	present := map[uint32]*presence{}
 	res := &instanceResolver{}
 	if trustSrc && cat != nil {
-		collectPresence(maxTree, nil, maxR, cat, false, present, res, true)
+		// memo caches each descended sub-level's presence contribution so a
+		// CTE body referenced N times is analyzed once, not re-descended per
+		// reference (which is exponential for chained CTEs — a DoS). See
+		// descend / mergePresence for why the cache is result-preserving.
+		memo := map[memoKey]map[uint32]presence{}
+		collectPresence(maxTree, nil, maxR, cat, false, present, res, true, memo)
 	}
 
 	// Skeleton `col IS NOT NULL` conjuncts narrow the filtered column
@@ -406,7 +411,8 @@ func cloneEnv(src map[string]cteBinding, extra int) map[string]cteBinding {
 // engine name resolution — see the body of this function).
 func collectPresence(t dialect.Tree, env map[string]cteBinding,
 	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
-	present map[uint32]*presence, res *instanceResolver, top bool) {
+	present map[uint32]*presence, res *instanceResolver, top bool,
+	memo map[memoKey]map[uint32]presence) {
 
 	// A WITH list is visible to the enclosing SELECT/DML FROM (and to
 	// derived tables) in full — every definition, regardless of order —
@@ -464,7 +470,7 @@ func collectPresence(t dialect.Tree, env map[string]cteBinding,
 			// no self-reference loop is possible; a recursive body is
 			// poisoned in descend before any recursion.
 			descend(b.def.Tree, b.def.Recursive, b.bodyEnv, maxR, cat,
-				nullExt || rel.NullableSide, present, res)
+				nullExt || rel.NullableSide, present, res, memo)
 			continue
 		}
 		tbl := cat.LookupQualified(rel.Schema, rel.Table)
@@ -493,7 +499,41 @@ func collectPresence(t dialect.Tree, env map[string]cteBinding,
 	}
 
 	for _, d := range t.DerivedRels() {
-		descend(d.Tree, false, env, maxR, cat, nullExt || d.NullableSide, present, res)
+		descend(d.Tree, false, env, maxR, cat, nullExt || d.NullableSide, present, res, memo)
+	}
+}
+
+// memoKey identifies a descended sub-level's presence contribution. The
+// contribution is a pure function of (the sub-tree's identity, the
+// effective null-extension it is referenced under): the sub-tree pointer
+// also fixes its `recursive` flag and its captured body environment (a
+// parse node occupies exactly one syntactic position, so it is always
+// descended with the same env), leaving nullExt as the only other
+// variable. Two references under DIFFERENT null-extension contexts get
+// different keys and never share a verdict.
+type memoKey struct {
+	tree    dialect.Tree
+	nullExt bool
+}
+
+// mergePresence folds a cached delta into the live presence map. Every
+// presence field is accumulated additively (count) or by OR (the
+// hazard flags) exactly as collectPresence/poison would when descending
+// directly, so a merged delta is byte-for-byte equivalent to
+// re-descending — the memoization changes performance, never verdicts.
+// Additivity is also why the merge order over the delta map is
+// irrelevant to the result (determinism preserved).
+func mergePresence(dst map[uint32]*presence, delta map[uint32]presence) {
+	for oid, d := range delta {
+		p := dst[oid]
+		if p == nil {
+			p = &presence{}
+			dst[oid] = p
+		}
+		p.count += d.count
+		p.nullExtended = p.nullExtended || d.nullExtended
+		p.inherited = p.inherited || d.inherited
+		p.poisoned = p.poisoned || d.poisoned
 	}
 }
 
@@ -507,16 +547,40 @@ func collectPresence(t dialect.Tree, env map[string]cteBinding,
 // grouping sets null grouping columns).
 func descend(sub dialect.Tree, recursive bool, env map[string]cteBinding,
 	maxR ast.Rendering, cat *cache.Catalog, nullExt bool,
-	present map[uint32]*presence, res *instanceResolver) {
+	present map[uint32]*presence, res *instanceResolver,
+	memo map[memoKey]map[uint32]presence) {
 
 	if sub == nil {
 		return
 	}
-	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() {
-		poison(sub.DeepTables(), cat, present)
+	// Reuse a previously computed contribution for this (sub-tree, nullExt):
+	// N references to one CTE body descend it once instead of N (or, for
+	// chained CTEs, 2^N) times. res is never touched below top level, so
+	// the cached delta captures the whole effect.
+	key := memoKey{tree: sub, nullExt: nullExt}
+	if delta, ok := memo[key]; ok {
+		mergePresence(present, delta)
 		return
 	}
-	collectPresence(sub, env, maxR, cat, nullExt, present, res, false)
+	// Compute this sub-level's contribution into a fresh scratch map, then
+	// cache and merge. Nested descends recurse through the same memo and
+	// accumulate into the scratch, so the cached delta is the sub-level's
+	// COMPLETE presence contribution. The reference graph over parse nodes
+	// is acyclic (non-recursive bodies never see their own name; recursive
+	// bodies poison without descending), so no key is re-entered before it
+	// is stored.
+	scratch := map[uint32]*presence{}
+	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() {
+		poison(sub.DeepTables(), cat, scratch)
+	} else {
+		collectPresence(sub, env, maxR, cat, nullExt, scratch, res, false, memo)
+	}
+	delta := make(map[uint32]presence, len(scratch))
+	for oid, p := range scratch {
+		delta[oid] = *p
+	}
+	memo[key] = delta
+	mergePresence(present, delta)
 }
 
 // poison marks every catalog-resolvable table in refs as poisoned: a
