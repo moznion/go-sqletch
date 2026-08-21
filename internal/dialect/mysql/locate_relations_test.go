@@ -330,6 +330,66 @@ func TestLocateRelations_KeywordAlias(t *testing.T) {
 	})
 }
 
+// TestLocateRelations_StraightJoinModifier is the M4 regression:
+// STRAIGHT_JOIN has TWO positions in MySQL — a join operator
+// (`a STRAIGHT_JOIN b`) and a SELECT modifier (`SELECT STRAIGHT_JOIN
+// col …`, like SQL_CALC_FOUND_ROWS). The lexical relation scanner used
+// to treat every STRAIGHT_JOIN as a FROM-introducer, so a select-option
+// occurrence prematurely opened the FROM region over the select list and
+// a bare select-list identifier equal to a table name was pinned as the
+// relation — mislocating RelRef.Loc (feeds guard derivation, R1
+// join-membership, nullability isGuarded). The modifier occurrence must
+// be ignored; the join-operator form must still open/continue the FROM.
+func TestLocateRelations_StraightJoinModifier(t *testing.T) {
+	t.Run("modifier before select list locates FROM t1", func(t *testing.T) {
+		sql := "SELECT STRAIGHT_JOIN t1, b FROM t1, t2"
+		rels := []dialect.RelRef{{Table: "t1"}, {Table: "t2"}}
+		locateRelations(sql, rels)
+		// t1 must be the FROM occurrence (the LAST one), not the
+		// select-list t1.
+		if want := strings.LastIndex(sql, "t1"); rels[0].Loc != want {
+			t.Errorf("t1 Loc = %d (%q), want %d (FROM occurrence)", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+		if want := strings.Index(sql, "t2"); rels[1].Loc != want {
+			t.Errorf("t2 Loc = %d (%q), want %d", rels[1].Loc, sliceAt(sql, rels[1].Loc), want)
+		}
+	})
+
+	t.Run("modifier with several select-list columns locates FROM t1", func(t *testing.T) {
+		sql := "SELECT STRAIGHT_JOIN a, t1, b FROM t1, t2"
+		rels := []dialect.RelRef{{Table: "t1"}, {Table: "t2"}}
+		locateRelations(sql, rels)
+		if want := strings.LastIndex(sql, "t1"); rels[0].Loc != want {
+			t.Errorf("t1 Loc = %d (%q), want %d (FROM occurrence)", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+		if want := strings.Index(sql, "t2"); rels[1].Loc != want {
+			t.Errorf("t2 Loc = %d (%q), want %d", rels[1].Loc, sliceAt(sql, rels[1].Loc), want)
+		}
+	})
+
+	t.Run("control SQL_CALC_FOUND_ROWS modifier locates FROM t1", func(t *testing.T) {
+		sql := "SELECT SQL_CALC_FOUND_ROWS t1 FROM t1"
+		rels := []dialect.RelRef{{Table: "t1"}}
+		locateRelations(sql, rels)
+		if want := strings.LastIndex(sql, "t1"); rels[0].Loc != want {
+			t.Errorf("t1 Loc = %d (%q), want %d (FROM occurrence)", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+	})
+
+	t.Run("join operator form still locates both relations", func(t *testing.T) {
+		sql := "SELECT * FROM t1 STRAIGHT_JOIN t2 ON t1.id=t2.id"
+		rels := []dialect.RelRef{{Table: "t1"}, {Table: "t2"}}
+		locateRelations(sql, rels)
+		if want := strings.Index(sql, "t1"); rels[0].Loc != want {
+			t.Errorf("t1 Loc = %d (%q), want %d", rels[0].Loc, sliceAt(sql, rels[0].Loc), want)
+		}
+		// t2 is the FROM occurrence, before the ON-clause t2.
+		if want := strings.Index(sql, "t2"); rels[1].Loc != want {
+			t.Errorf("t2 Loc = %d (%q), want %d", rels[1].Loc, sliceAt(sql, rels[1].Loc), want)
+		}
+	})
+}
+
 func sliceAt(s string, off int) string {
 	if off < 0 || off >= len(s) {
 		return "<none>"
