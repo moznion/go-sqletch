@@ -347,6 +347,35 @@ func TestNativeDescribeUserConstSubqueryRefused(t *testing.T) {
 	}
 }
 
+// TestNativeDescribeNonInertDualSubqueryRefused pins the fail-closed
+// boundary of the inert @in matcher. The pinned TiDB parser parses
+// every bare/unquoted `FROM DUAL` spelling to a nil From, so a non-nil
+// From carrying a "dual" relation arises only from a REAL table
+// reference — backquoted (`dual`) or schema-qualified (somedb.dual) —
+// which a real server rejects at PREPARE with ER_NO_SUCH_TABLE.
+// Accepting those was fail-open (err=nil for a shape the engine
+// refuses); they must be SQLETCH214 refusals. A `?` projection is a
+// user bind parameter smuggled into a dead subquery — not the
+// emission either, and likewise refused.
+func TestNativeDescribeNonInertDualSubqueryRefused(t *testing.T) {
+	for _, tt := range []struct{ name, sql string }{
+		{"schema-qualified dual", "SELECT id FROM users WHERE id IN (SELECT NULL FROM somedb.dual WHERE FALSE)"},
+		{"backquoted dual", "SELECT id FROM users WHERE id IN (SELECT NULL FROM `dual` WHERE FALSE)"},
+		{"param marker projection", "SELECT id FROM users WHERE id IN (SELECT ? FROM DUAL WHERE FALSE)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError (SQLETCH214), got %T: %v", err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "subquery") {
+				t.Errorf("refusal %q/%q should mention subquery", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
 func TestNativeDescribeAliasVisibility(t *testing.T) {
 	// Output aliases are visible to GROUP BY / HAVING / ORDER BY,
 	// like MySQL's own resolution.

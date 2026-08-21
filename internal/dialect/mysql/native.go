@@ -738,8 +738,10 @@ func (v *refVisitor) Leave(n ast.Node) (ast.Node, bool) { return n, v.err == nil
 // typing is machinery v1 refuses to half-build), so the oracle must
 // refuse every OTHER subquery rather than guess.
 //
-// The match is deliberately narrow — a bare NULL projection, a
-// DUAL/empty FROM, a constant-FALSE WHERE, and no other clause. In
+// The match is deliberately narrow — a bare NULL projection (never a
+// `?` marker), an absent FROM (bare `FROM DUAL` parses to nil; any
+// non-nil From is a real relation, even one spelled `dual`), a
+// constant-FALSE WHERE, and no other clause. In
 // particular it rejects BOTH multi-column and single-column user
 // constant subqueries. Multi-column ones are the fail-closed hazard:
 // a real MySQL server rejects `(SELECT 1, 2)` at PREPARE with
@@ -756,17 +758,13 @@ func inertSubquery(q ast.ResultSetNode) bool {
 		sel.LockInfo != nil || sel.With != nil || sel.SelectIntoOpt != nil {
 		return false
 	}
-	// `FROM DUAL` parses to a nil From; an explicit DUAL relation is
-	// tolerated, but nothing else (a real relation would demand the
-	// inner-scope typing v1 does not build).
+	// Every bare/unquoted `FROM DUAL` spelling parses to a nil From
+	// (dialect.InEmptySQL does). A non-nil From arises only from a REAL
+	// relation reference — a backquoted `dual` or a schema-qualified
+	// somedb.dual is a genuine table the server rejects at PREPARE with
+	// ER_NO_SUCH_TABLE — so any From at all is not the emission.
 	if sel.From != nil {
-		var rels []dialect.RelRef
-		collectJoin(sel.From.TableRefs, dialect.JoinBase, false, &rels)
-		for _, r := range rels {
-			if !strings.EqualFold(r.Table, "dual") {
-				return false
-			}
-		}
+		return false
 	}
 	// Exactly one projected column, and it is the bare NULL literal.
 	if sel.Fields == nil || len(sel.Fields.Fields) != 1 {
@@ -774,6 +772,13 @@ func inertSubquery(q ast.ResultSetNode) bool {
 	}
 	f := sel.Fields.Fields[0]
 	if f.WildCard != nil || f.AsName.O != "" {
+		return false
+	}
+	// A `?` marker implements ast.ValueExpr with GetValue() == nil, so
+	// it would slip past the bare-NULL check below — but `SELECT ?` is
+	// a user bind parameter smuggled into a dead subquery, not the
+	// emission. Refuse it explicitly first.
+	if _, isMarker := f.Expr.(ast.ParamMarkerExpr); isMarker {
 		return false
 	}
 	if ve, ok := f.Expr.(ast.ValueExpr); !ok || ve.GetValue() != nil {
