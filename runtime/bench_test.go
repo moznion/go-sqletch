@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	goruntime "runtime"
 	"testing"
 	"time"
@@ -316,6 +317,31 @@ func BenchmarkCacheGetShapes(b *testing.B) {
 		sqlText, _ := cache.Get("SearchUsers", frags, keys[i%len(keys)])
 		sink = sqlText
 		i++
+	}
+}
+
+// BenchmarkCacheChurn is a shape set that permanently exceeds the
+// capacity (the MySQL/SQLite @in-arity reality: varied IN-list sizes
+// are distinct shapes, so inserts never stop). Each iteration inserts a
+// never-seen shape and immediately re-hits it — the re-hit is the
+// mutex-path first hit whose snapshot flush must be amortized, not an
+// O(capacity) map copy per new shape.
+func BenchmarkCacheChurn(b *testing.B) {
+	for _, capacity := range []int{64, 256, 1024} {
+		b.Run(fmt.Sprintf("cap%d", capacity), func(b *testing.B) {
+			frags := benchFrags()
+			cache := NewComposedCache(capacity)
+			b.ReportAllocs()
+			var g uint64
+			for b.Loop() {
+				key := ShapeKey{Guards: g, Choices: []uint8{0}}
+				sqlText, _ := cache.Get("Q", frags, key)
+				sqlText2, _ := cache.Get("Q", frags, key)
+				sink = sqlText
+				sink = sqlText2
+				g++
+			}
+		})
 	}
 }
 
