@@ -179,6 +179,17 @@ type queryBuilder struct {
 	isInsert        bool
 	joinPendingOn   bool
 	onWasJoin       bool
+	// crossNaturalPending records that a depth-0 CROSS or NATURAL join
+	// keyword has been seen and its JOIN not yet reached. CROSS/NATURAL
+	// joins have NO `ON` clause, so their JOIN must NOT arm joinPendingOn:
+	// otherwise a later real `ON CONFLICT`'s `ON` would be mistaken for
+	// the join's predicate (onWasJoin=true), afterOnConflict would never
+	// flip, and the DO-UPDATE/partial-index WHERE would be wrongly
+	// recorded as the statement WhereKwEnd. A NATURAL join may interpose a
+	// join-type keyword (NATURAL LEFT/RIGHT/INNER JOIN) between NATURAL and
+	// JOIN, so the flag must survive those; it is consumed at the JOIN.
+	// STRAIGHT_JOIN is a normal ON-bearing inner join and is unaffected.
+	crossNaturalPending bool
 }
 
 func (s *Scanner) ScanFile(path string, src []byte) (*QueryFile, []diagnostics.Diagnostic) {
@@ -542,9 +553,19 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		qb.afterOnConflict = true
 	}
 	switch kw {
+	case "CROSS", "NATURAL":
+		// A CROSS/NATURAL join has no `ON` clause; remember that so the
+		// JOIN keyword below does not arm a pending join-ON that a later
+		// real `ON CONFLICT` would then wrongly consume. NATURAL may be
+		// followed by LEFT/RIGHT/INNER before JOIN, so the flag persists
+		// until the JOIN keyword clears it.
+		qb.crossNaturalPending = true
 	case "JOIN":
-		// A depth-0 JOIN arms the next depth-0 `ON` as its join predicate.
-		qb.joinPendingOn = true
+		// A depth-0 JOIN arms the next depth-0 `ON` as its join predicate,
+		// UNLESS it is a CROSS/NATURAL join (no ON clause), which leaves the
+		// pending arm clear so a following real `ON CONFLICT` is recognized.
+		qb.joinPendingOn = !qb.crossNaturalPending
+		qb.crossNaturalPending = false
 	case "USING":
 		// A USING/NATURAL-style join consumes the pending join without an
 		// `ON`, so a later `ON` is free to be the conflict clause.

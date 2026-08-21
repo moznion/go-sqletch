@@ -136,6 +136,62 @@ func TestScan_InsertSelectJoinThenRealOnConflictSuppresses(t *testing.T) {
 	}
 }
 
+// Regression guard (CROSS JOIN follow-up): a CROSS JOIN has no ON clause,
+// so it must NOT leave a join-ON pending. Otherwise the SUBSEQUENT real
+// `ON CONFLICT`'s `ON` is mistaken for the CROSS JOIN's predicate
+// (onWasJoin=true), afterOnConflict never flips, and the DO-UPDATE WHERE
+// is wrongly recorded as the statement WHERE.
+func TestScan_InsertSelectCrossJoinThenRealOnConflictSuppresses(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a CROSS JOIN b ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a WHERE after a real ON CONFLICT (CROSS JOIN in feed), got %d", q.WhereKwEnd)
+	}
+}
+
+// Companion for NATURAL JOIN: like CROSS JOIN it has no ON clause, so the
+// following real ON CONFLICT must still be recognized and its DO-UPDATE
+// WHERE suppressed.
+func TestScan_InsertSelectNaturalJoinThenRealOnConflictSuppresses(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a NATURAL JOIN b ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a WHERE after a real ON CONFLICT (NATURAL JOIN in feed), got %d", q.WhereKwEnd)
+	}
+}
+
+// NATURAL LEFT JOIN interposes a join-type keyword (LEFT) between NATURAL
+// and JOIN, so the fix must survive that: still no ON clause, so the real
+// ON CONFLICT that follows must suppress the DO-UPDATE WHERE.
+func TestScan_InsertSelectNaturalLeftJoinThenRealOnConflictSuppresses(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a NATURAL LEFT JOIN b ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a WHERE after a real ON CONFLICT (NATURAL LEFT JOIN in feed), got %d", q.WhereKwEnd)
+	}
+}
+
+// Positive control (#90 shape, retained): a genuine inner JOIN whose ON
+// carries a bare column named `conflict` must STILL record the feeding
+// SELECT's real WHERE — the JOIN's real ON consumes the pending arm
+// (onWasJoin=true), so the CONFLICT check declines. The CROSS/NATURAL fix
+// must not weaken this: only ON-less joins clear the pending arm.
+func TestScan_InsertSelectInnerJoinOnConflictColumnStillRecordsRealWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a INNER JOIN b ON conflict = b.id WHERE a.tenant = :ten;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("INSERT ... SELECT with an inner JOIN column named `conflict` must record the real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}
+
 // The partial-index predicate WHERE inside a conflict target
 // (`ON CONFLICT (a) WHERE <pred> DO UPDATE ...`) is part of the conflict
 // clause, not the statement's row filter, and must not be recorded.
