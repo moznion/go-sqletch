@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/go-mysql-org/go-mysql/client"
@@ -188,12 +189,31 @@ func (o *Oracle) Snapshot(ctx context.Context) (*cache.Catalog, error) {
 		if tr, ok := tm.TypeByName(typ); ok {
 			typOID = tr.OID
 		}
+		att, err := snapshotAtt(tbl, col, ord)
+		if err != nil {
+			return nil, err
+		}
 		cur.Cols = append(cur.Cols, cache.Column{
-			Name: col, Att: int16(ord), TypeOID: typOID, TypeName: typ,
+			Name: col, Att: att, TypeOID: typOID, TypeName: typ,
 			NotNull: notNull != 0, HasDefault: hasDef != 0,
 		})
 	}
 	return cat, nil
+}
+
+// snapshotAtt narrows an information_schema ordinal_position to the
+// catalog's int16 attribute number. MySQL ordinals are 1-based, so a
+// well-formed server only ever sends 1..N; a corrupt or hostile server
+// returning a value outside 1..32767 used to wrap silently in the
+// int16 conversion — silent catalog corruption where an explicit
+// refusal is cheap. Refuse, naming the table, column, and bad value.
+func snapshotAtt(tbl, col string, ord int64) (int16, error) {
+	if ord < 1 || ord > math.MaxInt16 {
+		return 0, fmt.Errorf(
+			"snapshot: table %q column %q: server returned ordinal_position %d outside 1..%d",
+			tbl, col, ord, math.MaxInt16)
+	}
+	return int16(ord), nil
 }
 
 func (o *Oracle) ServerVersion(ctx context.Context) (string, error) {
