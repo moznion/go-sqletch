@@ -704,6 +704,16 @@ type ComposedCache struct {
 	// amortizes it instead of paying O(cap) on every miss.
 	sinceSnap    int
 	evictedSince bool
+	// snapshots counts publishNow calls — the O(capacity) map copies.
+	// White-box: the churn amortization test pins its growth rate.
+	snapshots uint64
+	// hitFlushCredit and pendingHits rate-cap the mutex-path hit flush
+	// (see entry()): credit grants ONE immediate flush per insert-path
+	// publish, and pendingHits counts credit-less deferred hits so a
+	// flush still happens within cap of them. Counters only — no time
+	// dependence anywhere in this cache.
+	hitFlushCredit bool
+	pendingHits    int
 
 	// obs receives one ObserveCompose per access. It is an atomic
 	// pointer so a SetObserver that races in-flight lock-free reads is
@@ -918,12 +928,32 @@ func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key S
 			c.order.MoveToFront(e.el)
 			// The lock-free snapshot missed this entry: it was created
 			// after the last publish and held back by the amortization
-			// guard. Flush now so this shape — and every co-resident one —
-			// serves lock-free again. Without it, a workload that fills
-			// past capacity and then stops inserting (steady state = pure
-			// hits) would serve its newest shapes under this mutex forever,
-			// defeating the lock-free hit path.
-			c.publishNow()
+			// guard. Flushing here is what keeps M2's promise — a
+			// workload that fills past capacity and then stops inserting
+			// (steady state = pure hits) must not serve its newest shapes
+			// under this mutex forever — but the flush itself is an
+			// O(capacity) map copy, so it is RATE-CAPPED rather than
+			// unconditional: under permanent churn (shape set never fits
+			// the capacity — e.g. varied @in arities on MySQL/SQLite)
+			// every new shape's first re-hit lands here, and copying the
+			// map each time made churn cost one full copy per new shape.
+			//
+			// Two counter-based triggers (no time dependence): a CREDIT
+			// granted by each insert-path/administrative publish allows
+			// the next deferred hit to flush immediately — so once
+			// inserts stop, the first such hit still flushes, exactly as
+			// before (the pinned M2 test) — and credit-less deferred hits
+			// flush after cap of them, bounding how long any resident
+			// entry can stay off the lock-free path at cap mutex hits.
+			// Under churn both triggers fire O(1) times per cap
+			// operations, amortizing the copy; the 2×cap retained-entry
+			// bound is untouched (publish frequency changed, snapshot
+			// contents did not).
+			c.pendingHits++
+			if c.hitFlushCredit || c.pendingHits >= c.cap {
+				c.publishNow()
+				c.hitFlushCredit = false
+			}
 			c.mu.Unlock()
 			touch(e)
 			if c.track.Load() {
@@ -1053,17 +1083,21 @@ func (c *ComposedCache) publish() {
 	// amortized: copying the map on every miss would otherwise make the
 	// degenerate case far more expensive than the composition it
 	// caches. The deferred snapshot is flushed either by a later insert
-	// or, if inserts stop, by the first hit that finds an unpublished
-	// entry (see entry()'s mutex-path hit) — so no entry is stranded off
-	// the lock-free path indefinitely.
+	// or, if inserts stop, by a hit that finds an unpublished entry
+	// (see entry()'s rate-capped mutex-path flush: immediately while a
+	// flush credit is armed, and within cap deferred hits regardless) —
+	// so no entry is stranded off the lock-free path indefinitely.
 	if c.evictedSince && c.sinceSnap < c.cap {
 		return
 	}
 	c.publishNow()
 }
 
-// publishNow snapshots the entry map unconditionally and re-arms the
-// amortization window. Callers hold c.mu.
+// publishNow snapshots the entry map unconditionally, re-arms the
+// amortization window, and grants the hit path one flush credit (a
+// fresh snapshot means the next deferred hit is the "inserts have
+// stopped" signal worth reacting to immediately; the hit path revokes
+// the credit itself after a credited flush). Callers hold c.mu.
 func (c *ComposedCache) publishNow() {
 	snap := make(map[string]*cacheEntry, len(c.m))
 	for k, v := range c.m {
@@ -1072,6 +1106,9 @@ func (c *ComposedCache) publishNow() {
 	c.fast.Store(&snap)
 	c.sinceSnap = 0
 	c.evictedSince = false
+	c.snapshots++
+	c.pendingHits = 0
+	c.hitFlushCredit = true
 }
 
 func cloneKey(k ShapeKey) ShapeKey {
