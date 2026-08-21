@@ -137,6 +137,55 @@ SELECT count(*) AS n, now() AS at, upper(u.email) AS e FROM users AS u;
 	assertNullable(t, got, []bool{false, false, true})
 }
 
+// H2-pg: a schema-qualified user function that merely SHARES a builtin's
+// spelling must not inherit the builtin's totality / strict-aggregate
+// treatment. `myschema.count(x)` names a user function and can return
+// NULL, so its result column stays nullable — only an unqualified call
+// or a pg_catalog-qualified one is the real builtin.
+func TestAnalyze_QualifiedFunctionNotBuiltin(t *testing.T) {
+	// User-schema-qualified: all must stay nullable (no totality proof).
+	nullableCases := []string{
+		"SELECT myschema.count(u.id) AS n FROM users AS u;",
+		"SELECT myschema.now() AS at FROM users AS u;",
+		"SELECT myschema.sum(u.id) AS s FROM users AS u GROUP BY u.id;",
+	}
+	for _, body := range nullableCases {
+		src := "-- name: Q :many\n" + body + "\n"
+		got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+			{Name: "c0"},
+		}}, nil)
+		assertNullable(t, got, []bool{true})
+	}
+	// Unqualified and pg_catalog-qualified are the genuine builtins and
+	// stay non-nullable.
+	nonNullCases := []string{
+		"SELECT count(u.id) AS n FROM users AS u;",
+		"SELECT pg_catalog.count(u.id) AS n FROM users AS u;",
+	}
+	for _, body := range nonNullCases {
+		src := "-- name: Q :many\n" + body + "\n"
+		got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+			{Name: "c0"},
+		}}, nil)
+		assertNullable(t, got, []bool{false})
+	}
+}
+
+// H1: UPDATE … RETURNING must NOT narrow a skeleton `col IS NOT NULL`
+// column. The WHERE tests the OLD row, RETURNING yields the NEW row, so
+// `UPDATE users SET org_id = NULL WHERE org_id IS NOT NULL RETURNING
+// org_id` returns NULL even though every OLD row passed the filter.
+// (Permanent must-stay-nullable case.)
+func TestAnalyze_UpdateReturningNeverNarrowsIsNotNull(t *testing.T) {
+	src := `-- name: Q :one
+UPDATE users SET org_id = NULL WHERE org_id IS NOT NULL RETURNING org_id;
+`
+	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
+		col("org_id", 100, 3),
+	}}, nil)
+	assertNullable(t, got, []bool{true})
+}
+
 func TestAnalyze_Overrides(t *testing.T) {
 	src := `-- name: Q :many
 SELECT u.id, upper(u.email) AS e FROM users AS u;

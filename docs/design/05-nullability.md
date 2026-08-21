@@ -252,7 +252,16 @@ escape hatches pinned by the adversarial suite:
    nullable); `trustSrc` must hold; and the filtered table must have
    exactly ONE skeleton instance, because the described column's
    (SrcRel, SrcAtt) cannot tell `u1.org_id` from `u2.org_id` in a
-   self join.
+   self join. **UPDATE … RETURNING is EXEMPT wholesale**: the "WHERE
+   runs after the joins" premise fails there — the WHERE tests the OLD
+   row while RETURNING yields the NEW one, so
+   `UPDATE t SET c=NULL WHERE c IS NOT NULL RETURNING c` narrows `c`
+   yet returns NULL. Only the target relation's columns can be mutated
+   by RETURNING (a FROM-joined relation stays read-only and would be
+   soundly narrowable), but the shared analyzer has no cheap handle on
+   which relation is the target, so it skips the filtered narrowing for
+   the entire statement when `Tree.Kind() == StmtUpdate`. SQLite shares
+   this analyzer path and the exemption.
 
 `@choose` in ORDER BY (v0.1's only choose slot) cannot affect result
 columns; the per-case nullable-most union becomes real work only with

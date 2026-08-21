@@ -46,6 +46,68 @@ func checkResolved(t *testing.T, src string) []diagnostics.Diagnostic {
 	return CheckResolved(postgres.Profile{}, q, rs[0], tree, fixtureCatalog())
 }
 
+// H3: an UNqualified column used as the LHS of `IN (subquery)` (or a
+// scalar `= (subquery)`) is semantically in the OUTER scope — it is the
+// SubLink's Testexpr, not part of the subquery body. R3 must still check
+// it. `kind` exists only on the optional-join relation `audits`, so an
+// unguarded reference to it must be rejected (SQLETCH115) exactly as the
+// qualified form `a.kind` already is.
+func TestCheckResolved_R3_UnqualifiedInSubqueryLHS(t *testing.T) {
+	inSrc := `-- name: Bad :many
+SELECT u.id FROM users AS u
+@if-present(k)
+JOIN audits AS a ON a.user_id = u.id AND a.id = :k
+@endif
+WHERE kind IN (SELECT email FROM users)
+;
+`
+	if diags := checkResolved(t, inSrc); !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("IN-subquery LHS: want SQLETCH115, got %+v", diags)
+	}
+
+	// The scalar `= (subquery)` form shares the SubLink Testexpr path and
+	// must also be rejected.
+	scalarSrc := `-- name: Bad :many
+SELECT u.id FROM users AS u
+@if-present(k)
+JOIN audits AS a ON a.user_id = u.id AND a.id = :k
+@endif
+WHERE kind = (SELECT count(*) FROM users)
+;
+`
+	if diags := checkResolved(t, scalarSrc); !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("scalar-subquery LHS: want SQLETCH115, got %+v", diags)
+	}
+
+	// The qualified form was already rejected — keep it pinned.
+	qualSrc := `-- name: Bad :many
+SELECT u.id FROM users AS u
+@if-present(k)
+JOIN audits AS a ON a.user_id = u.id AND a.id = :k
+@endif
+WHERE a.kind IN (SELECT email FROM users)
+;
+`
+	if diags := checkResolved(t, qualSrc); !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("qualified LHS: want SQLETCH115, got %+v", diags)
+	}
+}
+
+// H3 (no false positive): references that legitimately live INSIDE the
+// subquery body stay unchecked by R3 (bare-column innermost resolution
+// is unmodeled), and an outer LHS that resolves to an unguarded skeleton
+// relation must not be flagged.
+func TestCheckResolved_R3_InSubqueryBodyStillSkipped(t *testing.T) {
+	src := `-- name: OK :many
+SELECT u.id FROM users AS u
+WHERE u.tenant_id IN (SELECT a.user_id FROM audits AS a WHERE a.kind = u.id)
+;
+`
+	if diags := checkResolved(t, src); len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckResolved_Clean(t *testing.T) {
 	src := `-- name: SearchUsers :many
 SELECT u.id, u.email, u.status

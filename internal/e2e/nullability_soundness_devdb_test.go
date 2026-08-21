@@ -63,6 +63,14 @@ CREATE TABLE del_members (
     id     bigint PRIMARY KEY,
     org_id bigint
 );
+-- upd_members is dedicated to the UPDATE … RETURNING case: its UPDATE
+-- mutates org_id, so no other case may read it. org_id is nullable so
+-- SET org_id = NULL is legal; the IS NOT NULL filter is what the buggy
+-- narrowing would (unsoundly) trust.
+CREATE TABLE upd_members (
+    id     bigint PRIMARY KEY,
+    org_id bigint
+);
 `
 
 const nullSoundSeedSQL = `
@@ -74,6 +82,10 @@ INSERT INTO inh_child VALUES (NULL);
 -- one del_members row whose org_id matches no org: the RIGHT JOIN
 -- null-extends orgs, so RETURNING o2.name is NULL.
 INSERT INTO del_members VALUES (1, NULL);
+-- one upd_members row with a non-null org_id: it passes the
+-- org_id IS NOT NULL filter (which tests the OLD row) and the UPDATE
+-- sets the NEW row org_id to NULL, so RETURNING org_id is NULL.
+INSERT INTO upd_members VALUES (1, 5);
 `
 
 var nullSoundCases = []struct {
@@ -314,6 +326,14 @@ FROM orgs AS o, m
 ORDER BY m.oname NULLS LAST;
 `,
 		note: "PostgreSQL attributes the wCTE column m.oname through GetCTETargetList (the RETURNING list) to orgs.name (NOT NULL), but orgs o2 is the null-extended LEFT operand of the DML's RIGHT JOIN, so RETURNING o2.name is NULL. The clean outer orgs o instance shares that OID; without poisoning the DML body's tables, m.oname narrows unsoundly",
+	},
+	// ---- UPDATE … RETURNING skeleton IS NOT NULL (H1) ----
+	{
+		name: "update_returning_is_not_null",
+		src: `-- name: UpdReturn :many
+UPDATE upd_members AS u SET org_id = NULL WHERE u.org_id IS NOT NULL RETURNING u.org_id;
+`,
+		note: "the WHERE tests the OLD row, RETURNING yields the NEW (NULL) row, so a skeleton `org_id IS NOT NULL` must NOT narrow the returned org_id (UPDATE is exempt from IS NOT NULL narrowing, design 05 §3a.3)",
 	},
 }
 
@@ -600,6 +620,12 @@ CREATE TABLE members (
 CREATE VIEW members_orgs AS
   SELECT m.id AS member_id, m.email, o.name AS org_name
   FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id;
+-- upd_members is dedicated to the UPDATE … RETURNING case (H1): its
+-- UPDATE mutates org_id, so no other case may read it.
+CREATE TABLE upd_members (
+    id     INTEGER PRIMARY KEY,
+    org_id INTEGER
+);
 `
 
 var sqliteNullSoundCases = []struct {
@@ -733,6 +759,14 @@ ORDER BY m.id;
 `,
 		note: "positive: recursion narrows a clean INNER-joined CTE — execution must agree",
 	},
+	// ---- UPDATE … RETURNING skeleton IS NOT NULL (H1) ----
+	{
+		name: "update_returning_is_not_null",
+		src: `-- name: UpdReturn :many
+UPDATE upd_members SET org_id = NULL WHERE org_id IS NOT NULL RETURNING org_id;
+`,
+		note: "the WHERE tests the OLD row, RETURNING yields the NEW (NULL) row, so a skeleton `org_id IS NOT NULL` must NOT narrow the returned org_id (UPDATE is exempt, design 05 §3a.3)",
+	},
 }
 
 func TestSQLiteNullabilitySoundnessAdversarial(t *testing.T) {
@@ -741,6 +775,7 @@ func TestSQLiteNullabilitySoundnessAdversarial(t *testing.T) {
 	if err := conn.Exec(`
 INSERT INTO orgs VALUES (1, 'acme');
 INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
+INSERT INTO upd_members VALUES (1, 5);
 `); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -823,6 +858,7 @@ func TestSQLiteNullabilityGuardedMultibyteOffset(t *testing.T) {
 	if err := conn.Exec(`
 INSERT INTO orgs VALUES (1, 'acme');
 INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
+INSERT INTO upd_members VALUES (1, 5);
 `); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

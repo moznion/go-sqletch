@@ -74,7 +74,9 @@ func (f Frontend) ProbeJoinItem(item string) error {
 	bad := &dialect.ParseError{Pos: 0, Msg: "fragment is not a single join item"}
 	if sel == nil || len(sel.FromClause) != 1 ||
 		sel.WhereClause != nil || len(sel.GroupClause) != 0 ||
-		len(sel.SortClause) != 0 || sel.LimitCount != nil ||
+		sel.HavingClause != nil || len(sel.SortClause) != 0 ||
+		sel.LimitCount != nil || sel.LimitOffset != nil ||
+		len(sel.WindowClause) != 0 || len(sel.DistinctClause) != 0 ||
 		len(sel.LockingClause) != 0 {
 		return bad
 	}
@@ -123,7 +125,9 @@ func (f Frontend) ProbeOrderByKey(expr string) error {
 	sel := singleSelect(res)
 	if sel == nil || len(sel.SortClause) != 1 ||
 		sel.WhereClause != nil || len(sel.FromClause) != 0 ||
-		len(sel.GroupClause) != 0 || sel.LimitCount != nil ||
+		len(sel.GroupClause) != 0 || sel.HavingClause != nil ||
+		sel.LimitCount != nil || sel.LimitOffset != nil ||
+		len(sel.WindowClause) != 0 || len(sel.DistinctClause) != 0 ||
 		len(sel.LockingClause) != 0 {
 		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a single sort key"}
 	}
@@ -570,23 +574,28 @@ func collectColRefs(m protoreflect.Message, scopes, enclosing []string, inSub bo
 	}
 	var innerSelect *pgquery.Node
 	var withClause *pgquery.WithClause
-	isSubBoundary := false
 	switch v := m.Interface().(type) {
 	case *pgquery.SubLink:
-		innerSelect, isSubBoundary = v.Subselect, true
+		innerSelect = v.Subselect
 	case *pgquery.RangeSubselect:
-		innerSelect, isSubBoundary = v.Subquery, true
+		innerSelect = v.Subquery
 	case *pgquery.CommonTableExpr:
-		innerSelect, isSubBoundary = v.Ctequery, true
+		innerSelect = v.Ctequery
 	case *pgquery.SelectStmt:
 		withClause = v.WithClause
 	}
-	childInSub := inSub || isSubBoundary
 	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
 		if fd.Kind() != protoreflect.MessageKind || fd.IsMap() {
 			return true
 		}
 		childScopes, childEnclosing := scopes, enclosing
+		// InSubquery is per-child, not per-node: a SubLink's Testexpr (the
+		// IN/ANY/ALL left operand) lives in the OUTER scope even though it
+		// is a sibling field of the subquery body, so only the child that
+		// IS the subquery body (innerSelect) crosses the boundary. Marking
+		// every child in-subquery would hide the LHS from R3, which skips
+		// in-subquery references (see rules/resolved.go).
+		childInSub := inSub
 		if !fd.IsList() {
 			msg := val.Message().Interface()
 			if innerSelect != nil {
@@ -597,6 +606,7 @@ func collectColRefs(m protoreflect.Message, scopes, enclosing []string, inSub bo
 					// with-clause visibility floor.
 					childScopes = appendFromNames(scopes, innerSelect)
 					childEnclosing = scopes
+					childInSub = true
 				}
 			}
 			if withClause != nil {
@@ -703,10 +713,8 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 			}
 		}
 		if fc := rt.Val.GetFuncCall(); fc != nil {
-			for _, fn := range fc.Funcname {
-				if s := fn.GetString_(); s != nil {
-					item.FuncName = strings.ToLower(s.Sval)
-				}
+			if name, ok := builtinFuncName(fc.Funcname); ok {
+				item.FuncName = name
 			}
 			item.AggArg = aggArg(fc)
 		}
@@ -714,6 +722,38 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 		out = append(out, item)
 	}
 	return out
+}
+
+// builtinFuncName returns the lowercased builtin name of a function
+// call ONLY when the call names a builtin unambiguously: an UNqualified
+// call (a single name part) or one explicitly qualified with the
+// pg_catalog schema. A user-schema-qualified call — `myschema.count(x)`,
+// `myschema.now()` — names a user function that merely shares a
+// builtin's spelling and must NOT inherit the builtin's totality or
+// strict-aggregate treatment in the nullability analyzer. Returning
+// ok=false there leaves TargetItem.FuncName empty so neither the
+// funcWhitelist nor the strictAggs lookup can match. The pg_catalog
+// comparison is exact (not case-folded): the parser already downcases
+// unquoted identifiers to `pg_catalog`, while a quoted `"PG_CATALOG"`
+// is a different, non-catalog schema that must not be blessed.
+func builtinFuncName(funcname []*pgquery.Node) (string, bool) {
+	parts := make([]string, 0, len(funcname))
+	for _, fn := range funcname {
+		s := fn.GetString_()
+		if s == nil {
+			return "", false
+		}
+		parts = append(parts, s.Sval)
+	}
+	switch len(parts) {
+	case 1:
+		return strings.ToLower(parts[0]), true
+	case 2:
+		if parts[0] == "pg_catalog" {
+			return strings.ToLower(parts[1]), true
+		}
+	}
+	return "", false
 }
 
 // aggArg extracts the single bare-column argument of a plain call —

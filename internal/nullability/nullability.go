@@ -136,8 +136,19 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	// have exactly ONE instance ACROSS ALL LEVELS and no poisoned
 	// exposure (a hazardous subquery mentioning the table shares its
 	// attribution key).
+	//
+	// UPDATE … RETURNING is EXEMPT wholesale. The "WHERE runs after the
+	// joins" premise holds for SELECT/DELETE, but an UPDATE's WHERE
+	// tests the OLD row while RETURNING yields the NEW one, so
+	// `UPDATE t SET c=NULL WHERE c IS NOT NULL RETURNING c` narrows c to
+	// non-null yet returns NULL. The target relation's columns are the
+	// ones RETURNING can mutate; FROM-joined relations in an UPDATE are
+	// read-only and would stay soundly narrowable, but the shared
+	// analyzer has no cheap handle on which relation is the target, so
+	// the sound conservative choice is to skip filtered narrowing for
+	// the whole UPDATE. SQLite shares this path and this exemption.
 	filtered := map[srcKey]bool{}
-	if trustSrc && cat != nil {
+	if trustSrc && cat != nil && maxTree.Kind() != dialect.StmtUpdate {
 		for _, cr := range maxTree.NotNullConjuncts() {
 			if !inSkeleton(maxR, cr.Loc) {
 				continue
