@@ -107,6 +107,30 @@ const maxNestingDepth = 100
 // flat-width bombs.
 const maxStructuralTokens = 20000
 
+// maxConfigTabs bounds the number of literal TAB bytes (0x09) a config may
+// contain before it is refused, guarding goccy/go-yaml's superlinear tokenize
+// path WITHOUT false-rejecting a config that uses a few tabs legitimately.
+//
+// goccy/go-yaml's lexer.Tokenize is O(n^2) in the number of literal tabs
+// inside a DOUBLE-QUOTED scalar (`key: "\t\t…x"`): those tabs produce FEW
+// tokens, so neither the total-token cap nor the depth cap can see the
+// blow-up — Tokenize itself hangs before either guard runs (measured: the
+// ~262k tabs that fit under the size cap take ~11.5 s to tokenize). An earlier
+// fix refused ANY literal tab, but that over-reached: a tab is perfectly legal
+// YAML inside COMMENT text (`# aligned<TAB>comment`) and inside quoted/block
+// scalar content (a predicate string), so a legitimate config that lines up a
+// comment or embeds a tab in a value was falsely rejected.
+//
+// The blow-up needs MANY tabs; a real config has at most a handful (a
+// tab-aligned comment is well under ten). So the guard is a COUNT threshold,
+// not an any-tab reject: refuse only when the total tab count exceeds this cap,
+// counted with bytes.Count (O(input), one pass). Tokenize on <= this many tabs
+// is cheap — measured at exactly maxConfigTabs tabs arranged adversarially
+// (all inside one double-quoted scalar) under the size cap, lexer.Tokenize
+// takes ~0.1 ms and Load ~0.2 ms — while the cap still forecloses the
+// tab-bomb (tens of thousands of tabs) cheaply, before any goccy call.
+const maxConfigTabs = 100
+
 type Config struct {
 	Version       int          `yaml:"version"`
 	Dialect       string       `yaml:"dialect"`
@@ -241,23 +265,25 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
 	}
 
-	// Reject any literal TAB byte (0x09) BEFORE handing the bytes to goccy —
-	// before lexer.Tokenize, boundYAMLExpansion, and the decode below. This is
-	// an O(input) raw-byte pre-scan and MUST come first: goccy/go-yaml's
+	// Bound the number of literal TAB bytes (0x09) BEFORE handing the bytes to
+	// goccy — before lexer.Tokenize, boundYAMLExpansion, and the decode below.
+	// This is an O(input) raw-byte pre-scan and MUST come first: goccy/go-yaml's
 	// lexer.Tokenize is O(n^2) in the number of literal tabs inside a
 	// double-quoted scalar (`key: "\t\t…x"`), and because those tabs produce
 	// FEW tokens, neither the total-token cap nor the depth cap below can see
 	// the blow-up — Tokenize itself hangs before either guard runs (measured:
-	// ~300 KB of tabs hangs Load for >20s, independent of the size cap). A tab
-	// has no legitimate use in a sqletch.yaml — YAML forbids a tab as
-	// indentation, and no config value (a predicate, path, or glob) ever needs
-	// a literal tab — so refusing tabs closes that path cheaply with no
-	// false-reject risk.
-	if bytes.IndexByte(raw, '\t') >= 0 {
+	// the ~262k tabs that fit under the size cap take ~11.5s to tokenize). The
+	// guard is a COUNT threshold, not an any-tab reject: a tab is legal YAML in
+	// comment text (`# aligned<TAB>comment`) and in quoted/block scalar content
+	// (a predicate string), and a legitimate config uses at most a handful, so
+	// refusing only above maxConfigTabs closes the blow-up path cheaply while
+	// letting a config with a few tab-aligned comments or a tab in a value load.
+	if n := bytes.Count(raw, []byte{'\t'}); n > maxConfigTabs {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span,
-			"invalid config: sqletch.yaml contains a literal tab character (0x09), which is not allowed: YAML forbids a tab as indentation, and no sqletch config value (a predicate, path, or glob) ever needs a literal tab; the document is refused before it is parsed because goccy/go-yaml's tokenizer is superlinear in the number of literal tabs inside a quoted scalar and a tab-laden file can hang the process (a denial of service)").
-			WithHint("replace every literal tab character with spaces")}
+			"invalid config: sqletch.yaml contains an unusual number of literal tab characters (0x09) (%d, cap %d): the document is refused before it is parsed because goccy/go-yaml's tokenizer is superlinear in the number of literal tabs inside a quoted scalar and a tab-laden file can hang the process (a denial of service); a legitimate config uses at most a few tabs (this cap is orders of magnitude above any real config)",
+			n, maxConfigTabs).
+			WithHint("this config contains an unusual number of literal tab characters; replace them with spaces")}
 	}
 
 	// Bound the document's structural complexity BEFORE any goccy parse. Both

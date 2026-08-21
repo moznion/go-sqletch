@@ -1182,17 +1182,64 @@ func refusedLiteralTab(diags []diagnostics.Diagnostic) bool {
 	return false
 }
 
-// TestLoad_LiteralTabRejected pins that a literal tab ANYWHERE in the config
-// — not only in a quoted scalar — is refused with SQLETCH300. Tabs have no
-// legitimate use in a sqletch.yaml (YAML forbids tab indentation; no value
-// ever needs a literal tab), so this never false-rejects a real config.
-func TestLoad_LiteralTabRejected(t *testing.T) {
+// TestLoad_ExcessiveTabsRejected pins that a config carrying MORE than
+// maxConfigTabs literal tabs is refused with SQLETCH300 — the count-threshold
+// guard against goccy's superlinear tokenize path. Below the threshold a tab
+// is legal (see TestLoad_TabInCommentLoads / TestLoad_TabInPredicateLoads);
+// above it the document is refused before any parse. The tabs are spread
+// across harmless comment lines so only the tab-count guard — not the size,
+// depth, or token cap — decides.
+func TestLoad_ExcessiveTabsRejected(t *testing.T) {
 	dir := t.TempDir()
-	// A single tab spliced into an otherwise-valid document.
-	src := "version:\t1\n" + validYAML[len("version: 1\n"):]
-	diags := loadAsync(t, path2(t, dir, src), time.Second)
+	var b strings.Builder
+	b.WriteString(validYAML)
+	for i := 0; i <= maxConfigTabs; i++ { // maxConfigTabs+1 tabs total
+		b.WriteString("#\tc\n")
+	}
+	diags := loadAsync(t, path2(t, dir, b.String()), time.Second)
 	if !refusedLiteralTab(diags) {
-		t.Fatalf("a config with a literal tab must be refused with SQLETCH300, got %+v", diags)
+		t.Fatalf("a config with >maxConfigTabs literal tabs must be refused with SQLETCH300, got %+v", diags)
+	}
+}
+
+// TestLoad_TabInCommentLoads pins the regression fix: a legitimate tab used to
+// align a comment (`# aligned<TAB>comment`) is valid YAML and MUST load. The
+// earlier any-tab reject falsely refused this; the count threshold lets a
+// handful of tabs through while still catching a tab bomb.
+func TestLoad_TabInCommentLoads(t *testing.T) {
+	dir := t.TempDir()
+	src := validYAML + "# aligned\tcomment\n# another\talignment\n"
+	cfg, diags := Load(path2(t, dir, src))
+	if len(diags) != 0 {
+		t.Fatalf("a config with tab-aligned comments must load, got %+v", diags)
+	}
+	if cfg.Version != 1 {
+		t.Fatalf("config did not load: %+v", cfg)
+	}
+}
+
+// TestLoad_TabInPredicateLoads pins that a literal tab inside a quoted scalar
+// value (a policy predicate) is valid YAML and MUST load — tabs in scalar
+// content are legal, and the count threshold clears a single one. A
+// single-quoted scalar is used: goccy/go-yaml's strict decoder has a
+// pre-existing quirk with a literal tab inside a DOUBLE-quoted scalar (it
+// reports a spurious parse error unrelated to this guard), but single-quoted
+// and block scalars carry a tab cleanly.
+func TestLoad_TabInPredicateLoads(t *testing.T) {
+	dir := t.TempDir()
+	src := validYAML + "policies:\n" +
+		"  - name: tenant\n" +
+		"    tables: [t]\n" +
+		"    predicate: '{}.tenant_id\t= :tid'\n" +
+		"    param:\n" +
+		"      name: tid\n" +
+		"      type: bigint\n"
+	cfg, diags := Load(path2(t, dir, src))
+	if len(diags) != 0 {
+		t.Fatalf("a config with a tab in a predicate string must load, got %+v", diags)
+	}
+	if len(cfg.Policies) != 1 || !strings.Contains(cfg.Policies[0].Predicate, "\t") {
+		t.Fatalf("predicate tab not preserved through Load: %+v", cfg.Policies)
 	}
 }
 
