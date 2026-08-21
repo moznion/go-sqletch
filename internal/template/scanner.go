@@ -188,7 +188,15 @@ type queryBuilder struct {
 	// recorded as the statement WhereKwEnd. A NATURAL join may interpose a
 	// join-type keyword (NATURAL LEFT/RIGHT/INNER JOIN) between NATURAL and
 	// JOIN, so the flag must survive those; it is consumed at the JOIN.
-	// STRAIGHT_JOIN is a normal ON-bearing inner join and is unaffected.
+	// Any other intervening depth-0 token clears it (transition): a bare
+	// column/alias literally named `cross`/`natural` is not a join keyword
+	// and must not disarm the next real JOIN's pending ON.
+	//
+	// STRAIGHT_JOIN (MySQL) lexes as a SINGLE identifier token, so it never
+	// matches the `JOIN` case and so never armed joinPendingOn on its own;
+	// it is an ON-bearing forced inner join, so transition arms
+	// joinPendingOn for it explicitly (a bare `conflict` column in its ON
+	// must not be mistaken for the conflict clause).
 	crossNaturalPending bool
 }
 
@@ -552,6 +560,24 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 	if qb.isInsert && prevKw == "ON" && kw == "CONFLICT" && !qb.onWasJoin {
 		qb.afterOnConflict = true
 	}
+	// crossNaturalPending must only survive from a genuine CROSS/NATURAL
+	// join keyword to ITS JOIN. Between them, valid SQL admits only the
+	// join-type modifiers of a NATURAL join (NATURAL LEFT/RIGHT/INNER
+	// [OUTER] JOIN). Any OTHER depth-0 keyword or identifier means the
+	// earlier `cross`/`natural` was not a join keyword at all but a column
+	// or alias literally named that — it must NOT disarm the next real
+	// JOIN's pending ON, or a following bare `ON conflict` would be
+	// mis-read as the conflict clause and suppress the statement's real
+	// WHERE. Clear it here for non-modifiers; the CROSS/NATURAL and JOIN
+	// cases below re-arm or consume it.
+	if qb.crossNaturalPending {
+		switch kw {
+		case "JOIN", "CROSS", "NATURAL", "LEFT", "RIGHT", "INNER", "OUTER", "FULL":
+			// keep pending across the modifiers of a CROSS/NATURAL join
+		default:
+			qb.crossNaturalPending = false
+		}
+	}
 	switch kw {
 	case "CROSS", "NATURAL":
 		// A CROSS/NATURAL join has no `ON` clause; remember that so the
@@ -566,6 +592,13 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		// pending arm clear so a following real `ON CONFLICT` is recognized.
 		qb.joinPendingOn = !qb.crossNaturalPending
 		qb.crossNaturalPending = false
+	case "STRAIGHT_JOIN":
+		// STRAIGHT_JOIN (MySQL) is a single-token forced INNER join that
+		// DOES take an `ON` clause, so like JOIN it arms the next depth-0
+		// `ON` as its predicate. It lexes as one identifier, never matching
+		// the `JOIN` case, so it must be handled explicitly; it is never a
+		// CROSS/NATURAL join (the pending arm was already cleared above).
+		qb.joinPendingOn = true
 	case "USING":
 		// A USING/NATURAL-style join consumes the pending join without an
 		// `ON`, so a later `ON` is free to be the conflict clause.
