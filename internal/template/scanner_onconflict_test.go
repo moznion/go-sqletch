@@ -192,6 +192,61 @@ func TestScan_InsertSelectInnerJoinOnConflictColumnStillRecordsRealWhere(t *test
 	}
 }
 
+// Regression guard (crossNaturalPending join-position follow-up): a bare
+// depth-0 column or alias literally named `cross`/`natural` — NOT a join
+// keyword — must not disarm the next real JOIN's pending ON. Before the
+// fix, `crossNaturalPending` was armed by ANY depth-0 identifier equal to
+// `cross`/`natural`; the following real JOIN then computed
+// joinPendingOn=false, so its `ON` recorded onWasJoin=false, a bare
+// `conflict` column re-satisfied the CONFLICT gate (afterOnConflict=true),
+// and the statement's real WHERE was suppressed (WhereKwEnd=-1). Since the
+// afterOnConflict path is isInsert-gated, the repro must be an INSERT.
+func TestScan_InsertSelectStrayCrossColumnRecordsRealWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO dst (v) SELECT cross FROM a JOIN b ON conflict = b.id WHERE a.tenant = 5;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("a stray `cross` column must not suppress the real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}
+
+// Companion for a stray `natural` column/alias — same shape, same fix.
+func TestScan_InsertSelectStrayNaturalColumnRecordsRealWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO dst (v) SELECT natural FROM a JOIN b ON conflict = b.id WHERE a.tenant = 5;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("a stray `natural` column must not suppress the real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}
+
+// STRAIGHT_JOIN (MySQL) is a single-token forced INNER join that DOES take
+// an ON clause, so like JOIN it must arm the next depth-0 `ON` as its
+// predicate. Before the fix it matched no keyword case, never armed
+// joinPendingOn, so its `ON conflict` recorded onWasJoin=false and the
+// bare `conflict` column re-satisfied the CONFLICT gate — suppressing the
+// real WHERE. It must record the real WHERE just like a plain JOIN.
+func TestScan_InsertSelectStraightJoinOnConflictColumnRecordsRealWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO dst (v) SELECT a.id FROM a STRAIGHT_JOIN b ON conflict = b.id WHERE a.tenant = 5;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd <= 0 {
+		t.Fatalf("STRAIGHT_JOIN with a `conflict` column in ON must record the real WHERE, got WhereKwEnd=%d", q.WhereKwEnd)
+	}
+	const wantAfter = " a.tenant"
+	if q.WhereKwEnd+len(wantAfter) > len(src) || src[q.WhereKwEnd:q.WhereKwEnd+len(wantAfter)] != wantAfter {
+		t.Fatalf("WhereKwEnd=%d does not point past the real WHERE keyword; src[end:]=%q", q.WhereKwEnd, src[q.WhereKwEnd:])
+	}
+}
+
 // The partial-index predicate WHERE inside a conflict target
 // (`ON CONFLICT (a) WHERE <pred> DO UPDATE ...`) is part of the conflict
 // clause, not the statement's row filter, and must not be recorded.
