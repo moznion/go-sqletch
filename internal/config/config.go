@@ -65,6 +65,41 @@ const maxExpandedNodes = 1 << 20
 // bytes and were a depth-guard BYPASS until counted here.
 const maxNestingDepth = 100
 
+// maxStructuralTokens bounds the TOTAL number of YAML lexer tokens a config
+// document may contain, and is the load-bearing, structure-INDEPENDENT DoS
+// guard. goccy/go-yaml's parser (parser.ParseBytes, called unconditionally by
+// boundYAMLExpansion, and the UnmarshalWithOptions decode) is superlinear in
+// the document's total structural size independent of nesting depth: a FLAT
+// collection that is merely WIDE defeats both the depth cap and the size cap.
+//
+//   - A flat block MAP of many keys (`k0: 1\nk1: 1\n…`) sits at depth 0/1 and
+//     costs ~7 bytes per key, so ~150k keys fit under the 1 MiB size cap — yet
+//     the parser builds the mapping in O(n^2) MEMORY in the map's WIDTH
+//     (measured 20k keys→3.3 GiB, 40k→12.7 GiB, ~170k→~90 GB → OOM-kill).
+//   - A flat block SEQUENCE of empty entries (`-\n-\n…`) costs 2 bytes per
+//     entry and is O(n^2) TIME in the sequence's width (~450k entries → ~25s).
+//
+// maxNestingDepth cannot see either (nesting is shallow) and maxConfigBytes
+// cannot see either (bytes per entry are few). This is the FIFTH relocation of
+// the config-load DoS; each earlier fix bounded one SHAPE (alias fan-out,
+// flow/compact-block depth, error-format annotation) and the cost moved to the
+// next structural dimension. A cap on the TOTAL token count is shape-agnostic:
+// the parser's cost is governed by how MANY structural tokens it must build,
+// regardless of how they are arranged, so one total-count cap bounds the
+// parser across every dimension at once — depth, flat width, and any future
+// shape — subsuming the depth cap (kept below as defense in depth).
+//
+// The cap is chosen by MEASUREMENT against the worst shape (the many-keys
+// block map, O(n^2) memory): at 20000 tokens Load parses a document sitting
+// exactly at the cap in ~70 ms and ~400 MiB peak — comfortably bounded — while
+// the token count is counted over goccy's OWN lexer (a linear pre-scan, so a
+// bomb is refused after O(input) work, before any parse). A real config is a
+// few dozen tokens; even a synthetic 1000-query config with 200 overrides and
+// 20 policies is ~5000 tokens — so the cap clears every legitimate config by a
+// wide margin (~4x the largest synthetic, ~350x a real one) yet forecloses the
+// flat-width bombs.
+const maxStructuralTokens = 20000
+
 type Config struct {
 	Version       int          `yaml:"version"`
 	Dialect       string       `yaml:"dialect"`
@@ -199,18 +234,41 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
 	}
 
-	// Bound YAML structural nesting depth BEFORE any goccy parse: goccy's
-	// parser is superlinear in memory in nesting depth alone (no aliases
-	// needed), so a deeply nested flow collection under the size cap can
-	// OOM the process. This pre-scan is a linear-time walk over goccy's own
-	// lexer and MUST precede both boundYAMLExpansion (which parses to count
-	// nodes) and the decode below — either parse is the blow-up.
-	if depth, over := exceedsNestingDepth(raw); over {
+	// Bound the document's structural complexity BEFORE any goccy parse. Both
+	// checks below run over a SINGLE pass of goccy's own lexer (linear time),
+	// and MUST precede boundYAMLExpansion (which calls parser.ParseBytes to
+	// count nodes) and the decode below — either parse is where the blow-up
+	// happens, so the guards have to reject first.
+	tokens := lexer.Tokenize(string(raw))
+
+	// Bound structural NESTING depth first, so the classic depth bombs (flow
+	// `[[[…]]]`, compact block `- - -`/`? ? ?`) get the specific "nesting is
+	// too deep" diagnostic. goccy's parser is superlinear in memory in nesting
+	// depth alone; a document under the size cap could nest maxNestingDepth+
+	// levels for one byte each. (The total-token cap below would also refuse
+	// these, since a deep document has many tokens — this ordering only picks
+	// the more actionable message.)
+	if depth, over := depthOverTokens(tokens); over {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span,
 			"invalid config: YAML structural nesting is too deep (reached depth %d, cap %d): deeply nested flow collections ([[[…]]]) drive the YAML parser into superlinear memory and can OOM the process (a denial of service) even under the %d-byte size cap, so the document is refused before it is parsed",
 			depth, maxNestingDepth, maxConfigBytes).
 			WithHint("sqletch configs nest only a few levels deep; flatten the document (this cap is far above any legitimate config)")}
+	}
+
+	// The load-bearing, structure-INDEPENDENT guard: reject a document with
+	// too many total structural tokens. The parser's cost is superlinear in
+	// the TOTAL token/structural count regardless of how the tokens are
+	// ARRANGED, so this one cap bounds it across every shape at once — the
+	// flat map/sequence WIDTH bombs (which are shallow and so slip past the
+	// depth cap above), nesting depth, and any future dimension. It runs over
+	// the SAME single lexer pass, so the guard stays O(input).
+	if n := len(tokens); n > maxStructuralTokens {
+		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
+			diagnostics.CodeConfigParse, span,
+			"invalid config: YAML document is too structurally complex (%d structural tokens, cap %d): the YAML parser's cost is superlinear in the TOTAL number of collection entries/tokens, so a flat but very WIDE document — a block map of tens of thousands of keys, or a block sequence of tens of thousands of entries — stays shallow enough to pass the nesting-depth cap and small enough to pass the %d-byte size cap, yet drives the parser into tens of gigabytes of memory or tens of seconds of CPU (a denial of service); the document is refused before it is parsed",
+			n, maxStructuralTokens, maxConfigBytes).
+			WithHint("sqletch configs are tiny (a handful of keys and a few globs); this cap is orders of magnitude above any legitimate config — shrink or flatten the document")}
 	}
 
 	// Bound YAML alias expansion BEFORE decoding: a billion-laughs bomb
@@ -489,6 +547,21 @@ func readConfigCapped(path string) ([]byte, error) {
 // hundred MiB peak), versus the gigabytes/OOM the parser or error formatter
 // spends on the same input.
 func exceedsNestingDepth(raw []byte) (int, bool) {
+	return depthOverTokens(lexer.Tokenize(string(raw)))
+}
+
+// exceedsStructuralTokens reports whether raw contains more than
+// maxStructuralTokens YAML lexer tokens, returning the count. It is the
+// []byte-input wrapper used by tests; Load itself tokenizes once and compares
+// len(tokens) directly to avoid a second tokenization.
+func exceedsStructuralTokens(raw []byte) (int, bool) {
+	n := len(lexer.Tokenize(string(raw)))
+	return n, n > maxStructuralTokens
+}
+
+// depthOverTokens runs the nesting-depth pre-scan over an already-tokenized
+// document, so Load can share the single lexer pass with the total-token cap.
+func depthOverTokens(tokens token.Tokens) (int, bool) {
 	depth := 0    // running flow-collection depth
 	blockRun := 0 // length of the current strictly-increasing block-indicator run
 	prevCol := -1 // column of the previous block indicator in the run
@@ -499,7 +572,7 @@ func exceedsNestingDepth(raw []byte) (int, bool) {
 		}
 		return d > maxNestingDepth
 	}
-	for _, tk := range lexer.Tokenize(string(raw)) {
+	for _, tk := range tokens {
 		switch tk.Type {
 		case token.SequenceStartType, token.MappingStartType:
 			depth++

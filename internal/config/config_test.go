@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/lexer"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
@@ -960,5 +961,190 @@ func TestYAMLErrorMessageBounded(t *testing.T) {
 	// be far larger — this documents the amplifier the fix removes.
 	if full := err.Error(); len(full) <= len(msg)*4 {
 		t.Fatalf("expected err.Error() (%d bytes) to dwarf the annotation-free message (%d bytes)", len(full), len(msg))
+	}
+}
+
+// manyKeysBomb builds a config whose body is a FLAT block map of `keys`
+// entries (`k0: 1\nk1: 1\n…`). Every entry sits at depth 0/1, so the document
+// sails past maxNestingDepth, and each entry is only ~7 bytes, so ~150k keys
+// fit under the 1 MiB size cap — yet goccy/go-yaml's parser builds the mapping
+// in O(n^2) MEMORY in the WIDTH of the map: measured on the pre-fix code
+// 20k→416ms/3.3GiB, 40k→1.35s/12.7GiB, ~170k (≈1 MB) → ~90 GB → OOM-kill.
+// Neither the depth cap (nesting is shallow) nor the size cap (bytes are few)
+// sees it; only the total-token cap does.
+func manyKeysBomb(keys int) string {
+	var b strings.Builder
+	b.WriteString(validYAML)
+	for i := 0; i < keys; i++ {
+		fmt.Fprintf(&b, "k%d: 1\n", i)
+	}
+	return b.String()
+}
+
+// flatSeqBomb builds a config whose body is a FLAT block sequence of `entries`
+// empty items (`extra:\n-\n-\n…`). Each `-\n` is 2 bytes, so ~450k entries fit
+// under the 1 MiB size cap, all at depth 1 — yet goccy's parser is O(n^2) TIME
+// in the sequence's width: measured pre-fix 50k→349ms, 100k→1.3s, 200k→5.06s,
+// ~450k (≈900 KB) → ~25s hang. This is the flat-width sibling of manyKeysBomb
+// on the TIME axis; the total-token cap bounds both.
+func flatSeqBomb(entries int) string {
+	var b strings.Builder
+	b.WriteString(validYAML)
+	b.WriteString("extra:\n")
+	for i := 0; i < entries; i++ {
+		b.WriteString("-\n")
+	}
+	return b.String()
+}
+
+func refusedTooComplex(diags []diagnostics.Diagnostic) bool {
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error &&
+			strings.Contains(d.Message, "too structurally complex") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLoad_YAMLFlatManyKeysBombRejected pins the FLAT-WIDTH DoS fix (memory
+// axis): a near-cap flat block map of tens of thousands of keys must be
+// refused with SQLETCH300 (too structurally complex) by the raw-byte
+// total-token pre-scan, in O(input), never handed to the parser. On the
+// pre-fix code this shape is depth 0/1 (guardOver=false), sails past
+// maxNestingDepth AND the size cap, and reaches parser.ParseBytes /
+// UnmarshalWithOptions, which build the map in O(n^2) MEMORY and OOM-kill the
+// process near the cap — so the deadline both proves the fix and makes a
+// regression fail by TIMEOUT rather than OOMing CI.
+func TestLoad_YAMLFlatManyKeysBombRejected(t *testing.T) {
+	dir := t.TempDir()
+	// ~90k keys ≈ 990 KB (just under the 1 MiB byte cap), ~270k tokens.
+	src := manyKeysBomb(90000)
+	if len(src) > maxConfigBytes {
+		t.Fatalf("test bomb %d bytes exceeds the byte cap — it would be rejected by size, not tokens", len(src))
+	}
+	path := write(t, dir, "sqletch.yaml", src)
+	if !refusedTooComplex(loadAsync(t, path, 2*time.Second)) {
+		t.Fatal("near-cap flat many-keys bomb must be refused with SQLETCH300 (too structurally complex)")
+	}
+}
+
+// TestLoad_YAMLFlatSeqBombRejected pins the same fix on the TIME axis: a
+// near-cap flat block sequence of empty entries must be refused fast. Pre-fix
+// this is depth 1 (guardOver=false) and drives parser.ParseBytes into O(n^2)
+// TIME (~25s at the cap).
+func TestLoad_YAMLFlatSeqBombRejected(t *testing.T) {
+	dir := t.TempDir()
+	// ~400k entries ≈ 800 KB, ~400k tokens.
+	src := flatSeqBomb(400000)
+	if len(src) > maxConfigBytes {
+		t.Fatalf("test bomb %d bytes exceeds the byte cap", len(src))
+	}
+	path := write(t, dir, "sqletch.yaml", src)
+	if !refusedTooComplex(loadAsync(t, path, 2*time.Second)) {
+		t.Fatal("near-cap flat block-sequence bomb must be refused with SQLETCH300 (too structurally complex)")
+	}
+}
+
+// TestLoad_FlatBombBoundedAlloc pins that Load's cost on the flat many-keys
+// bomb is BOUNDED, not the O(n^2) MEMORY of the pre-fix parser. It measures
+// allocation at two key counts BOTH over the token cap (so both are rejected)
+// that on the OLD code are grossly superlinear (7000 keys ≈ 440 MiB, 14000 ≈
+// 1.75 GiB before the fix) yet SURVIVE even superlinearly, so a regression
+// fails by an allocation-ceiling assertion rather than OOM-killing the runner.
+// With the total-token cap both counts are rejected by the O(input) token scan
+// for a few MiB, so BOTH the fixed ceiling AND the no-quadrupling check hold;
+// on the unfixed code the ceiling is blown.
+func TestLoad_FlatBombBoundedAlloc(t *testing.T) {
+	dir := t.TempDir()
+	measure := func(keys int) uint64 {
+		path := write(t, dir, "sqletch.yaml", manyKeysBomb(keys))
+		var m0, m1 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m0)
+		if !refusedTooComplex(loadAsync(t, path, 2*time.Second)) {
+			t.Fatalf("flat many-keys bomb keys=%d must be refused with SQLETCH300", keys)
+		}
+		runtime.ReadMemStats(&m1)
+		return (m1.TotalAlloc - m0.TotalAlloc) / (1 << 20) // MiB
+	}
+	small := measure(7000)  // ~21k tokens, just over the 20k cap
+	large := measure(14000) // ~42k tokens
+	// Generous linear ceiling: the fixed guard tokenizes once for a few MiB;
+	// the unfixed parser used ~440/1750 MiB at these counts.
+	const ceilingMiB = 128
+	if large > ceilingMiB {
+		t.Fatalf("Load allocated %d MiB at 14000 keys (cap %d MiB): O(n^2) flat-width DoS regression (unfixed ≈1750 MiB)", large, ceilingMiB)
+	}
+	if small > 0 && large > 4*small {
+		t.Fatalf("Load allocation grew superlinearly: %d MiB at 7000 → %d MiB at 14000 keys (> 4x)", small, large)
+	}
+}
+
+// TestLoad_ExampleConfigsLoad guards against a false-reject of the shipped
+// reference configs: all three examples must load with no config-parse
+// diagnostic (they are the ground truth for a legitimate config).
+func TestLoad_ExampleConfigsLoad(t *testing.T) {
+	for _, ex := range []string{"postgres", "mysql", "sqlite"} {
+		path := filepath.Join("..", "..", "examples", ex, "sqletch.yaml")
+		_, diags := Load(path)
+		for _, d := range diags {
+			if d.Code == diagnostics.CodeConfigParse {
+				t.Fatalf("example %s config wrongly refused: %+v", ex, d)
+			}
+		}
+	}
+}
+
+// TestLoad_LargeLegitConfigLoads guards the total-token cap's margin: a
+// synthetic but LEGITIMATE large config — 1000 expansion queries, 200
+// overrides, 20 policies — must load without a config-parse diagnostic. Its
+// token count (~5000) is reported so the margin over the cap stays visible.
+func TestLoad_LargeLegitConfigLoads(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(validYAML)
+	b.WriteString("static_expansion:\n  queries:\n")
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "  - q%d\n", i)
+	}
+	b.WriteString("overrides:\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&b, "  - {query: q%d, column: c, nullable: true}\n", i)
+	}
+	b.WriteString("policies:\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "  - name: p%d\n    tables: [t%d]\n    predicate: \"{}.x = :y\"\n    param:\n      name: y\n      type: bigint\n", i, i)
+	}
+	src := b.String()
+	toks := len(lexer.Tokenize(src))
+	if toks >= maxStructuralTokens {
+		t.Fatalf("synthetic large-legit config has %d tokens, at/over the %d cap — the cap has too little margin over a legitimate config", toks, maxStructuralTokens)
+	}
+	t.Logf("large-legit config: %d bytes, %d tokens (cap %d)", len(src), toks, maxStructuralTokens)
+	_, diags := Load(write(t, dir, "sqletch.yaml", src))
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse {
+			t.Fatalf("large-legit config wrongly refused: %+v", d)
+		}
+	}
+}
+
+// TestExceedsStructuralTokens unit-tests the total-token boundary directly: a
+// document with tokens just over the cap is over, one just under is not, and
+// the count is over goccy's OWN token stream so it matches what the parser
+// will see.
+func TestExceedsStructuralTokens(t *testing.T) {
+	under := manyKeysBomb(4000) // ~12k tokens, well under the cap
+	if _, over := exceedsStructuralTokens([]byte(under)); over {
+		t.Fatalf("a %d-token doc must be under the %d cap", len(lexer.Tokenize(under)), maxStructuralTokens)
+	}
+	over := manyKeysBomb(30000) // ~90k tokens, well over
+	if _, ok := exceedsStructuralTokens([]byte(over)); !ok {
+		t.Fatalf("a %d-token doc must exceed the %d cap", len(lexer.Tokenize(over)), maxStructuralTokens)
+	}
+	// The flat sequence form (time axis) is caught by the same count.
+	if _, ok := exceedsStructuralTokens([]byte(flatSeqBomb(50000))); !ok {
+		t.Fatal("a flat block-sequence bomb must exceed the total-token cap")
 	}
 }
