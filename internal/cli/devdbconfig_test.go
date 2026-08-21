@@ -55,7 +55,16 @@ func TestSQLiteDSNPath(t *testing.T) {
 		{"db/dev.sqlite3", "/proj/db/dev.sqlite3", "nested relative path"},
 		{"/tmp/abs.sqlite3", "/tmp/abs.sqlite3", "absolute paths pass through"},
 		{":memory:", ":memory:", "not a file path"},
-		{"file:dev.sqlite3?mode=rw", "file:dev.sqlite3?mode=rw", "URI form is not a file path"},
+		// A `file:` URI names a real on-disk file (M2 fix): a relative path
+		// component is re-rooted against the config dir and the URI rebuilt,
+		// with query params preserved; absolute/in-memory forms pass through.
+		{"file:dev.sqlite3?mode=rw", "file:///proj/dev.sqlite3?mode=rw", "relative file: URI re-roots to the config dir, query preserved"},
+		{"file:db/dev.sqlite3", "file:///proj/db/dev.sqlite3", "nested relative file: URI re-roots to the config dir"},
+		{"file:dev.db?mode=rwc&_pragma=busy_timeout(1000)", "file:///proj/dev.db?mode=rwc&_pragma=busy_timeout(1000)", "query params preserved verbatim"},
+		{"file:/abs/dev.db", "file:/abs/dev.db", "absolute file: path passes through"},
+		{"file:///abs/dev.db", "file:///abs/dev.db", "absolute file: path (triple slash) passes through"},
+		{"file::memory:?cache=shared", "file::memory:?cache=shared", "in-memory file: URI passes through"},
+		{"file:", "file:", "empty file: path is an in-memory database"},
 	} {
 		cfg.Database.DSN = tc.dsn
 		if got := sqliteDSNPath(cfg); got != tc.want {
