@@ -9,8 +9,12 @@ composition of pre-verified constant fragments.
 
 1. **`docs/spec.md` is the specification** — the structural
    rules R1–R9, runtime premises P1/P2, the soundness argument, and
-   the design boundary. It survived multiple adversarial review
-   cycles; do not weaken a rule to make an implementation easier.
+   the design boundary (including the **Threat model / trust boundary**
+   subsection: self-authored config/template DoS is a known
+   limitation, not a vulnerability; soundness and outward
+   trust-boundary crossings stay in scope). It survived multiple
+   adversarial review cycles; do not weaken a rule to make an
+   implementation easier.
 2. **`docs/design/00–08` is the implementation design**, phased P1–P7
    (all implemented for v0.1) plus later-phase deltas.
 3. On any contradiction or gap between spec, design, and code:

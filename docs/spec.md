@@ -1538,6 +1538,49 @@ database/sql, a builder) alongside sqletch in the same repository:
     execute unnamed/ad-hoc, which is what such proxies require (see
     Runtime Model).
 
+## Threat model / trust boundary
+
+sqletch is a dev-time CLI/LSP tool, not a service that ingests
+untrusted third-party configuration as data. Its inputs —
+`sqletch.yaml`, template files (`.sql` and `//sqletch:query` consts in
+`.go`), and schema DDL — are **trusted, first-party artifacts**,
+authored and committed by the developer who runs sqletch, exactly like
+a Makefile, a build config, or the application source itself. This
+scopes the security posture:
+
+-   **Self-authored denial-of-service is a known limitation, not a
+    vulnerability.** A pathological but self-authored config or
+    template that drives an underlying parser into superlinear
+    behavior (e.g. adversarially structured YAML) degrades only the
+    author's own local run. The tool makes a *reasonable, cheap*
+    effort to bound such inputs — size caps,
+    structural-complexity/token caps, and rejecting characters with no
+    legitimate use — as defense-in-depth for the clone-and-run,
+    editor-LSP, and CI edges. It does **not** attempt to be robust
+    against every adversarial input a parser could choke on, and a
+    report that a hand-crafted input can be made slow or made to
+    exhaust memory is triaged as this known limitation.
+
+What stays firmly **in scope regardless of who authored the input**,
+because a well-meaning first-party author relies on these being
+correct:
+
+-   **Soundness (the whole point of the tool).** Every reachable query
+    shape must be statically verified. The tool must never emit typed
+    Go that ships an unverified/guard-off shape, narrows nullability
+    unsoundly (letting a runtime NULL reach a non-`Option` field),
+    mis-places or drops a cross-query policy (tenant-scoping)
+    conjunct, or mis-parses / mis-locates in a way that corrupts the
+    analysis. A soundness hole is always a real defect, never "just
+    bad input" — the structural rules R1–R9, the runtime premises
+    P1/P2, and the soundness argument exist precisely to hold here.
+-   **Trust-boundary-crossing outward effects.** Secret exfiltration /
+    SSRF, path escape (reading or writing outside the project), and
+    similar are real vulnerabilities: they leak or reach *beyond the
+    repository*, rather than merely slowing the local run. This is why
+    `${VAR}` config expansion was removed, and why cache, output, DSN,
+    and glob paths are escape-checked.
+
 ------------------------------------------------------------------------
 
 # Error Reporting
