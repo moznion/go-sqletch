@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +44,46 @@ func TestOfflineChecker_CatalogMemoAvoidsReReads(t *testing.T) {
 	}
 	if c.schemaReads <= afterFirst {
 		t.Errorf("schema edit should have forced a re-read: reads still %d", c.schemaReads)
+	}
+}
+
+// The per-file memo is keyed by path, never evicted, and fed overlay
+// paths straight from LSP client didOpen notifications — a hostile or
+// buggy client streaming ever-distinct URIs must not grow it without
+// bound. The cap clears the memo wholesale; correctness is unaffected
+// because entries are validated by content hash on read.
+func TestOfflineChecker_MemoSizeCap(t *testing.T) {
+	cfg := writeOfflineProject(t, nil)
+	c := NewOfflineChecker(cfg)
+
+	// Content with no queries: the per-path analysis is cheap (no
+	// rendering), which is exactly the cheapest flood a client can send.
+	src := []byte("-- hostile buffer, no queries\n")
+	for i := range maxMemoEntries + 100 {
+		c.analyzeFile(fmt.Sprintf("/hostile/%d.sql", i), src)
+	}
+	if len(c.memo) > maxMemoEntries {
+		t.Errorf("memo grew to %d entries, cap is %d", len(c.memo), maxMemoEntries)
+	}
+
+	// Replacing an EXISTING entry (content change) must not count as
+	// growth: fill back to the cap, then re-analyze one path with new
+	// content and confirm nothing was cleared.
+	for i := range maxMemoEntries - len(c.memo) {
+		c.analyzeFile(fmt.Sprintf("/refill/%d.sql", i), src)
+	}
+	before := len(c.memo)
+	c.analyzeFile("/refill/0.sql", []byte("-- edited, still no queries\n"))
+	if len(c.memo) != before {
+		t.Errorf("in-place replacement changed the memo size: %d -> %d", before, len(c.memo))
+	}
+
+	// The clear is invisible to correctness: a real template analyzed
+	// after an overflow still scans to a full result.
+	c.analyzeFile("/one/more.sql", src) // overflow: wholesale clear
+	m := c.analyzeFile("/ws/queries/a.sql", []byte(validQuery))
+	if m.file == nil || len(m.file.Queries) != 1 {
+		t.Fatalf("post-clear analysis must still work: %+v", m)
 	}
 }
 

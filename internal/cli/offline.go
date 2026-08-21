@@ -317,12 +317,27 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	return res, nil
 }
 
+// maxMemoEntries caps the per-file memo. It is keyed by path and never
+// evicted, and the LSP feeds it overlay paths straight from client
+// didOpen notifications — a hostile or buggy client streaming
+// ever-distinct URIs would otherwise grow it without bound. The cap is
+// far above any real workspace's template-file count; a workspace
+// legitimately over it just loses memoization once per overflow.
+const maxMemoEntries = 16384
+
 // analyzeFile runs the per-file offline phase (scan, lexical, R1) and
 // memoizes it by content hash.
 func (c *OfflineChecker) analyzeFile(path string, src []byte) *fileMemo {
 	h := sha256.Sum256(src)
 	if m, ok := c.memo[path]; ok && m.hash == h {
 		return m
+	}
+	// The memo is a pure cache validated by content hash on read, so
+	// wholesale clearing is always safe — the next Check re-analyzes and
+	// repopulates, just slower for one snapshot. Only a NEW path can
+	// grow the map (an existing entry is replaced in place below).
+	if _, ok := c.memo[path]; !ok && len(c.memo) >= maxMemoEntries {
+		c.memo = map[string]*fileMemo{}
 	}
 	m := &fileMemo{hash: h}
 	file, diags := scanSource(template.NewScanner(c.drv.profile), path, src)
