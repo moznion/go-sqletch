@@ -113,7 +113,8 @@ func (f Frontend) ProbeJoinItem(item string) error {
 	}
 	bad := &dialect.ParseError{Pos: 0, Msg: "fragment is not a single join item"}
 	if sel.Source == nil || sel.WhereExpr != nil || len(sel.GroupByExprs) != 0 ||
-		sel.HavingExpr != nil || len(sel.OrderingTerms) != 0 || sel.LimitExpr != nil {
+		sel.HavingExpr != nil || len(sel.OrderingTerms) != 0 || sel.LimitExpr != nil ||
+		sel.Compound != nil {
 		return bad
 	}
 	var rels []dialect.RelRef
@@ -165,7 +166,8 @@ func (f Frontend) ProbeGroupBy(clause string) error {
 	}
 	if len(sel.GroupByExprs) == 0 ||
 		sel.WhereExpr != nil || sel.Source != nil || sel.HavingExpr != nil ||
-		len(sel.OrderingTerms) != 0 || sel.LimitExpr != nil || sel.Distinct.IsValid() {
+		len(sel.OrderingTerms) != 0 || sel.LimitExpr != nil || sel.Distinct.IsValid() ||
+		sel.Compound != nil {
 		return &dialect.ParseError{Pos: 0, Msg: "fragment is not a bare GROUP BY clause"}
 	}
 	return nil
@@ -272,7 +274,7 @@ func (t *tree) Relations() []dialect.RelRef {
 	case *rsql.InsertStatement:
 		if s.Table != nil {
 			out = append(out, dialect.RelRef{
-				Table: s.Table.Name, Loc: s.Table.NamePos.Offset, Join: dialect.JoinBase,
+				Table: s.Table.Name, Schema: insertSchema(s), Loc: s.Table.NamePos.Offset, Join: dialect.JoinBase,
 			})
 		}
 	}
@@ -503,7 +505,7 @@ func (t *tree) DeepTables() []dialect.TableRef {
 	case *rsql.InsertStatement:
 		w.walkWith(s.WithClause)
 		if s.Table != nil {
-			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name, Loc: s.Table.NamePos.Offset})
+			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name, Schema: insertSchema(s), Loc: s.Table.NamePos.Offset})
 		}
 		for _, vl := range s.ValueLists {
 			for _, e := range vl.Exprs {
@@ -604,7 +606,19 @@ func (w *tableWalker) walkExpr(e rsql.Expr) {
 	case nil:
 	case *rsql.BinaryExpr:
 		w.walkExpr(v.X)
-		w.walkExpr(v.Y)
+		// `expr IN table-name` reads a base table: rqlite shapes the RHS
+		// of IN/NOT IN as a bare *Ident (`x IN t`) or a *QualifiedRef
+		// (`x IN schema.t`, Table=schema/Column=table). Those forms are
+		// table READS the policy weaver must see; without this, a
+		// designated table appearing ONLY as an IN operand is missing
+		// from DeepTables and silently reads unscoped (finding H5). The
+		// `IN (subquery)` / `IN (expr-list)` / `IN tvf(args)` forms are
+		// NOT new base-table refs and fall through to the ordinary walk.
+		if v.Op == rsql.IN || v.Op == rsql.NOTIN {
+			w.walkInRHS(v.Y)
+		} else {
+			w.walkExpr(v.Y)
+		}
 	case *rsql.UnaryExpr:
 		w.walkExpr(v.X)
 	case *rsql.ParenExpr:
@@ -642,6 +656,33 @@ func (w *tableWalker) walkExpr(e rsql.Expr) {
 		w.walkSelect(v.SelectStatement)
 	}
 	// Idents, BindExpr, literals, Raise: no table references.
+}
+
+// walkInRHS records the base table an `expr IN table-name` operand reads.
+// rqlite's parseInExpr shapes the RHS of IN/NOT IN as: a bare *Ident
+// (`x IN t`), a *QualifiedRef with Table=schema and Column=table
+// (`x IN schema.t`), an *ExprList (`x IN (…)` — list OR subquery), or a
+// *Call (`x IN tvf(args)` — a table-valued function, not a base table).
+// Only the Ident/QualifiedRef table-name forms are base-table reads; the
+// rest are walked as ordinary expressions (the subquery's own FROM
+// tables and the TVF's arguments still surface through walkExpr).
+func (w *tableWalker) walkInRHS(y rsql.Expr) {
+	switch r := y.(type) {
+	case *rsql.Ident:
+		w.out = append(w.out, dialect.TableRef{Name: r.Name, Loc: r.NamePos.Offset})
+	case *rsql.QualifiedRef:
+		// schema.table: Table holds the schema, Column the table name.
+		if !r.Star.IsValid() && r.Table != nil && r.Column != nil {
+			schema := r.Table.Name
+			w.out = append(w.out, dialect.TableRef{
+				Name: r.Column.Name, Schema: schema, Loc: r.Column.NamePos.Offset,
+			})
+			return
+		}
+		w.walkExpr(y)
+	default:
+		w.walkExpr(y)
+	}
 }
 
 // ---- column refs -----------------------------------------------------------
@@ -1169,6 +1210,19 @@ func (t *tree) HasFetchWithTies() bool { return false }
 func qtnSchema(q *rsql.QualifiedTableName) string {
 	if q.Schema != nil {
 		return q.Schema.Name
+	}
+	return ""
+}
+
+// insertSchema returns the INSERT target's database qualifier (rqlite's
+// InsertStatement carries Schema separately from the QualifiedTableName
+// the UPDATE/DELETE targets use). Dropping it would make a db-qualified
+// write (INSERT INTO temp.t … RETURNING) look unqualified, so
+// HasUnresolvableProvenance would not fire and the RETURNING columns
+// would narrow through a same-named main-database table (design 05 §2b).
+func insertSchema(s *rsql.InsertStatement) string {
+	if s.Schema != nil {
+		return s.Schema.Name
 	}
 	return ""
 }

@@ -873,6 +873,45 @@ INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
 	}
 }
 
+// TestSQLiteInsertSchemaQualifierDisablesNarrowing mirrors finding M8:
+// rqlite's InsertStatement carries the database qualifier separately, and
+// the facade used to drop it — so `INSERT INTO temp.t … RETURNING x` read
+// as an unqualified target, HasUnresolvableProvenance() stayed false, and
+// the bare name "t" cross-resolved to main.t's NOT NULL, narrowing the
+// RETURNING column while the write (and its NULL) landed in temp.t. The
+// db qualifier must reach the facade so narrowing is disabled wholesale
+// (design 05 §2b). The execution half proves the divergence is real: the
+// value written to temp.t IS NULL.
+func TestSQLiteInsertSchemaQualifierDisablesNarrowing(t *testing.T) {
+	conn, _ := acquireSQLiteWithSchema(t, `CREATE TABLE t (x INTEGER NOT NULL);`)
+	if err := conn.Exec(`CREATE TEMP TABLE t (x INTEGER);`); err != nil {
+		t.Fatalf("create temp table: %v", err)
+	}
+
+	const sql = `INSERT INTO temp.t (x) VALUES (NULL) RETURNING x`
+	tree, err := sqlite.Frontend{}.Parse(sql)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !tree.HasUnresolvableProvenance() {
+		t.Fatal("HasUnresolvableProvenance = false: the temp. qualifier on the INSERT target " +
+			"was dropped, so narrowing stays enabled and main.t's NOT NULL x narrows a RETURNING " +
+			"column whose write lands in temp.t (a provenance leak)")
+	}
+
+	stmt, _, err := conn.Prepare(sql)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if !stmt.Step() {
+		t.Fatalf("RETURNING produced no row: %v", stmt.Err())
+	}
+	if stmt.ColumnType(0) != sqlite3.NULL {
+		t.Fatalf("expected NULL from temp.t RETURNING x, got column type %v", stmt.ColumnType(0))
+	}
+}
+
 func acquireSQLiteWithSchema(t *testing.T, schema string) (*sqlite3.Conn, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
