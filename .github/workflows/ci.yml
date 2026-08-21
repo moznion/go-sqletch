@@ -38,6 +38,14 @@ jobs:
           go-version-file: "go.mod"
       - name: E2E suite (property test, generated module, CLI round-trip)
         run: go test -tags devdb -v ./internal/e2e/
+      # Byte-identity across oracle backends is a hard invariant
+      # (CLAUDE.md, doc 15): the devdb corpus tests
+      # (TestMySQLCorpusGroundTruth, TestNativeDifferential) are the
+      # ONLY check of the server==committed direction — without this
+      # step a server-backend change that alters catalog/oracle bytes
+      # would pass CI silently.
+      - name: Oracle ground-truth corpus (server re-derivation, -tags devdb)
+        run: go test -tags devdb -v ./internal/corpus/
       - name: Offline check against the committed example caches
         run: |
           for d in postgres mysql sqlite; do
