@@ -36,12 +36,13 @@ type WorkspaceResult struct {
 // window/showMessage and every request answers empty.
 func Serve(in io.Reader, out io.Writer, ws Workspace, initErr string, logW io.Writer) int {
 	s := &server{
-		conn:      newConn(in, out),
-		ws:        ws,
-		initErr:   initErr,
-		log:       log.New(logW, "sqletch-lsp: ", 0),
-		overlay:   map[string][]byte{},
-		published: map[string]bool{},
+		conn:        newConn(in, out),
+		ws:          ws,
+		initErr:     initErr,
+		log:         log.New(logW, "sqletch-lsp: ", 0),
+		overlay:     map[string][]byte{},
+		maxOpenDocs: maxOpenDocuments,
+		published:   map[string]bool{},
 	}
 	return s.run()
 }
@@ -53,11 +54,56 @@ type server struct {
 	log     *log.Logger
 
 	overlay map[string][]byte // open documents, path → content
+	// maxOpenDocs is the overlay cap (maxOpenDocuments; a field so
+	// tests can lower it).
+	maxOpenDocs int
+	// overlayCapWarned makes the over-cap refusal a showMessage exactly
+	// once per session (the log line still fires per refusal).
+	overlayCapWarned bool
 	// published tracks paths whose last publish was non-empty, so a
 	// fix (or a file leaving the workspace) clears the client's state.
 	published map[string]bool
 	last      WorkspaceResult
 	shutdown  bool
+}
+
+// maxOpenDocuments caps the number of documents tracked in the overlay.
+// The overlay is fed exclusively by client notifications and evicted
+// only on didClose, so a hostile or buggy client streaming didOpen with
+// ever-distinct URIs would otherwise grow it — and the per-file memo
+// behind Workspace.Check — without bound, with a full-workspace
+// re-check per message on top (O(N²) CPU across the stream). The cap is
+// far above what a real editor session opens; past it a NEW document is
+// refused (logged, one showMessage) rather than silently evicting an
+// open one — dropping a tracked buffer would make a legit client's
+// diagnostics silently reflect stale disk content, which is worse than
+// degrading the excess documents to their on-disk state. A refusal also
+// skips the re-check: nothing in the snapshot's inputs changed.
+// The server field maxOpenDocs carries it so tests can lower it.
+const maxOpenDocuments = 4096
+
+// trackOverlay records an open document's content, refusing paths that
+// would grow the overlay past s.maxOpenDocs. Refused documents are
+// simply not tracked: checks fall back to their on-disk content (the
+// config glob still reaches them), and didClose of a tracked document
+// frees its slot.
+func (s *server) trackOverlay(path string, content []byte) bool {
+	if _, tracked := s.overlay[path]; !tracked && len(s.overlay) >= s.maxOpenDocs {
+		s.log.Printf("open-document cap (%d) reached; not tracking %s (its on-disk content is checked instead)",
+			s.maxOpenDocs, path)
+		if !s.overlayCapWarned {
+			s.overlayCapWarned = true
+			s.notify("window/showMessage", ShowMessageParams{
+				Type: messageWarning,
+				Message: fmt.Sprintf(
+					"sqletch: more than %d open documents; further documents are checked from disk only",
+					s.maxOpenDocs),
+			})
+		}
+		return false
+	}
+	s.overlay[path] = content
+	return true
 }
 
 // run processes messages strictly in arrival order on one goroutine:
@@ -140,14 +186,19 @@ func (s *server) dispatch(msg *Message) {
 	case "textDocument/didOpen":
 		var p DidOpenParams
 		if path, ok := s.docParams(msg, &p, func() string { return p.TextDocument.URI }); ok {
-			s.overlay[path] = []byte(p.TextDocument.Text)
-			s.check()
+			if s.trackOverlay(path, []byte(p.TextDocument.Text)) {
+				s.check()
+			}
 		}
 	case "textDocument/didChange":
 		var p DidChangeParams
 		if path, ok := s.docParams(msg, &p, func() string { return p.TextDocument.URI }); ok {
 			if n := len(p.ContentChanges); n > 0 {
-				s.overlay[path] = []byte(p.ContentChanges[n-1].Text)
+				// A didChange for an untracked path (a client that skips
+				// didOpen) tracks it here, so it goes through the same cap.
+				if !s.trackOverlay(path, []byte(p.ContentChanges[n-1].Text)) {
+					break
+				}
 			}
 			s.check()
 		}

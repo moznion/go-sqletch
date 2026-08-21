@@ -100,7 +100,10 @@ type DefinitionParams struct {
 	Position     Position               `json:"position"`
 }
 
-const messageError = 1
+const (
+	messageError   = 1
+	messageWarning = 2
+)
 
 type ShowMessageParams struct {
 	Type    int    `json:"type"`
