@@ -265,6 +265,16 @@ func (t *tree) Kind() dialect.StmtKind {
 	}
 }
 
+func (t *tree) HasConflictUpdate() bool {
+	ins, ok := t.first().(*ast.InsertStmt)
+	if !ok {
+		return false
+	}
+	// ON DUPLICATE KEY UPDATE populates OnDuplicate (a list of
+	// assignments); it modifies rows on a unique-key collision.
+	return len(ins.OnDuplicate) > 0
+}
+
 func (t *tree) sel() *ast.SelectStmt {
 	s, _ := t.first().(*ast.SelectStmt)
 	return s

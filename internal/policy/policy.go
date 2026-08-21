@@ -9,6 +9,7 @@ package policy
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
@@ -160,10 +161,44 @@ func validatePredicate(profile dialect.LexerProfile, fe dialect.Frontend, p *Pol
 		bad("%s: predicate is not one complete boolean expression: unbalanced parentheses", id)
 		return diags
 	}
-	if err := fe.ProbeExpr(rewriteParams(profile, bound)); err != nil {
+	rewritten := rewriteParams(profile, bound)
+	if err := fe.ProbeExpr(rewritten); err != nil {
 		bad("%s: predicate is not one complete boolean expression: %s", id, probeMsg(err))
+		return diags
+	}
+
+	// The predicate may reference ONLY the designated relation (via {})
+	// and its own :params (spec §Cross-Query Policies). ProbeExpr already
+	// rejects a top-level FROM, but a subquery reading ANOTHER relation
+	// hides its FROM inside a sublink — invisible to Weave (which analyzes
+	// the unwoven template) and to Enforce (which analyzes the woven one),
+	// so that read would ship completely unscoped. Parse the wrapped
+	// predicate and reject if it introduces ANY relation (audit-12 M9). A
+	// FROM-less scalar subquery introduces no relation and stays valid.
+	if tree, perr := fe.Parse("SELECT 1 WHERE (" + rewritten + "\n)"); perr == nil {
+		if names := relationNames(tree); len(names) > 0 {
+			bad("%s: predicate may reference only the designated relation (via {}) and its own parameters, but it reads relation %q", id, names[0])
+		}
 	}
 	return diags
+}
+
+// relationNames returns the sorted, de-duplicated base-table names the
+// tree references anywhere (subqueries included). The predicate is
+// wrapped in a FROM-less SELECT, so any name here comes from a subquery
+// the predicate introduced.
+func relationNames(tree dialect.Tree) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, tr := range tree.DeepTables() {
+		if tr.Name == "" || seen[tr.Name] {
+			continue
+		}
+		seen[tr.Name] = true
+		out = append(out, tr.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // balancedParens reports whether the text's parentheses are balanced

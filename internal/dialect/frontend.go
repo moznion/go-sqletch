@@ -216,6 +216,15 @@ type Tree interface {
 	// parsed SQL — the analyzer uses it to require the conjunct to be
 	// SKELETON text (present in every shape) before narrowing.
 	NotNullConjuncts() []ColRef
+	// HasConflictUpdate reports an INSERT whose conflict arm MODIFIES
+	// rows — PostgreSQL/SQLite `ON CONFLICT … DO UPDATE`, MySQL
+	// `ON DUPLICATE KEY UPDATE`. A `DO NOTHING` arm and every non-INSERT
+	// statement report false. The policy weaver refuses to weave such an
+	// upsert on a designated table (design 14 §D6, owner decision
+	// 2026-08-21): the DO UPDATE arm rewrites rows but cannot carry a
+	// woven WHERE that scopes the conflict, so refusal is the sound
+	// minimum.
+	HasConflictUpdate() bool
 }
 
 // ParseError reports a dialect parse failure at a byte offset into the

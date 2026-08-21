@@ -284,6 +284,18 @@ func (t *tree) Relations() []dialect.RelRef {
 	return out
 }
 
+func (t *tree) HasConflictUpdate() bool {
+	n := t.stmt()
+	if n == nil {
+		return false
+	}
+	ins := n.GetInsertStmt()
+	if ins == nil || ins.OnConflictClause == nil {
+		return false
+	}
+	return ins.OnConflictClause.Action == pgquery.OnConflictAction_ONCONFLICT_UPDATE
+}
+
 func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType, nullable bool) dialect.RelRef {
 	alias := ""
 	if rv.Alias != nil {

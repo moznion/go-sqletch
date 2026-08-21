@@ -1134,7 +1134,14 @@ policies:
   conjunct. `INSERT … VALUES` is not a policy target (no rows are
   filtered); an `INSERT … SELECT` that reads a designated table is
   rejected (`SQLETCH125`) — v1 has no modeled insertion point inside
-  an INSERT's select body. Opt out or restructure.
+  an INSERT's select body. An `INSERT … ON CONFLICT DO UPDATE`
+  (`ON DUPLICATE KEY UPDATE` on MySQL) whose target is a designated
+  table *does* modify rows — its `DO UPDATE` arm could overwrite
+  another tenant's row on a cross-tenant unique-key collision — but
+  cannot carry a scoping conjunct, so it is likewise rejected
+  (`SQLETCH125`) when the policy covers `update` (owner decision
+  2026-08-21); `DO NOTHING` modifies nothing and stays a non-target.
+  Opt out or restructure.
 
 ## Weaving semantics
 

@@ -490,6 +490,20 @@ target, never the select body's tables, so v1 *rejects* (`SQLETCH125`)
 an `INSERT … SELECT` reading a designated table rather than weaving
 its body — the spec states this.
 
+**Upsert refinement (owner decision 2026-08-21, audit-12 M10).** The
+spec only excludes `INSERT … VALUES` as a policy target ("no rows are
+filtered"), but an `INSERT … ON CONFLICT DO UPDATE` (PostgreSQL/SQLite;
+MySQL `ON DUPLICATE KEY UPDATE`) *does* modify rows: on a cross-tenant
+unique-key collision its `DO UPDATE` arm can overwrite another tenant's
+row. That arm cannot carry a woven `WHERE` that scopes the conflict, so
+weaving cannot make it safe. Fail-closed: an upsert whose target is a
+designated table is **refused** (`SQLETCH125`) when the policy covers
+the `update` kind (the `DO UPDATE` arm is an update-shaped
+modification); `DO NOTHING` modifies nothing and stays a non-target. A
+new `Tree.HasConflictUpdate()` capability reports the row-modifying
+conflict arm across the three dialects; enforcement (§6.1) mirrors the
+refusal as a `SQLETCH124` weaver-regression backstop.
+
 ## 6. Enforcement
 
 Weaving alone does not prove absence of leaks: a query can name the

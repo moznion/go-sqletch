@@ -37,6 +37,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	kind := tree.Kind()
 	rels := tree.Relations()
 	deep := tree.DeepTables()
+	upsert := tree.HasConflictUpdate()
 	// Independently re-derive the non-maximal overread set (a designated
 	// read living only in a non-first @choose alternative or @order-by
 	// @default). A correct weaver refuses these at weave time (SQLETCH125,
@@ -45,7 +46,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	// catch-the-weaver role the conjunct re-derivation below plays.
 	over := overreadDeep(profile, fe, q, deep)
 	applies := func(p *Policy) bool {
-		return analyzeApplicability(p, kind, rels, deep).active || len(designatedOverread(p, over, kind)) > 0
+		return analyzeApplicability(p, kind, rels, deep, upsert).active || len(designatedOverread(p, over, kind)) > 0
 	}
 
 	byName := map[string]*Policy{}
@@ -74,7 +75,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
-		a := analyzeApplicability(p, kind, rels, deep)
+		a := analyzeApplicability(p, kind, rels, deep, upsert)
 		if _, ok := optOutFor(q, p.Name); ok {
 			continue
 		}
@@ -89,7 +90,21 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 				WithHint("that rendering is invisible to the weaver; restructure so the designated read appears in every shape, or opt out with `-- @policy-optout: %s (reason)`", p.Name))
 			continue
 		}
-		if !a.active || a.hidden || kind == dialect.StmtInsert {
+		if kind == dialect.StmtInsert {
+			// Weaver-regression backstop for the upsert case (audit-12 M10):
+			// an INSERT … ON CONFLICT DO UPDATE on a designated target
+			// should have been REFUSED at weave time (SQLETCH125). If it
+			// reached here it ships an unscoped row-modifying arm, so report
+			// it (SQLETCH124) rather than silently pass.
+			if upsert && len(a.topOcc) > 0 && p.appliesTo(dialect.StmtUpdate) {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+					"query upserts into policy-designated table %q via ON CONFLICT DO UPDATE, which policy %q cannot scope",
+					a.topOcc[0].Table, p.Name).
+					WithHint("an upsert's DO UPDATE arm modifies rows but cannot carry a scoping conjunct; restructure or opt out with `-- @policy-optout: %s (reason)`", p.Name))
+			}
+			continue
+		}
+		if !a.active || a.hidden {
 			continue
 		}
 		// A predicate with no `{}` placeholder references no joined
