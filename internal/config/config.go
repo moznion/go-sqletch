@@ -14,7 +14,9 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/lexer"
 	"github.com/goccy/go-yaml/parser"
+	"github.com/goccy/go-yaml/token"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
@@ -35,6 +37,27 @@ const maxConfigBytes = 1 << 20 // 1 MiB
 // config (bounded by maxConfigBytes to well under 1e6 nodes) yet
 // rejects a bomb after O(input) work, before any expansion happens.
 const maxExpandedNodes = 1 << 20
+
+// maxNestingDepth bounds the structural nesting depth (running count of
+// open flow-collection tokens `[`/`{`) a YAML document may reach. This
+// is a SECOND, independent DoS vector from alias fan-out: goccy/go-yaml's
+// parser is superlinear (≈O(n^2)) in MEMORY in nesting depth alone, with
+// no aliases involved. A deeply nested flow collection
+// (`queries: [[[[ … ]]]]`) sized well UNDER maxConfigBytes drives the
+// parser to gigabytes and OOM-kills the process — and the alias guard
+// cannot help, because boundYAMLExpansion must itself call
+// parser.ParseBytes first, so the parse IS the blow-up. The depth is
+// therefore checked by a linear-time pre-scan over goccy's OWN lexer
+// BEFORE any goccy parse touches the bytes (the billion-laughs guard
+// included). Real configs nest only a few levels; the cap is deliberately
+// generous so an ordinary document is never rejected, yet forecloses the
+// OOM. Block-context (indentation) nesting is NOT bounded here: each extra
+// block level costs at least one more leading space per line, so a
+// document's block depth is bounded by ~sqrt(2·len) ≈ 1400 at the size
+// cap, which goccy parses in linear time and a few milliseconds
+// (measured) — only flow brackets, one byte per level, reach a
+// pathological depth under the size cap.
+const maxNestingDepth = 100
 
 type Config struct {
 	Version       int          `yaml:"version"`
@@ -168,6 +191,20 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	if err != nil {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
+	}
+
+	// Bound YAML structural nesting depth BEFORE any goccy parse: goccy's
+	// parser is superlinear in memory in nesting depth alone (no aliases
+	// needed), so a deeply nested flow collection under the size cap can
+	// OOM the process. This pre-scan is a linear-time walk over goccy's own
+	// lexer and MUST precede both boundYAMLExpansion (which parses to count
+	// nodes) and the decode below — either parse is the blow-up.
+	if depth, over := exceedsNestingDepth(raw); over {
+		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
+			diagnostics.CodeConfigParse, span,
+			"invalid config: YAML structural nesting is too deep (reached depth %d, cap %d): deeply nested flow collections ([[[…]]]) drive the YAML parser into superlinear memory and can OOM the process (a denial of service) even under the %d-byte size cap, so the document is refused before it is parsed",
+			depth, maxNestingDepth, maxConfigBytes).
+			WithHint("sqletch configs nest only a few levels deep; flatten the document (this cap is far above any legitimate config)")}
 	}
 
 	// Bound YAML alias expansion BEFORE decoding: a billion-laughs bomb
@@ -362,6 +399,58 @@ func readConfigCapped(path string) ([]byte, error) {
 		return nil, fmt.Errorf("config file exceeds the %d-byte cap", maxConfigBytes)
 	}
 	return data, nil
+}
+
+// exceedsNestingDepth reports whether raw's flow-collection nesting depth
+// exceeds maxNestingDepth, returning the depth at which the cap was first
+// passed. It must run BEFORE any goccy parse: goccy's parser is superlinear
+// in memory in nesting depth, so a document like `queries: [[[[ … ]]]]` —
+// one byte per level, easily fitting under maxConfigBytes — can drive the
+// parser to gigabytes and OOM the process (independent of the alias-fan-out
+// bomb).
+//
+// The depth is counted over the token stream from goccy's OWN lexer
+// (lexer.Tokenize), a linear-time tokenizer: each flow-collection open token
+// (SequenceStart `[`, MappingStart `{`) increments the running depth and
+// each close token (SequenceEnd `]`, MappingEnd `}`) decrements it, tracking
+// the running and maximum depth. Using the SAME tokenizer the parser is
+// built on is what makes the count SOUND — quotes, comments, and `|`/`>`
+// block scalars are classified exactly as the parser will classify them, so
+// a bracket the parser treats as string content is never miscounted and a
+// bracket the parser treats as structural is never masked. A hand-rolled
+// byte quote/comment state machine (the earlier implementation) could
+// DIVERGE from the parser and either miss a structural bracket — a stray
+// unbalanced quote in a plain scalar (`server_version: a"`) put it into a
+// permanent mask state that hid all later `[`/`{`, a depth-guard BYPASS — or
+// over-count a literal bracket inside a `|`/`>` block scalar, a false
+// reject. Neither is possible when the parser's own lexer does the
+// classifying. Block-context indentation depth is deliberately not tracked
+// (it is linear-cost; see maxNestingDepth).
+//
+// Linearity/memory: on the deep-nesting bomb the lexer is O(len(raw)) in
+// time and token count; the 1 MiB size cap (readConfigCapped) backstops the
+// token-slice memory. Measured at the cap: ~99 ms, ~214 MiB peak — bounded,
+// versus the gigabytes/OOM the parser spends on the same input.
+func exceedsNestingDepth(raw []byte) (int, bool) {
+	depth := 0
+	maxDepth := 0
+	for _, tk := range lexer.Tokenize(string(raw)) {
+		switch tk.Type {
+		case token.SequenceStartType, token.MappingStartType:
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+			if depth > maxNestingDepth {
+				return depth, true
+			}
+		case token.SequenceEndType, token.MappingEndType:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return maxDepth, false
 }
 
 // boundYAMLExpansion rejects a config whose YAML anchors/aliases expand
