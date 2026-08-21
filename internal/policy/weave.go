@@ -106,6 +106,15 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	// Assemble the insertions. prio: wrap parens (0) < ON text (1) <
 	// WHERE text (2), so an ON conjunct precedes a WHERE clause
 	// synthesized at the same statement-end boundary.
+	//
+	// Every spliced predicate occurrence is parenthesized (design 14
+	// §11.6): the predicate text is trusted config but not
+	// precedence-neutral — an unparenthesized `p OR q` would capture the
+	// query's own conjuncts under the OR's right arm (leak-shaped), and
+	// a predicate carrying a depth-0 AND (its own, or BETWEEN's) would
+	// AND-split into several segments the enforcement matcher could
+	// never re-assemble. `(p OR q)` and `(a AND b)` are each exactly one
+	// depth-0 conjunct with fixed precedence.
 	var ins []insertion
 	seq := 0
 	add := func(off, prio int, text string) {
@@ -113,7 +122,7 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 		seq++
 	}
 	for _, agg := range onAggs {
-		joined := strings.Join(agg.conjs, " AND ")
+		joined := joinParenthesized(agg.conjs)
 		if agg.res.cs.hasOR {
 			add(agg.res.cs.start, 0, "(")
 			add(agg.res.cs.end, 1, ") AND "+joined)
@@ -122,7 +131,7 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 		}
 	}
 	if len(whereConjs) > 0 {
-		joined := strings.Join(whereConjs, " AND ")
+		joined := joinParenthesized(whereConjs)
 		switch {
 		case q.WhereKwEnd >= 0 && w.where.hasOR:
 			add(q.WhereKwEnd, 2, " "+joined+" AND")
@@ -144,6 +153,17 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	registerParams(woven, res.Woven)
 	res.Query = woven
 	return res
+}
+
+// joinParenthesized joins conjunct texts into splice-ready SQL, each
+// occurrence wrapped in its own parentheses (see the assembly comment
+// in Weave).
+func joinParenthesized(conjs []string) string {
+	wrapped := make([]string, len(conjs))
+	for i, c := range conjs {
+		wrapped[i] = "(" + c + ")"
+	}
+	return strings.Join(wrapped, " AND ")
 }
 
 // onNeed is one conjunct destined for one join's ON clause.

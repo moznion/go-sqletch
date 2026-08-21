@@ -104,12 +104,12 @@ func TestWeaveON_LegitimateNullExtensionStillWeaves(t *testing.T) {
 		{
 			name: "LEFT JOIN right operand (the canonical D2a case)",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		{
 			name: "RIGHT JOIN left operand",
 			src:  "-- name: Q :many\nSELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		{
 			// Proven-equivalent inner crossing: the designated table sits
@@ -118,7 +118,7 @@ func TestWeaveON_LegitimateNullExtensionStillWeaves(t *testing.T) {
 			// null-extended, so it is safe to weave there.
 			name: "inner-join group null-extended farther out",
 			src:  "-- name: Q :many\nSELECT v.id FROM orders o JOIN users u ON o.uid = u.id RIGHT JOIN vendors v ON v.oid = o.id\n",
-			want: "SELECT v.id FROM orders o JOIN users u ON o.uid = u.id AND o.tenant_id = $1 RIGHT JOIN vendors v ON v.oid = o.id",
+			want: "SELECT v.id FROM orders o JOIN users u ON o.uid = u.id AND (o.tenant_id = $1) RIGHT JOIN vendors v ON v.oid = o.id",
 		},
 	}
 	for _, tc := range cases {

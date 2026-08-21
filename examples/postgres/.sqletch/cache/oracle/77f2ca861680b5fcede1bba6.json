@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "rendered_sql": "\n-- audit_logs sits on the null-extended side here, so the policy\n-- weaves into the JOIN's ON clause: every user row survives, and only\n-- the tenant's audit rows join (a WHERE conjunct would have turned\n-- the LEFT JOIN into an inner join).\nSELECT u.id, a.action\nFROM users AS u\nLEFT JOIN audit_logs AS a ON a.actor_id = u.id AND (a.tenant_id = $1)\nORDER BY u.id, a.id;\n",
+  "params": [
+    {
+      "oid": 20,
+      "name": "int8"
+    }
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "oid": 20,
+      "type_name": "int8",
+      "src_rel": 16387,
+      "src_att": 1
+    },
+    {
+      "name": "action",
+      "oid": 25,
+      "type_name": "text",
+      "src_rel": 16403,
+      "src_att": 4
+    }
+  ]
+}

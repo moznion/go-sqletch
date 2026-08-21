@@ -20,17 +20,17 @@ func TestWeaveON_Golden(t *testing.T) {
 		{
 			name: "LEFT JOIN weaves into ON",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		{
 			name: "no WHERE at all: ON weave only",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND (o.tenant_id = $1)",
 		},
 		{
 			name: "RIGHT JOIN null-extends its left side",
 			src:  "-- name: Q :many\nSELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		// NOTE: a FULL JOIN preserves both operands, so no ON clause can
 		// scope the designated table's own rows — that case is REFUSED
@@ -38,22 +38,22 @@ func TestWeaveON_Golden(t *testing.T) {
 		{
 			name: "mixed: WHERE for the inner table, ON for the outer one",
 			src:  "-- name: Q :many\nSELECT o.id FROM orders o LEFT JOIN order_items i ON i.order_id = o.id WHERE o.ok\n",
-			want: "SELECT o.id FROM orders o LEFT JOIN order_items i ON i.order_id = o.id AND i.tenant_id = $1 WHERE o.tenant_id = $1 AND o.ok",
+			want: "SELECT o.id FROM orders o LEFT JOIN order_items i ON i.order_id = o.id AND (i.tenant_id = $1) WHERE (o.tenant_id = $1) AND o.ok",
 		},
 		{
 			name: "ON expression with a top-level OR is wrapped first",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id OR o.owner_id = u.id WHERE u.ok\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON (o.user_id = u.id OR o.owner_id = u.id) AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON (o.user_id = u.id OR o.owner_id = u.id) AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		{
 			name: "join chained after the outer join",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id JOIN teams t ON t.id = u.team_id WHERE u.ok\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1 JOIN teams t ON t.id = u.team_id WHERE u.ok",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND (o.tenant_id = $1) JOIN teams t ON t.id = u.team_id WHERE u.ok",
 		},
 		{
 			name: "parenthesized ON expression",
 			src:  "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON (o.user_id = u.id) WHERE u.ok\n",
-			want: "SELECT u.id FROM users u LEFT JOIN orders o ON (o.user_id = u.id) AND o.tenant_id = $1 WHERE u.ok",
+			want: "SELECT u.id FROM users u LEFT JOIN orders o ON (o.user_id = u.id) AND (o.tenant_id = $1) WHERE u.ok",
 		},
 		{
 			name: "hand-scoped ON conjunct is not double-woven",
@@ -79,7 +79,7 @@ func TestWeaveON_MultiplePolicies(t *testing.T) {
 	src := "-- name: Q :many\nSELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.ok\n"
 	res := weaveOne(t, src, tenantPolicy(), soft)
 	noDiags(t, res)
-	want := "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND o.tenant_id = $1 AND o.deleted_at IS NULL WHERE u.ok"
+	want := "SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id AND (o.tenant_id = $1) AND (o.deleted_at IS NULL) WHERE u.ok"
 	if got := renderSQL(t, res.Query); got != want {
 		t.Errorf("got: %s\nwant: %s", got, want)
 	}
@@ -92,7 +92,7 @@ func TestWeave_WhereWithTopLevelORIsWrapped(t *testing.T) {
 	src := "-- name: Q :many\nSELECT id FROM orders WHERE status = 'a' OR status = 'b'\n"
 	res := weaveOne(t, src, tenantPolicy())
 	noDiags(t, res)
-	want := "SELECT id FROM orders WHERE orders.tenant_id = $1 AND (status = 'a' OR status = 'b')"
+	want := "SELECT id FROM orders WHERE (orders.tenant_id = $1) AND (status = 'a' OR status = 'b')"
 	if got := renderSQL(t, res.Query); got != want {
 		t.Errorf("got: %s\nwant: %s", got, want)
 	}
@@ -138,7 +138,7 @@ func TestWeaveON_MinimalShapeCarriesConjunct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(minimal.SQL, "AND o.tenant_id = $1") {
+	if !strings.Contains(minimal.SQL, "AND (o.tenant_id = $1)") {
 		t.Errorf("minimal shape lost the ON conjunct:\n%s", minimal.SQL)
 	}
 	if _, err := (postgres.Frontend{}).Parse(minimal.SQL); err != nil {

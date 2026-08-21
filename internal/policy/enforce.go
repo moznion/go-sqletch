@@ -92,10 +92,18 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		if !a.active || a.hidden || kind == dialect.StmtInsert {
 			continue
 		}
+		// A predicate with no `{}` placeholder references no joined
+		// columns, so the weaver emits it as a single WHERE conjunct for
+		// ALL occurrences — including null-extended outer-join sides,
+		// where an ordinary conjunct would go into the join's ON clause
+		// (it cannot null-filter the join, so WHERE is the correct and
+		// stronger placement). Mirror that emission rule here: check
+		// WHERE presence for every occurrence of such a predicate.
+		hasPlaceholder := strings.Contains(p.Predicate, Placeholder)
 		for _, r := range a.topOcc {
 			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r))
 			present := false
-			if r.NullableSide {
+			if r.NullableSide && hasPlaceholder {
 				if res := onScanFor(profile, q, maxR, r, onScans); res != nil {
 					// wrongJoin: the located ON does not gate this
 					// occurrence's rows (D2a soundness), so a conjunct there
@@ -110,7 +118,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 			}
 			if !present {
 				clause := "WHERE clause"
-				if r.NullableSide {
+				if r.NullableSide && hasPlaceholder {
 					clause = "join's ON clause (the table is on a null-extended outer-join side)"
 				}
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,

@@ -57,7 +57,7 @@ func TestOffline_PolicyWeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.SQL, "orders.tenant_id = $1 AND") {
+	if !strings.Contains(r.SQL, "(orders.tenant_id = $1) AND") {
 		t.Errorf("woven rendering lacks the policy conjunct:\n%s", r.SQL)
 	}
 	if rs := m.rends["ListOrders"]; len(rs) == 0 || rs[0].SQL != r.SQL {
