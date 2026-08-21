@@ -38,25 +38,31 @@ const maxConfigBytes = 1 << 20 // 1 MiB
 // rejects a bomb after O(input) work, before any expansion happens.
 const maxExpandedNodes = 1 << 20
 
-// maxNestingDepth bounds the structural nesting depth (running count of
-// open flow-collection tokens `[`/`{`) a YAML document may reach. This
-// is a SECOND, independent DoS vector from alias fan-out: goccy/go-yaml's
-// parser is superlinear (≈O(n^2)) in MEMORY in nesting depth alone, with
-// no aliases involved. A deeply nested flow collection
-// (`queries: [[[[ … ]]]]`) sized well UNDER maxConfigBytes drives the
-// parser to gigabytes and OOM-kills the process — and the alias guard
-// cannot help, because boundYAMLExpansion must itself call
-// parser.ParseBytes first, so the parse IS the blow-up. The depth is
-// therefore checked by a linear-time pre-scan over goccy's OWN lexer
-// BEFORE any goccy parse touches the bytes (the billion-laughs guard
-// included). Real configs nest only a few levels; the cap is deliberately
-// generous so an ordinary document is never rejected, yet forecloses the
-// OOM. Block-context (indentation) nesting is NOT bounded here: each extra
-// block level costs at least one more leading space per line, so a
-// document's block depth is bounded by ~sqrt(2·len) ≈ 1400 at the size
-// cap, which goccy parses in linear time and a few milliseconds
-// (measured) — only flow brackets, one byte per level, reach a
-// pathological depth under the size cap.
+// maxNestingDepth bounds the structural nesting depth a YAML document may
+// reach — BOTH flow-collection nesting (open `[`/`{` tokens) and compact
+// single-line block-context nesting (a run of block indicators `- `/`? ` at
+// strictly increasing columns). This is a SECOND, independent DoS vector
+// from alias fan-out: goccy/go-yaml's parser is superlinear (≈O(n^2)) in
+// MEMORY in nesting depth alone, with no aliases involved. A deeply nested
+// document sized well UNDER maxConfigBytes drives the parser (or, once the
+// parse fails, the error formatter) to gigabytes and OOM-kills the process —
+// and the alias guard cannot help, because boundYAMLExpansion must itself
+// call parser.ParseBytes first, so the parse IS the blow-up. The depth is
+// therefore checked by a linear-time pre-scan over goccy's OWN lexer BEFORE
+// any goccy parse touches the bytes (the billion-laughs guard included).
+// Real configs nest only a few levels; the cap is deliberately generous so
+// an ordinary document is never rejected, yet forecloses the OOM.
+//
+// BOTH flow AND compact block nesting cost ~1–2 bytes per level and so
+// reach a pathological depth under the size cap, so both are counted. Only
+// INDENTATION-based (multi-line) block nesting is left unbounded here: each
+// extra indented level costs one more leading space on every subsequent
+// line, so a document's indentation depth is bounded by ~sqrt(2·len) ≈ 1400
+// at the size cap, which goccy parses in linear time and a few milliseconds
+// (measured). The earlier claim that ALL block depth is sqrt-bounded was
+// FALSE — it holds only for the indentation form, not the compact
+// single-line `- - - … x` / `? ? ? … x` forms, which nest one level per two
+// bytes and were a depth-guard BYPASS until counted here.
 const maxNestingDepth = 100
 
 type Config struct {
@@ -221,9 +227,15 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	// DisallowUnknownField reproduces yaml.v3's KnownFields(true);
 	// duplicate map keys are rejected by goccy/go-yaml's default
 	// (AllowDuplicateMapKey is the opt-out), matching yaml.v3 too.
+	// Format the error with yamlErrorMessage, NEVER %v/err.Error(): goccy's
+	// err.Error() renders a source annotation in O(n^2) MEMORY in the
+	// document's nesting depth, so a deep-but-cheap-to-parse document (a
+	// compact block-sequence/complex-key bomb) turns a rejected config into
+	// gigabytes of allocation — a denial of service. yamlErrorMessage omits
+	// the annotation, which is microseconds and a few dozen bytes.
 	if err := yaml.UnmarshalWithOptions(raw, &cfg, yaml.DisallowUnknownField()); err != nil {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
-			diagnostics.CodeConfigParse, span, "invalid config: %v", err)}
+			diagnostics.CodeConfigParse, span, "invalid config: %s", yamlErrorMessage(err))}
 	}
 	cfg.Dir = filepath.Dir(path)
 	cfg.Path = path
@@ -381,6 +393,30 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	return cfg, diags
 }
 
+// maxYAMLErrorLen bounds the rendered length of a goccy YAML error in a
+// diagnostic. The source-annotation-free form is already tiny for the known
+// bombs, but a pathological single-line message must never bloat a
+// diagnostic either.
+const maxYAMLErrorLen = 4096
+
+// yamlErrorMessage renders a goccy/go-yaml parse/decode error for a
+// user-facing diagnostic WITHOUT its source annotation, and NEVER via
+// err.Error()/%v. goccy's err.Error() is FormatError(err, colored=false,
+// inclSource=true): rendering the source annotation costs O(n^2) MEMORY in
+// the document's nesting depth. A compact but deeply nested document
+// (`extra: - - - … x` or `extra: ? ? ? … x`) parses cheaply yet drives that
+// annotation to multiple gigabytes — the same superlinear blow-up the
+// nesting pre-scan guards against, relocated into ERROR FORMATTING. The
+// annotation-free FormatError(err, false, false) is microseconds and a few
+// dozen bytes; the result is additionally length-capped for safety.
+func yamlErrorMessage(err error) string {
+	msg := yaml.FormatError(err, false, false)
+	if len(msg) > maxYAMLErrorLen {
+		msg = msg[:maxYAMLErrorLen] + "… (truncated)"
+	}
+	return msg
+}
+
 // readConfigCapped reads path but refuses more than maxConfigBytes, so a
 // committed giant sqletch.yaml cannot OOM the process. It reads at most
 // maxConfigBytes+1 and rejects if that ceiling is reached, so the bound
@@ -410,44 +446,88 @@ func readConfigCapped(path string) ([]byte, error) {
 // bomb).
 //
 // The depth is counted over the token stream from goccy's OWN lexer
-// (lexer.Tokenize), a linear-time tokenizer: each flow-collection open token
-// (SequenceStart `[`, MappingStart `{`) increments the running depth and
-// each close token (SequenceEnd `]`, MappingEnd `}`) decrements it, tracking
-// the running and maximum depth. Using the SAME tokenizer the parser is
-// built on is what makes the count SOUND — quotes, comments, and `|`/`>`
-// block scalars are classified exactly as the parser will classify them, so
-// a bracket the parser treats as string content is never miscounted and a
-// bracket the parser treats as structural is never masked. A hand-rolled
-// byte quote/comment state machine (the earlier implementation) could
-// DIVERGE from the parser and either miss a structural bracket — a stray
-// unbalanced quote in a plain scalar (`server_version: a"`) put it into a
-// permanent mask state that hid all later `[`/`{`, a depth-guard BYPASS — or
-// over-count a literal bracket inside a `|`/`>` block scalar, a false
+// (lexer.Tokenize), a linear-time tokenizer. Using the SAME tokenizer the
+// parser is built on is what makes the count SOUND — quotes, comments, and
+// `|`/`>` block scalars are classified exactly as the parser will classify
+// them, so a bracket the parser treats as string content is never miscounted
+// and a bracket the parser treats as structural is never masked. A
+// hand-rolled byte quote/comment state machine (an earlier implementation)
+// could DIVERGE from the parser and either miss a structural bracket — a
+// stray unbalanced quote in a plain scalar (`server_version: a"`) put it into
+// a permanent mask state that hid all later `[`/`{`, a depth-guard BYPASS —
+// or over-count a literal bracket inside a `|`/`>` block scalar, a false
 // reject. Neither is possible when the parser's own lexer does the
-// classifying. Block-context indentation depth is deliberately not tracked
-// (it is linear-cost; see maxNestingDepth).
+// classifying.
 //
-// Linearity/memory: on the deep-nesting bomb the lexer is O(len(raw)) in
-// time and token count; the 1 MiB size cap (readConfigCapped) backstops the
-// token-slice memory. Measured at the cap: ~99 ms, ~214 MiB peak — bounded,
-// versus the gigabytes/OOM the parser spends on the same input.
+// Two nesting mechanisms are counted:
+//
+//   - FLOW collections: each open token (SequenceStart `[`, MappingStart `{`)
+//     increments a running depth, each close token (SequenceEnd `]`,
+//     MappingEnd `}`) decrements it.
+//
+//   - Compact single-line BLOCK nesting: a run of block-indicator tokens
+//     (SequenceEntry `-`, MappingKey `?`) at STRICTLY increasing columns with
+//     no value between them nests one collection level per indicator at ~2
+//     bytes each (`extra: - - - … x`, `extra: ? ? ? … x`) — producing NO
+//     flow-start tokens, so this form was a depth-guard BYPASS that drove the
+//     decoder (and, via err.Error(), the error formatter) into the same
+//     superlinear blow-up. The STRICTLY-increasing-column test is what
+//     distinguishes nesting from siblings: a normal multi-item list emits a
+//     value token between entries (which resets the run) and empty list items
+//     (`-\n-\n`) repeat the SAME column, so a legitimate list is never
+//     miscounted. Any non-indicator token, or a flow open/close, resets the
+//     block run.
+//
+// The reported depth is flow depth plus the current block run, and the cap
+// fires on whichever mechanism (or their sum) reaches it first. Only
+// INDENTATION-based (multi-line) block nesting is left uncounted — it is
+// linear-cost and sqrt-bounded by the size cap; see maxNestingDepth.
+//
+// Linearity/memory: on any of these bombs the lexer is O(len(raw)) in time
+// and token count; the 1 MiB size cap (readConfigCapped) backstops the
+// token-slice memory. Measured at the cap: bounded (~hundreds of ms, a few
+// hundred MiB peak), versus the gigabytes/OOM the parser or error formatter
+// spends on the same input.
 func exceedsNestingDepth(raw []byte) (int, bool) {
-	depth := 0
+	depth := 0    // running flow-collection depth
+	blockRun := 0 // length of the current strictly-increasing block-indicator run
+	prevCol := -1 // column of the previous block indicator in the run
 	maxDepth := 0
+	note := func(d int) bool {
+		if d > maxDepth {
+			maxDepth = d
+		}
+		return d > maxNestingDepth
+	}
 	for _, tk := range lexer.Tokenize(string(raw)) {
 		switch tk.Type {
 		case token.SequenceStartType, token.MappingStartType:
 			depth++
-			if depth > maxDepth {
-				maxDepth = depth
-			}
-			if depth > maxNestingDepth {
+			blockRun, prevCol = 0, -1
+			if note(depth) {
 				return depth, true
 			}
 		case token.SequenceEndType, token.MappingEndType:
 			if depth > 0 {
 				depth--
 			}
+			blockRun, prevCol = 0, -1
+		case token.SequenceEntryType, token.MappingKeyType:
+			col := -1
+			if tk.Position != nil {
+				col = tk.Position.Column
+			}
+			if col > prevCol {
+				blockRun++
+			} else {
+				blockRun = 1
+			}
+			prevCol = col
+			if note(depth + blockRun) {
+				return depth + blockRun, true
+			}
+		default:
+			blockRun, prevCol = 0, -1
 		}
 	}
 	return maxDepth, false

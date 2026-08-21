@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/goccy/go-yaml"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
@@ -745,6 +748,17 @@ func TestExceedsNestingDepth(t *testing.T) {
 		// content and must not be counted structurally.
 		{"block-literal-brackets", "server_version: |\n" + strings.Repeat("  "+deep+"\n", 3), false},
 		{"block-folded-brackets", "server_version: >\n" + strings.Repeat("  "+deep+"\n", 3), false},
+		// RELOCATED DoS: compact single-line block nesting emits no flow-start
+		// tokens but still nests one level per indicator — it must be counted.
+		{"compact-block-seq-too-deep", "extra: " + strings.Repeat("- ", maxNestingDepth+5) + "x", true},
+		{"compact-complex-key-too-deep", "extra: " + strings.Repeat("? ", maxNestingDepth+5) + "x", true},
+		{"compact-block-seq-shallow", "extra: - - - x", false},
+		// A normal multi-item list nests only one level: a value token between
+		// entries resets the run, so many siblings never accumulate depth.
+		{"flat-block-list", "extra:\n" + strings.Repeat("  - item\n", maxNestingDepth+50), false},
+		// Empty list items repeat the SAME column, not strictly increasing —
+		// they are siblings, not nesting, and must not be counted.
+		{"empty-list-items", "extra:\n" + strings.Repeat("-\n", maxNestingDepth+50), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -806,4 +820,145 @@ func TestExpandGlobs_PathEscape(t *testing.T) {
 			t.Errorf("paths = %v", paths)
 		}
 	})
+}
+
+// blockSeqBomb builds a config whose value is a COMPACT single-line block
+// sequence nested `depth` levels deep (`extra: - - - … x`). Each `- ` nests
+// one collection level at 2 bytes, so ~500k levels fit under the 1 MiB cap —
+// yet this form emits NO flow-start tokens, so before the fix the flow-only
+// depth guard returned over=false (a BYPASS) and the invalid document fell
+// through to yaml.UnmarshalWithOptions, whose err.Error() renders a source
+// annotation in O(n^2) MEMORY in depth (measured 40k→437MiB, 80k→1687MiB —
+// superlinear; ~1 MB cap → ~264 GB → OOM). The depth guard now counts this
+// compact block nesting, and Load formats the error without the annotation.
+func blockSeqBomb(depth int) string {
+	return validYAML + "extra: " + strings.Repeat("- ", depth) + "x\n"
+}
+
+// complexKeyBomb is blockSeqBomb's complex-mapping-key twin (`extra: ? ? ? …
+// x`): the `? ` complex-key indicator nests one mapping level per two bytes,
+// the same compact-block DoS via a different indicator token.
+func complexKeyBomb(depth int) string {
+	return validYAML + "extra: " + strings.Repeat("? ", depth) + "x\n"
+}
+
+// loadAsync runs Load(path) with a deadline so a superlinear/OOM regression
+// fails the test by TIMEOUT rather than wedging or OOM-killing the runner.
+func loadAsync(t *testing.T, path string, deadline time.Duration) []diagnostics.Diagnostic {
+	t.Helper()
+	done := make(chan []diagnostics.Diagnostic, 1)
+	go func() {
+		_, diags := Load(path)
+		done <- diags
+	}()
+	select {
+	case diags := <-done:
+		return diags
+	case <-time.After(deadline):
+		t.Fatalf("Load did not return within %s (superlinear/OOM DoS regression)", deadline)
+		return nil
+	}
+}
+
+func refusedNestingTooDeep(diags []diagnostics.Diagnostic) bool {
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error &&
+			strings.Contains(d.Message, "nesting is too deep") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLoad_YAMLBlockSeqBombRejected pins the RELOCATED-DoS fix (layer 2, the
+// depth guard): a compact single-line block-sequence bomb near the size cap
+// must be refused with SQLETCH300 (nesting too deep) by the raw-byte
+// pre-scan, in O(input), never handed to the decoder. On the UNFIXED code
+// this form bypassed the flow-only guard (over=false) and reached
+// UnmarshalWithOptions + err.Error(), which is grossly superlinear and OOMs
+// near the cap — so the deadline both proves the fix and makes a regression
+// fail by TIMEOUT rather than OOMing CI.
+func TestLoad_YAMLBlockSeqBombRejected(t *testing.T) {
+	dir := t.TempDir()
+	// ~1 MB (just under the cap): ~500k nesting levels.
+	path := write(t, dir, "sqletch.yaml", blockSeqBomb(490000))
+	if !refusedNestingTooDeep(loadAsync(t, path, 2*time.Second)) {
+		t.Fatal("near-cap compact block-sequence bomb must be refused with SQLETCH300 (nesting too deep)")
+	}
+}
+
+// TestLoad_YAMLComplexKeyBombRejected pins the same for the compact
+// complex-key form (`extra: ? ? ? … x`).
+func TestLoad_YAMLComplexKeyBombRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, dir, "sqletch.yaml", complexKeyBomb(490000))
+	if !refusedNestingTooDeep(loadAsync(t, path, 2*time.Second)) {
+		t.Fatal("near-cap compact complex-key bomb must be refused with SQLETCH300 (nesting too deep)")
+	}
+}
+
+// TestLoad_BlockBombBoundedAlloc pins that Load's cost on the block-sequence
+// bomb is BOUNDED (linear), not the O(n^2) of the unfixed code. It measures
+// allocation at two depths on the OLD superlinear curve (20k→437MiB,
+// 40k→1687MiB before the fix) and asserts BOTH that each stays under a
+// generous linear ceiling AND that doubling the depth does not ~quadruple
+// the allocation. On the unfixed code either fixed ceiling is blown; this is
+// the canary that a regression cannot OOM the runner because these depths
+// survive even superlinearly.
+func TestLoad_BlockBombBoundedAlloc(t *testing.T) {
+	dir := t.TempDir()
+	measure := func(depth int) uint64 {
+		path := write(t, dir, "sqletch.yaml", blockSeqBomb(depth))
+		var m0, m1 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m0)
+		if !refusedNestingTooDeep(loadAsync(t, path, 2*time.Second)) {
+			t.Fatalf("block bomb depth=%d must be refused with SQLETCH300", depth)
+		}
+		runtime.ReadMemStats(&m1)
+		return (m1.TotalAlloc - m0.TotalAlloc) / (1 << 20) // MiB
+	}
+	small := measure(20000)
+	large := measure(40000)
+	// Generous linear ceiling: the fixed guard uses a few MiB here; the
+	// unfixed err.Error() path used 437/1687 MiB at these depths.
+	const ceilingMiB = 128
+	if large > ceilingMiB {
+		t.Fatalf("Load allocated %d MiB at depth 40000 (cap %d MiB): O(n^2) error-formatting DoS regression (unfixed ≈1687 MiB)", large, ceilingMiB)
+	}
+	// Doubling depth must not ~quadruple allocation (superlinear witness).
+	if small > 0 && large > 4*small {
+		t.Fatalf("Load allocation grew superlinearly: %d MiB at 20000 → %d MiB at 40000 (> 4x)", small, large)
+	}
+}
+
+// TestYAMLErrorMessageBounded is the DIRECT test of the primary fix: the
+// annotation-free yamlErrorMessage is small and fast on a deeply nested
+// invalid document, while goccy's err.Error() (the old %v path) renders the
+// source annotation in O(n^2) memory and is dramatically larger. This pins
+// that Load must never format a goccy error with %v/err.Error().
+func TestYAMLErrorMessageBounded(t *testing.T) {
+	// Deep enough that err.Error()'s annotation is unmistakably larger, but
+	// small enough that computing err.Error() once here stays quick.
+	var cfg Config
+	err := yaml.UnmarshalWithOptions([]byte(blockSeqBomb(30000)), &cfg, yaml.DisallowUnknownField())
+	if err == nil {
+		t.Fatal("a compact block-sequence bomb must fail to decode")
+	}
+
+	start := time.Now()
+	msg := yamlErrorMessage(err)
+	elapsed := time.Since(start)
+
+	if len(msg) > maxYAMLErrorLen+len("… (truncated)") {
+		t.Fatalf("yamlErrorMessage is not length-bounded: %d bytes", len(msg))
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("yamlErrorMessage took %s (must be sub-annotation, near-instant)", elapsed)
+	}
+	// The old path (err.Error() == FormatError with source annotation) must
+	// be far larger — this documents the amplifier the fix removes.
+	if full := err.Error(); len(full) <= len(msg)*4 {
+		t.Fatalf("expected err.Error() (%d bytes) to dwarf the annotation-free message (%d bytes)", len(full), len(msg))
+	}
 }
