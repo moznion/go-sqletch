@@ -80,6 +80,14 @@ func BuildFrags(profile dialect.LexerProfile, q *template.QueryTemplate) []runti
 			// (the predicate's distinct params in order), not the
 			// params struct — the composer offsets them per leaf
 			// instance into the flattened TreeArgs space.
+			// This local numbering is sound ONLY because CheckLexical
+			// rejects a name bound both inside a @predicate body and
+			// anywhere else in the query (SQLETCH112
+			// CodeChooseParamBinds, internal/rules/lexical.go): such a
+			// name would take one shared dollar number from the
+			// renderer but a separate leaf-argument slot here, breaking
+			// the compose-conformance byte-identity with
+			// ast.RenderShape.
 			f := runtime.Frag{Kind: runtime.FilterTree}
 			for _, pr := range v.Predicates {
 				local := map[string]int16{}

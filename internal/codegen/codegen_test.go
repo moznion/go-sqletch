@@ -237,28 +237,35 @@ func conformanceOver(t *testing.T, profile dialect.LexerProfile, style runtime.S
 		if len(diags) != 0 {
 			t.Fatalf("scan: %+v", diags)
 		}
-		q := f.Queries[0]
-		frags := BuildFrags(profile, q)
-		keys, _ := shape.Enumerate(q, 0)
-		for _, k := range keys {
-			want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, argIdx := runtime.ComposeStyle(style, frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
-			if got != want.SQL {
-				t.Fatalf("%s shape %s:\nruntime:\n%q\nrenderer:\n%q", q.Name, k, got, want.SQL)
-			}
-			// Bind order: argIdx maps into ParamOrder; must equal the
-			// renderer's ParamsSeq name-for-name.
-			if len(argIdx) != len(want.ParamsSeq) {
-				t.Fatalf("%s shape %s: argIdx len %d, ParamsSeq len %d", q.Name, k, len(argIdx), len(want.ParamsSeq))
-			}
-			for i, idx := range argIdx {
-				if q.ParamOrder[idx] != want.ParamsSeq[i] {
-					t.Fatalf("%s shape %s: arg %d is %q, renderer expects %q",
-						q.Name, k, i, q.ParamOrder[idx], want.ParamsSeq[i])
-				}
+		assertComposeConformance(t, profile, style, f.Queries[0])
+	}
+}
+
+// assertComposeConformance pins the invariant for one (possibly woven)
+// template: for every enumerable shape, runtime.Compose over BuildFrags
+// is byte-identical to ast.RenderShape, with identical bind order.
+func assertComposeConformance(t *testing.T, profile dialect.LexerProfile, style runtime.Style, q *template.QueryTemplate) {
+	t.Helper()
+	frags := BuildFrags(profile, q)
+	keys, _ := shape.Enumerate(q, 0)
+	for _, k := range keys {
+		want, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, argIdx := runtime.ComposeStyle(style, frags, runtime.ShapeKey{Guards: k.Guards, Choices: k.Choices, Orders: k.Orders})
+		if got != want.SQL {
+			t.Fatalf("%s shape %s:\nruntime:\n%q\nrenderer:\n%q", q.Name, k, got, want.SQL)
+		}
+		// Bind order: argIdx maps into ParamOrder; must equal the
+		// renderer's ParamsSeq name-for-name.
+		if len(argIdx) != len(want.ParamsSeq) {
+			t.Fatalf("%s shape %s: argIdx len %d, ParamsSeq len %d", q.Name, k, len(argIdx), len(want.ParamsSeq))
+		}
+		for i, idx := range argIdx {
+			if q.ParamOrder[idx] != want.ParamsSeq[i] {
+				t.Fatalf("%s shape %s: arg %d is %q, renderer expects %q",
+					q.Name, k, i, q.ParamOrder[idx], want.ParamsSeq[i])
 			}
 		}
 	}

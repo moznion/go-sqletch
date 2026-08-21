@@ -207,6 +207,15 @@ func checkParamDiscipline(q *template.QueryTemplate) []diagnostics.Diagnostic {
 
 		// Predicate params are constructor arguments; mixing them with
 		// non-tree bind sites would need two sources for one name.
+		// This rejection is also load-bearing for compose conformance:
+		// a name bound both in the skeleton and inside a @predicate
+		// body would get ONE dollar number from the renderer (params
+		// are numbered per name) but a separate per-leaf argument slot
+		// from the composer's bind plan (codegen.BuildFrags' FilterTree
+		// case indexes predicate params into the leaf's LOCAL argument
+		// list) — renderer and composer would diverge. Nothing else
+		// prevents that divergence; do not relax this rule without
+		// reworking both sides.
 		inFT, outFT := false, false
 		for _, occ := range p.Occurrences {
 			if occ.InFilterTree {
