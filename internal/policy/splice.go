@@ -490,8 +490,11 @@ type insertion struct {
 }
 
 // splice returns a copy of q with every insertion applied. Each woven
-// Skeleton carries a zero-width span at its insertion point, so
-// diagnostics that land in woven text attribute to the target query.
+// Skeleton carries a zero-width span at its insertion point and is
+// marked Synth, so the renderer maps its emission as synthesized text
+// anchored at the insertion offset — diagnostics that land in woven
+// text attribute to the target query at that point instead of the
+// unrelated template bytes after it.
 // An insertion whose offset lies in no skeleton item is dropped — the
 // caller pre-validates positions (a designated relation inside a
 // construct body is rejected before splicing).
@@ -551,8 +554,9 @@ func splice(q *template.QueryTemplate, ins []insertion) *template.QueryTemplate 
 				})
 			}
 			clone.Items = append(clone.Items, &template.Skeleton{
-				Text: ins[k].text,
-				Span: diagnostics.Span{File: s.Span.File, Start: off, End: off},
+				Text:  ins[k].text,
+				Span:  diagnostics.Span{File: s.Span.File, Start: off, End: off},
+				Synth: true,
 			})
 			prev = off
 			emitted = true

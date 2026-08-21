@@ -112,6 +112,11 @@ type Item interface {
 type Skeleton struct {
 	Text string // verbatim bytes, params still :name
 	Span diagnostics.Span
+	// Synth marks text that exists in no template file (a policy-woven
+	// conjunct): Span is zero-width at the insertion offset, and the
+	// renderer maps the emission as synthesized text anchored there
+	// instead of attributing it to the template bytes that follow.
+	Synth bool
 }
 
 func (s *Skeleton) Raw() diagnostics.Span { return s.Span }
