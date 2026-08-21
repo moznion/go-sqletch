@@ -18,7 +18,7 @@ type CountAuditLogsRow struct {
 
 var countAuditLogsFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: "\n-- The tenant_scope policy (sqletch.yaml) weaves `tenant_id` scoping\n-- into every query touching audit_logs. ListAuditLogs above already\n-- scopes by hand, so it is left as written; this one never mentions\n-- tenants and is scoped by the compiler.\nSELECT count(*) AS total FROM audit_logs"},
-	{Kind: runtime.Skel, Text: " WHERE audit_logs.tenant_id = :tenant_id", ParamSpans: []runtime.Span{{Start: 30, End: 40}}, ParamIdx: []int16{0}},
+	{Kind: runtime.Skel, Text: " WHERE (audit_logs.tenant_id = :tenant_id)", ParamSpans: []runtime.Span{{Start: 31, End: 41}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Skel, Text: ";\n\n"},
 }
 

@@ -301,7 +301,7 @@ func renderCore(profile dialect.LexerProfile, q *template.QueryTemplate,
 	for _, it := range q.Items {
 		switch v := it.(type) {
 		case *template.Skeleton:
-			if err := r.emitVerbatim(v.Text, v.Span.Start); err != nil {
+			if err := r.emitText(v.Text, v.Span.Start, v.Synth); err != nil {
 				return Rendering{}, err
 			}
 		case *template.IfPresent:
@@ -482,14 +482,27 @@ func (r *renderer) emitSynth(text string, anchorTOff int) {
 // emitVerbatim copies text (whose first byte lives at template offset
 // tOff) into the rendering, rewriting :name params to $n placeholders.
 func (r *renderer) emitVerbatim(text string, tOff int) error {
+	return r.emitText(text, tOff, false)
+}
+
+// emitText is emitVerbatim with a synth switch. synth marks text that
+// exists in no template file (a policy-woven Skeleton, whose
+// zero-width span sits at the insertion offset): every emitted
+// segment — text runs and placeholders alike — is then a synthesized
+// segment anchored at tOff, so ToTemplate never attributes woven
+// bytes to the unrelated template text after the insertion point.
+func (r *renderer) emitText(text string, tOff int, synth bool) error {
 	src := []byte(text)
 	pos := 0
 	runStart := 0
 	flushRun := func(upTo int) {
 		if upTo > runStart {
-			r.segs = append(r.segs, Seg{
-				ROff: r.sb.Len(), RLen: upTo - runStart, TOff: tOff + runStart,
-			})
+			seg := Seg{ROff: r.sb.Len(), RLen: upTo - runStart, TOff: tOff + runStart}
+			if synth {
+				seg.TOff = tOff
+				seg.Synth = true
+			}
+			r.segs = append(r.segs, seg)
 			r.sb.Write(src[runStart:upTo])
 		}
 	}
@@ -504,8 +517,12 @@ func (r *renderer) emitVerbatim(text string, tOff int) error {
 		if tok.Kind == dialect.KindParamRef {
 			flushRun(tok.Start)
 			ph := r.placeholder(tok.Text[1:])
+			anchor := tOff + tok.Start
+			if synth {
+				anchor = tOff
+			}
 			r.segs = append(r.segs, Seg{
-				ROff: r.sb.Len(), RLen: len(ph), TOff: tOff + tok.Start, Synth: true,
+				ROff: r.sb.Len(), RLen: len(ph), TOff: anchor, Synth: true,
 			})
 			r.sb.WriteString(ph)
 			runStart = tok.End

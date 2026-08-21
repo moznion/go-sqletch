@@ -192,9 +192,16 @@ Two sub-cases:
   recorded point.
 - **The query has no WHERE clause.** The weaver must synthesize
   `WHERE <predicate>` at the clause position (before GROUP BY /
-  ORDER BY / LIMIT / RETURNING). This is the common case for
-  `DELETE FROM orders` — i.e. the case with the most to gain — so it
-  cannot be deferred.
+  WINDOW / ORDER BY / LIMIT / RETURNING — and before a tail-slot
+  construct that *replaces* one of those clauses: `@order-by`, and a
+  `@choose` whose cases classify as GROUP BY/ORDER BY clauses, bound
+  the WHERE slot exactly like the literal keyword would). This is the
+  common case for `DELETE FROM orders` — i.e. the case with the most
+  to gain — so it cannot be deferred.
+
+In both sub-cases (and in the `ON`-clause case of the D2 refinement)
+every spliced predicate occurrence is wrapped in its own parentheses —
+`AND (<predicate>)` / `WHERE (<predicate>)` — see §11.6.
 
 **Interaction with R6.** A woven conjunct is unconditional, so it
 satisfies the R6 anchor requirement (`SQLETCH113`). A query whose
@@ -281,6 +288,18 @@ occurrence whose computed insertion point does not land in skeleton
 text. Enforcement (§6.1) is extended in kind: for a nullable-side
 occurrence the matching conjunct must be unconditional skeleton text
 of *that join's* `ON` clause.
+
+**Placeholder-free carve-out.** The `ON`-clause rule exists because a
+WHERE conjunct that references the null-extended relation's columns
+turns the outer join inner (its NULL-extended rows fail the
+predicate). A predicate with no `{}` placeholder references no joined
+columns at all, so that hazard does not exist: the weaver deliberately
+emits it as a single WHERE conjunct scoping every occurrence — the
+null-extended rows evaluate it exactly like every other row.
+Enforcement mirrors the emission rule: for a placeholder-free
+predicate, presence is checked in the WHERE clause for ALL
+occurrences, nullable-side ones included (checking the join's `ON`
+there would false-reject the weaver's own output).
 
 ### D3 — How the woven parameter reaches the call site
 
@@ -727,3 +746,40 @@ shared helper in `internal/cli`, mirroring the `resolvedChecks`
 discipline — extend it, don't fork it. Everything downstream of the
 helper reads the woven template, so codegen picks up the woven
 parameter with no changes.
+
+### 11.6 Every spliced occurrence is parenthesized
+
+The predicate text is trusted config (§threat model) but it is not
+precedence-neutral, and the splice site is textual. Two failure modes
+of splicing it bare:
+
+- A predicate with a top-level `OR` (`{}.tenant_id = :tid OR :tid IS
+  NULL`) spliced as `WHERE p OR q AND <rest>` captures the query's own
+  conjuncts under the OR's right arm — leak-shaped SQL, caught only by
+  the enforcement pass's depth-0-OR poison (with a misleading
+  "missing conjunct" message).
+- A predicate carrying a depth-0 `AND` of its own (`{}.a = :x AND
+  {}.b`, or `BETWEEN :lo AND :hi`) AND-splits into several segments in
+  the woven clause, while the enforcement matcher's wanted token
+  sequence keeps its `and` — a guaranteed `SQLETCH124` on the weaver's
+  own output.
+
+Both are solved uniformly by wrapping each spliced predicate
+occurrence in its own parentheses: `AND (<predicate>)` in an existing
+WHERE or `ON`, `WHERE (<predicate>)` when synthesized. `(p OR q)` and
+`(a AND b)` are each exactly ONE depth-0 conjunct segment with fixed
+precedence. The idempotence pre-check and the enforcement matcher are
+symmetric: a segment matches the predicate's normalized token sequence
+bare *or* wrapped in one pair of parentheses. Consequences:
+
+- A hand-written parenthesized copy of the predicate, and a bare
+  hand-written copy of a single-conjunct predicate, still match — no
+  doubling.
+- A bare hand-written copy of a predicate that itself carries a
+  depth-0 `AND`/`OR` can never equal one AND-split segment; the weaver
+  then weaves anyway and the query carries the conjunct twice —
+  documented idempotence semantics (doubling is harmless, skipping
+  leaks), pinned by test.
+- Woven output bytes change for every woven query; oracle entries
+  re-key by rendered SQL exactly as §7 describes, and the policy
+  config still never enters the cache fingerprint.

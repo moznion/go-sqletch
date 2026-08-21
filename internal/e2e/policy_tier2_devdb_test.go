@@ -65,7 +65,7 @@ func assertWovenGen(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(woven), "WHERE a.tenant_id = :tenant_id") {
+	if !strings.Contains(string(woven), "WHERE (a.tenant_id = :tenant_id)") {
 		t.Errorf("generated fragments lack the woven conjunct:\n%s", woven)
 	}
 	backfill, err := os.ReadFile(filepath.Join(dir, "gen", "all_audit_backfill.sql.gen.go"))

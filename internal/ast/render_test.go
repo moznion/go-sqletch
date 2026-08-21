@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 	"github.com/moznion/go-sqletch/internal/template"
 )
@@ -189,6 +190,60 @@ func TestSourceMap_RoundTrip(t *testing.T) {
 	}
 	if tOff < 0 || tOff > len(useCase1) {
 		t.Errorf("anchor offset out of range: %d", tOff)
+	}
+}
+
+// A Synth skeleton item (a policy-woven conjunct: zero-width span at
+// its insertion offset) emits synthesized segments anchored at that
+// offset — text runs and rewritten placeholders alike — while
+// ordinary skeleton text around it keeps mapping verbatim.
+func TestSourceMap_SynthSkeleton(t *testing.T) {
+	src := "-- name: Q :many\nSELECT id FROM t WHERE ok\n"
+	q := scanOne(t, src)
+	if len(q.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(q.Items))
+	}
+	s := q.Items[0].(*template.Skeleton)
+	insertAt := strings.Index(src, " ok") // pretend-insertion point
+	cut := insertAt - s.Span.Start
+	q.Items = []template.Item{
+		&template.Skeleton{Text: s.Text[:cut], Span: diagnostics.Span{File: s.Span.File, Start: s.Span.Start, End: insertAt}},
+		&template.Skeleton{
+			Text:  " (tenant_id = :tid) AND",
+			Span:  diagnostics.Span{File: s.Span.File, Start: insertAt, End: insertAt},
+			Synth: true,
+		},
+		&template.Skeleton{Text: s.Text[cut:], Span: diagnostics.Span{File: s.Span.File, Start: insertAt, End: s.Span.End}},
+	}
+
+	r, err := Render(postgres.Profile{}, q, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	woven := " (tenant_id = $1) AND"
+	idx := strings.Index(r.SQL, woven)
+	if idx < 0 {
+		t.Fatalf("woven text not rendered:\n%s", r.SQL)
+	}
+	for off := idx; off < idx+len(woven); off++ {
+		tOff, synth := r.Map.ToTemplate(off)
+		if !synth {
+			t.Fatalf("offset %d inside synth skeleton maps non-synth to %d", off, tOff)
+		}
+		if tOff != insertAt {
+			t.Fatalf("offset %d anchors at %d, want insertion offset %d", off, tOff, insertAt)
+		}
+	}
+	// The surrounding author text still maps verbatim on both sides.
+	for _, marker := range []string{"FROM t", " ok"} {
+		rIdx := strings.LastIndex(r.SQL, marker)
+		tOff, synth := r.Map.ToTemplate(rIdx)
+		if synth {
+			t.Fatalf("author text %q mapped as synthesized", marker)
+		}
+		if got := src[tOff : tOff+len(marker)]; got != marker {
+			t.Errorf("author text %q maps to %q", marker, got)
+		}
 	}
 }
 

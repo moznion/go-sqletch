@@ -20,7 +20,7 @@ type UserAuditActionsRow struct {
 
 var userAuditActionsFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: "\n-- audit_logs sits on the null-extended side here, so the policy\n-- weaves into the JOIN's ON clause: every user row survives, and only\n-- the tenant's audit rows join (a WHERE conjunct would have turned\n-- the LEFT JOIN into an inner join).\nSELECT u.id, a.action\nFROM users AS u\nLEFT JOIN audit_logs AS a ON a.actor_id = u.id"},
-	{Kind: runtime.Skel, Text: " AND a.tenant_id = :tenant_id", ParamSpans: []runtime.Span{{Start: 19, End: 29}}, ParamIdx: []int16{0}},
+	{Kind: runtime.Skel, Text: " AND (a.tenant_id = :tenant_id)", ParamSpans: []runtime.Span{{Start: 20, End: 30}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Skel, Text: "\nORDER BY u.id, a.id;\n"},
 }
 

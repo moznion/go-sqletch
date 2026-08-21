@@ -122,7 +122,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 
 		switch q.Name {
 		case "AllAudit":
-			if !strings.Contains(rs[0].SQL, "WHERE a.tenant_id = $1") {
+			if !strings.Contains(rs[0].SQL, "WHERE (a.tenant_id = $1)") {
 				t.Fatalf("AllAudit not woven:\n%s", rs[0].SQL)
 			}
 		case "AllAuditBackfill":
@@ -130,7 +130,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 				t.Fatalf("opt-out was woven anyway:\n%s", rs[0].SQL)
 			}
 		case "UsersWithAudit":
-			if !strings.Contains(rs[0].SQL, "ON a.actor_id = u.id AND a.tenant_id = $1") {
+			if !strings.Contains(rs[0].SQL, "ON a.actor_id = u.id AND (a.tenant_id = $1)") {
 				t.Fatalf("outer-join occurrence not woven into the ON clause:\n%s", rs[0].SQL)
 			}
 		case "ListAuditLogs":

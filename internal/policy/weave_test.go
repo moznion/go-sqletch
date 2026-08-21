@@ -65,32 +65,32 @@ func TestWeave_Golden(t *testing.T) {
 		{
 			name: "existing WHERE, alias bound",
 			src:  "-- name: Q :many\nSELECT o.id FROM orders o WHERE o.status = :status\n",
-			want: "SELECT o.id FROM orders o WHERE o.tenant_id = $1 AND o.status = $2",
+			want: "SELECT o.id FROM orders o WHERE (o.tenant_id = $1) AND o.status = $2",
 		},
 		{
 			name: "no WHERE, before ORDER BY",
 			src:  "-- name: Q :many\nSELECT id FROM orders ORDER BY id\n",
-			want: "SELECT id FROM orders WHERE orders.tenant_id = $1 ORDER BY id",
+			want: "SELECT id FROM orders WHERE (orders.tenant_id = $1) ORDER BY id",
 		},
 		{
 			name: "bare DELETE",
 			src:  "-- name: Q :exec\nDELETE FROM orders\n",
-			want: "DELETE FROM orders WHERE orders.tenant_id = $1",
+			want: "DELETE FROM orders WHERE (orders.tenant_id = $1)",
 		},
 		{
 			name: "UPDATE with WHERE",
 			src:  "-- name: Q :exec\nUPDATE orders SET status = :s WHERE id = :id\n",
-			want: "UPDATE orders SET status = $1 WHERE orders.tenant_id = $2 AND id = $3",
+			want: "UPDATE orders SET status = $1 WHERE (orders.tenant_id = $2) AND id = $3",
 		},
 		{
 			name: "self-join: one conjunct per occurrence",
 			src:  "-- name: Q :many\nSELECT a.id FROM orders a JOIN orders b ON a.id = b.parent_id WHERE a.ok\n",
-			want: "SELECT a.id FROM orders a JOIN orders b ON a.id = b.parent_id WHERE a.tenant_id = $1 AND b.tenant_id = $1 AND a.ok",
+			want: "SELECT a.id FROM orders a JOIN orders b ON a.id = b.parent_id WHERE (a.tenant_id = $1) AND (b.tenant_id = $1) AND a.ok",
 		},
 		{
 			name: "two designated tables",
 			src:  "-- name: Q :many\nSELECT o.id FROM orders o JOIN order_items i ON i.order_id = o.id WHERE o.ok\n",
-			want: "SELECT o.id FROM orders o JOIN order_items i ON i.order_id = o.id WHERE o.tenant_id = $1 AND i.tenant_id = $1 AND o.ok",
+			want: "SELECT o.id FROM orders o JOIN order_items i ON i.order_id = o.id WHERE (o.tenant_id = $1) AND (i.tenant_id = $1) AND o.ok",
 		},
 		{
 			name: "undesignated table untouched",
@@ -118,7 +118,7 @@ func TestWeave_MultiplePoliciesInDeclarationOrder(t *testing.T) {
 	soft := Policy{Name: "soft_delete", Tables: []string{"orders"}, Predicate: "{}.deleted_at IS NULL"}
 	res := weaveOne(t, "-- name: Q :many\nSELECT id FROM orders WHERE ok\n", tenantPolicy(), soft)
 	noDiags(t, res)
-	want := "SELECT id FROM orders WHERE orders.tenant_id = $1 AND orders.deleted_at IS NULL AND ok"
+	want := "SELECT id FROM orders WHERE (orders.tenant_id = $1) AND (orders.deleted_at IS NULL) AND ok"
 	if got := renderSQL(t, res.Query); got != want {
 		t.Errorf("got: %s\nwant: %s", got, want)
 	}
@@ -162,7 +162,7 @@ func TestWeave_GuardedCopyDoesNotCount(t *testing.T) {
 	res := weaveOne(t, src, soft)
 	noDiags(t, res)
 	got := renderSQL(t, res.Query)
-	if !strings.Contains(got, "WHERE o.deleted_at IS NULL AND o.ok") {
+	if !strings.Contains(got, "WHERE (o.deleted_at IS NULL) AND o.ok") {
 		t.Errorf("guarded copy suppressed weaving:\n%s", got)
 	}
 }
@@ -327,9 +327,57 @@ func TestWeave_SelectJoinOnConflictColumnSingleWhere(t *testing.T) {
 	if n := strings.Count(got, "WHERE"); n != 1 {
 		t.Fatalf("expected exactly one WHERE, got %d:\n%s", n, got)
 	}
-	want := "SELECT o.id FROM orders o JOIN b ON conflict = b.id WHERE o.tenant_id = $1 AND o.status = $2"
+	want := "SELECT o.id FROM orders o JOIN b ON conflict = b.id WHERE (o.tenant_id = $1) AND o.status = $2"
 	if got != want {
 		t.Errorf("woven rendering:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// Tail constructs must bound the synthesized-WHERE insertion point: a
+// @choose whose cases are GROUP BY/ORDER BY clauses, and a WINDOW
+// clause, both start the statement tail, so the woven conjunct lands
+// BEFORE them and the woven SQL parses. (Regression: the conjunct was
+// spliced after them — `GROUP BY day WHERE …` — invalid SQL caught
+// loud as SQLETCH100, a false rejection.)
+func TestWeave_TailConstructPlacement(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string // maximal rendering of the woven template, trimmed
+	}{
+		{
+			name: "conjunct before a GROUP BY @choose",
+			src:  "-- name: Q :many\nSELECT count(*) FROM orders\n@choose(g)\n@case(day)\nGROUP BY day\n@case(week)\nGROUP BY week\n@end\n",
+			want: "SELECT count(*) FROM orders\nWHERE (orders.tenant_id = $1) \nGROUP BY day",
+		},
+		{
+			name: "conjunct before an ORDER BY @choose",
+			src:  "-- name: Q :many\nSELECT id FROM orders\n@choose(sort)\n@case(new)\nORDER BY id DESC\n@case(old)\nORDER BY id ASC\n@end\n",
+			want: "SELECT id FROM orders\nWHERE (orders.tenant_id = $1) \nORDER BY id DESC",
+		},
+		{
+			name: "conjunct before a WINDOW clause",
+			src:  "-- name: Q :many\nSELECT id, sum(amount) OVER w FROM orders WINDOW w AS (PARTITION BY id)\n",
+			want: "SELECT id, sum(amount) OVER w FROM orders WHERE (orders.tenant_id = $1) WINDOW w AS (PARTITION BY id)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := weaveOne(t, tc.src, tenantPolicy())
+			noDiags(t, res)
+			got := renderSQL(t, res.Query)
+			if got != tc.want {
+				t.Errorf("woven rendering:\n got: %q\nwant: %q", got, tc.want)
+			}
+			// The woven maximal rendering must parse — the regression
+			// produced invalid SQL.
+			if _, err := (postgres.Frontend{}).Parse(got); err != nil {
+				t.Errorf("woven rendering does not parse: %v\n%s", err, got)
+			}
+			if diags := enforceOn(t, res.Query, tenantPolicy()); len(diags) != 0 {
+				t.Errorf("enforcement rejects the woven output: %+v", diags)
+			}
+		})
 	}
 }
 

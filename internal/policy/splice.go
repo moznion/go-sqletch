@@ -452,14 +452,25 @@ func normalizeTok(tok dialect.Token) string {
 func tokensEqual(a, b []string) bool { return slices.Equal(a, b) }
 
 // segsContain reports whether any segment equals the conjunct's
-// normalized token sequence.
+// normalized token sequence — bare, or wrapped in one pair of
+// parentheses. The weaver splices every occurrence parenthesized
+// (design 14 §11.6), so the parenthesized form is what its own output
+// carries; the bare form keeps a hand-written unparenthesized copy of
+// a single-conjunct predicate matching. A bare hand-written copy of a
+// predicate that itself carries a depth-0 AND/OR can never equal one
+// AND-split segment — the weaver then weaves anyway (doubling is
+// harmless, skipping leaks).
 func segsContain(profile dialect.LexerProfile, segs [][]string, conjunct string) bool {
 	want := normalizedTokens(profile, conjunct)
 	if want == nil {
 		return false
 	}
+	wrapped := make([]string, 0, len(want)+2)
+	wrapped = append(wrapped, "(")
+	wrapped = append(wrapped, want...)
+	wrapped = append(wrapped, ")")
 	for _, seg := range segs {
-		if tokensEqual(seg, want) {
+		if tokensEqual(seg, want) || tokensEqual(seg, wrapped) {
 			return true
 		}
 	}
@@ -479,8 +490,11 @@ type insertion struct {
 }
 
 // splice returns a copy of q with every insertion applied. Each woven
-// Skeleton carries a zero-width span at its insertion point, so
-// diagnostics that land in woven text attribute to the target query.
+// Skeleton carries a zero-width span at its insertion point and is
+// marked Synth, so the renderer maps its emission as synthesized text
+// anchored at the insertion offset — diagnostics that land in woven
+// text attribute to the target query at that point instead of the
+// unrelated template bytes after it.
 // An insertion whose offset lies in no skeleton item is dropped — the
 // caller pre-validates positions (a designated relation inside a
 // construct body is rejected before splicing).
@@ -540,8 +554,9 @@ func splice(q *template.QueryTemplate, ins []insertion) *template.QueryTemplate 
 				})
 			}
 			clone.Items = append(clone.Items, &template.Skeleton{
-				Text: ins[k].text,
-				Span: diagnostics.Span{File: s.Span.File, Start: off, End: off},
+				Text:  ins[k].text,
+				Span:  diagnostics.Span{File: s.Span.File, Start: off, End: off},
+				Synth: true,
 			})
 			prev = off
 			emitted = true
