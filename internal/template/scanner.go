@@ -192,11 +192,26 @@ type queryBuilder struct {
 	// column/alias literally named `cross`/`natural` is not a join keyword
 	// and must not disarm the next real JOIN's pending ON.
 	//
+	// `cross`/`natural` (and STRAIGHT_JOIN, below) are NOT reserved words in
+	// every dialect, so the arming is gated on FROM context (qb.ctx ==
+	// ctxFrom): only in the FROM clause is such a token a join keyword. A
+	// depth-0 projection column named `cross`/`natural`/`straight_join` then
+	// never touches the join machine.
+	//
+	// One residual (LOW, best-effort-for-INSERT): `FROM cross JOIN b …` — a
+	// relation/alias literally named `cross` immediately before a real JOIN —
+	// IS at ctxFrom, so the gate cannot tell it from a genuine `CROSS JOIN`;
+	// the ambiguity is only resolved by the trailing `ON`, past the point the
+	// arm must be decided. It is shielded by (1) frontends that do not parse
+	// such bare relation names and (2) the SQLETCH125 INSERT-read refusal
+	// (internal/policy/insert_read_shield_test.go). Pinned by
+	// TestScan_InsertSelectStrayCrossBeforeJoinResidualPinned.
+	//
 	// STRAIGHT_JOIN (MySQL) lexes as a SINGLE identifier token, so it never
 	// matches the `JOIN` case and so never armed joinPendingOn on its own;
 	// it is an ON-bearing forced inner join, so transition arms
-	// joinPendingOn for it explicitly (a bare `conflict` column in its ON
-	// must not be mistaken for the conflict clause).
+	// joinPendingOn for it explicitly (in FROM context) — a bare `conflict`
+	// column in its ON must not be mistaken for the conflict clause.
 	crossNaturalPending bool
 }
 
@@ -585,7 +600,14 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		// real `ON CONFLICT` would then wrongly consume. NATURAL may be
 		// followed by LEFT/RIGHT/INNER before JOIN, so the flag persists
 		// until the JOIN keyword clears it.
-		qb.crossNaturalPending = true
+		//
+		// Gate on FROM context: `cross`/`natural` are NOT reserved words in
+		// every dialect, so at depth 0 outside FROM (e.g. a projection column
+		// literally named `cross`) the token is not a join keyword and must
+		// not touch the join machine.
+		if qb.ctx == ctxFrom {
+			qb.crossNaturalPending = true
+		}
 	case "JOIN":
 		// A depth-0 JOIN arms the next depth-0 `ON` as its join predicate,
 		// UNLESS it is a CROSS/NATURAL join (no ON clause), which leaves the
@@ -598,7 +620,15 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 		// `ON` as its predicate. It lexes as one identifier, never matching
 		// the `JOIN` case, so it must be handled explicitly; it is never a
 		// CROSS/NATURAL join (the pending arm was already cleared above).
-		qb.joinPendingOn = true
+		//
+		// Gate on FROM context: STRAIGHT_JOIN is NOT a PostgreSQL keyword, so
+		// `straight_join` is a legal bare column. In a projection it would
+		// otherwise arm joinPendingOn (which FROM does not clear), and the arm
+		// would survive to a genuine `ON CONFLICT`'s `ON` — mis-read as a join
+		// predicate (onWasJoin=true), suppressing the statement's real WHERE.
+		if qb.ctx == ctxFrom {
+			qb.joinPendingOn = true
+		}
 	case "USING":
 		// A USING/NATURAL-style join consumes the pending join without an
 		// `ON`, so a later `ON` is free to be the conflict clause.

@@ -247,6 +247,85 @@ func TestScan_InsertSelectStraightJoinOnConflictColumnRecordsRealWhere(t *testin
 	}
 }
 
+// Regression guard (A2, #95 follow-up): `straight_join` is NOT a
+// PostgreSQL keyword, so it is a legal bare COLUMN in a projection. When
+// it appears at depth 0 in the SELECT list (not FROM) of an INSERT ...
+// SELECT before a genuine ON CONFLICT, it must not arm the join machine.
+// Before the FROM-context gate, the STRAIGHT_JOIN case armed joinPendingOn
+// for ANY depth-0 `straight_join` identifier; joinPendingOn is NOT cleared
+// by FROM, so it survived to the real conflict clause's `ON`
+// (onWasJoin=true), afterOnConflict never flipped, and the DO-UPDATE WHERE
+// was wrongly recorded as the statement WhereKwEnd (=108). It must stay -1.
+func TestScan_InsertSelectStraightJoinProjectionColumnNotStatementWhere(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT straight_join FROM src ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1: a projection-position `straight_join` column must not arm the join machine, got %d", q.WhereKwEnd)
+	}
+}
+
+// Companion controls: `cross`/`natural` used as projection columns before a
+// real ON CONFLICT must likewise stay -1. (These already behaved correctly
+// via the FROM-clear of crossNaturalPending, but the FROM-context gate makes
+// the projection case structural rather than incidental — pin both.)
+func TestScan_InsertSelectCrossNaturalProjectionColumnNotStatementWhere(t *testing.T) {
+	for _, col := range []string{"cross", "natural"} {
+		src := "-- name: Q :exec\n" +
+			"INSERT INTO t (id) SELECT " + col + " FROM src ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+		q := scanClean(t, src).Queries[0]
+		if q.WhereKwEnd != -1 {
+			t.Fatalf("WhereKwEnd must stay -1 for a projection-position %q column before ON CONFLICT, got %d", col, q.WhereKwEnd)
+		}
+	}
+}
+
+// Positive control (A2 fix must not regress genuine STRAIGHT_JOIN): a real
+// STRAIGHT_JOIN in FROM position whose ON is consumed by a genuine join
+// predicate, followed by the real ON CONFLICT, must STILL suppress the
+// DO-UPDATE WHERE (the second `ON` finds no pending join and the CONFLICT
+// clause is recognized). The FROM-context gate keeps arming a real
+// STRAIGHT_JOIN because it sits at ctxFrom.
+func TestScan_InsertSelectStraightJoinThenRealOnConflictSuppresses(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT a.id FROM a STRAIGHT_JOIN b ON a.k = b.k ON CONFLICT (id) DO UPDATE SET n = 1 WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("WhereKwEnd must stay -1 for a WHERE after a real ON CONFLICT (STRAIGHT_JOIN in feed), got %d", q.WhereKwEnd)
+	}
+}
+
+// A1 residual — PINNED, NOT FIXED. `FROM cross JOIN b …` is genuinely
+// token-ambiguous at the JOIN: a table/alias literally named `cross`
+// immediately before a real `JOIN` is indistinguishable from a `CROSS JOIN`
+// until the trailing `ON` is seen, and the decision to arm/keep
+// crossNaturalPending must be made at the JOIN. The FROM-context gate does
+// NOT resolve this (the stray `cross` IS at ctxFrom), so the pending arm is
+// (wrongly) kept, the real JOIN computes joinPendingOn=false, its `ON`
+// records onWasJoin=false, a bare `conflict` column re-satisfies the CONFLICT
+// gate, and the statement WHERE is suppressed (WhereKwEnd=-1).
+//
+// This is a LOW, best-effort-for-INSERT residual that is shielded twice:
+// (1) the PostgreSQL frontend does not parse `cross`/`natural` as bare
+// relation names in this position, and (2) the policy weaver refuses every
+// INSERT ... SELECT that reads a designated table (SQLETCH125,
+// internal/policy/insert_read_shield_test.go), so this WhereKwEnd never
+// drives a spliced scoping conjunct. A structural fix (recognizing ON
+// CONFLICT only past a completed value source) is not clearly low-risk
+// against the #89/#90/#93/#95 heuristic and was deliberately NOT attempted.
+// This test pins the current behavior so it cannot change silently.
+func TestScan_InsertSelectStrayCrossBeforeJoinResidualPinned(t *testing.T) {
+	src := "-- name: Q :exec\n" +
+		"INSERT INTO t (id) SELECT x FROM cross JOIN b ON conflict = b.id WHERE t.tenant = 1;\n"
+	q := scanClean(t, src).Queries[0]
+	// Documented shielded residual: the ambiguous `FROM cross JOIN` currently
+	// suppresses the real WHERE. If a future structural fix corrects this to
+	// point past the real WHERE keyword, update this pin deliberately.
+	if q.WhereKwEnd != -1 {
+		t.Fatalf("A1 residual changed: `FROM cross JOIN … ON conflict … WHERE` now yields WhereKwEnd=%d (was the pinned -1); revisit the shield and the doc comment deliberately", q.WhereKwEnd)
+	}
+}
+
 // The partial-index predicate WHERE inside a conflict target
 // (`ON CONFLICT (a) WHERE <pred> DO UPDATE ...`) is part of the conflict
 // clause, not the statement's row filter, and must not be recorded.
