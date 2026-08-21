@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -21,12 +22,18 @@ import (
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
-// maxConfigBytes bounds the sqletch.yaml a run will read. A config file
-// is authored by hand and never legitimately large; the cap is
-// deliberately generous (real configs are a few KB) yet forecloses an
-// attacker-planted giant file OOMing the process on `sqletch lsp`
-// workspace-open or in CI.
-const maxConfigBytes = 1 << 20 // 1 MiB
+// maxConfigBytes bounds the sqletch.yaml a run will read. A config file is
+// authored by hand and never legitimately large: the three shipped example
+// configs are each well under 1 KiB, and even a synthetic 1000-query,
+// 200-override, 20-policy config is only ~20 KiB — so a 256 KiB cap clears
+// every plausible legitimate config by more than a 10x margin (a config would
+// need thousands of top-level entries to approach it). The cap is deliberately
+// TIGHT as defense-in-depth: config/templates are trusted first-party
+// artifacts, so this is not a vulnerability fix, but a tight byte bound is a
+// cheap one-time backstop against unknown goccy lexer/parser pathologies on a
+// clone-and-run, `sqletch lsp` workspace-open, or CI-on-untrusted-fork edge,
+// and it forecloses an attacker-planted giant file OOMing the process.
+const maxConfigBytes = 256 << 10 // 256 KiB
 
 // maxExpandedNodes bounds the node count a YAML document may expand to
 // once anchors/aliases are resolved. YAML alias fan-out is exponential
@@ -232,6 +239,25 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	if err != nil {
 		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
 			diagnostics.CodeConfigParse, span, "cannot read config: %v", err)}
+	}
+
+	// Reject any literal TAB byte (0x09) BEFORE handing the bytes to goccy —
+	// before lexer.Tokenize, boundYAMLExpansion, and the decode below. This is
+	// an O(input) raw-byte pre-scan and MUST come first: goccy/go-yaml's
+	// lexer.Tokenize is O(n^2) in the number of literal tabs inside a
+	// double-quoted scalar (`key: "\t\t…x"`), and because those tabs produce
+	// FEW tokens, neither the total-token cap nor the depth cap below can see
+	// the blow-up — Tokenize itself hangs before either guard runs (measured:
+	// ~300 KB of tabs hangs Load for >20s, independent of the size cap). A tab
+	// has no legitimate use in a sqletch.yaml — YAML forbids a tab as
+	// indentation, and no config value (a predicate, path, or glob) ever needs
+	// a literal tab — so refusing tabs closes that path cheaply with no
+	// false-reject risk.
+	if bytes.IndexByte(raw, '\t') >= 0 {
+		return Config{}, []diagnostics.Diagnostic{diagnostics.Errorf(
+			diagnostics.CodeConfigParse, span,
+			"invalid config: sqletch.yaml contains a literal tab character (0x09), which is not allowed: YAML forbids a tab as indentation, and no sqletch config value (a predicate, path, or glob) ever needs a literal tab; the document is refused before it is parsed because goccy/go-yaml's tokenizer is superlinear in the number of literal tabs inside a quoted scalar and a tab-laden file can hang the process (a denial of service)").
+			WithHint("replace every literal tab character with spaces")}
 	}
 
 	// Bound the document's structural complexity BEFORE any goccy parse. Both

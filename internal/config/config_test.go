@@ -564,15 +564,16 @@ func flowNest(depth int) string {
 
 // TestLoad_YAMLDeepNestingRejected pins the deep-nesting DoS fix: a deeply
 // nested flow document is refused with SQLETCH300 by the raw-byte depth
-// pre-scan, in O(input), never parsed. The depth used here (200000,
-// ~400 KB, still under the 1 MiB cap) is one that on the UNFIXED code is
-// grossly superlinear — measured ~3s at depth 120k and OOM near the cap —
-// so the deadline both proves the fix works and guarantees a regression
-// fails by TIMEOUT rather than wedging (or OOMing) CI. Do not remove the
-// deadline: without the pre-scan this input takes the parser to gigabytes.
+// pre-scan, in O(input), never parsed. The depth used here (100000, ~200 KB,
+// under the 256 KiB cap so the depth guard — not the size cap — is what fires)
+// is one that on the UNFIXED code is grossly superlinear — measured ~3s at
+// depth 120k and OOM near the old cap — so the deadline both proves the fix
+// works and guarantees a regression fails by TIMEOUT rather than wedging (or
+// OOMing) CI. Do not remove the deadline: without the pre-scan this input
+// takes the parser to gigabytes.
 func TestLoad_YAMLDeepNestingRejected(t *testing.T) {
 	dir := t.TempDir()
-	path := write(t, dir, "sqletch.yaml", flowNest(200000))
+	path := write(t, dir, "sqletch.yaml", flowNest(100000))
 
 	done := make(chan []diagnostics.Diagnostic, 1)
 	go func() {
@@ -601,7 +602,7 @@ func TestLoad_YAMLDeepNestingRejected(t *testing.T) {
 // flow-MAPPING nesting ({{{ … }}}), not just sequences.
 func TestLoad_YAMLDeepNestingCurlyRejected(t *testing.T) {
 	dir := t.TempDir()
-	yaml := validYAML + "database: " + strings.Repeat("{a: ", 200000) + "1" + strings.Repeat("}", 200000) + "\n"
+	yaml := validYAML + "database: " + strings.Repeat("{a: ", 40000) + "1" + strings.Repeat("}", 40000) + "\n"
 	path := write(t, dir, "sqletch.yaml", yaml)
 
 	done := make(chan []diagnostics.Diagnostic, 1)
@@ -668,9 +669,9 @@ func TestLoad_YAMLStrayQuoteBypassRejected(t *testing.T) {
 	dir := t.TempDir()
 	// A stray double-quote in a plain scalar, then a deep flow collection on
 	// the next line. On the fooled guard the brackets are invisible and the
-	// parse blows up; the fix sees depth ~200000 and refuses.
+	// parse blows up; the fix sees depth ~100000 and refuses.
 	yaml := "version: 1\ndialect: postgres\nserver_version: a\"\n" +
-		"queries: " + strings.Repeat("[", 200000) + strings.Repeat("]", 200000) + "\n"
+		"queries: " + strings.Repeat("[", 100000) + strings.Repeat("]", 100000) + "\n"
 	path := write(t, dir, "sqletch.yaml", yaml)
 
 	done := make(chan []diagnostics.Diagnostic, 1)
@@ -881,8 +882,9 @@ func refusedNestingTooDeep(diags []diagnostics.Diagnostic) bool {
 // fail by TIMEOUT rather than OOMing CI.
 func TestLoad_YAMLBlockSeqBombRejected(t *testing.T) {
 	dir := t.TempDir()
-	// ~1 MB (just under the cap): ~500k nesting levels.
-	path := write(t, dir, "sqletch.yaml", blockSeqBomb(490000))
+	// ~200 KB (under the 256 KiB cap so the depth guard, not the size cap,
+	// fires): ~100k nesting levels.
+	path := write(t, dir, "sqletch.yaml", blockSeqBomb(100000))
 	if !refusedNestingTooDeep(loadAsync(t, path, 2*time.Second)) {
 		t.Fatal("near-cap compact block-sequence bomb must be refused with SQLETCH300 (nesting too deep)")
 	}
@@ -892,7 +894,7 @@ func TestLoad_YAMLBlockSeqBombRejected(t *testing.T) {
 // complex-key form (`extra: ? ? ? … x`).
 func TestLoad_YAMLComplexKeyBombRejected(t *testing.T) {
 	dir := t.TempDir()
-	path := write(t, dir, "sqletch.yaml", complexKeyBomb(490000))
+	path := write(t, dir, "sqletch.yaml", complexKeyBomb(100000))
 	if !refusedNestingTooDeep(loadAsync(t, path, 2*time.Second)) {
 		t.Fatal("near-cap compact complex-key bomb must be refused with SQLETCH300 (nesting too deep)")
 	}
@@ -1018,8 +1020,9 @@ func refusedTooComplex(diags []diagnostics.Diagnostic) bool {
 // regression fail by TIMEOUT rather than OOMing CI.
 func TestLoad_YAMLFlatManyKeysBombRejected(t *testing.T) {
 	dir := t.TempDir()
-	// ~90k keys ≈ 990 KB (just under the 1 MiB byte cap), ~270k tokens.
-	src := manyKeysBomb(90000)
+	// ~20k keys ≈ 190 KB (under the 256 KiB byte cap), ~60k tokens — so the
+	// total-token cap, not the size cap, is what refuses it.
+	src := manyKeysBomb(20000)
 	if len(src) > maxConfigBytes {
 		t.Fatalf("test bomb %d bytes exceeds the byte cap — it would be rejected by size, not tokens", len(src))
 	}
@@ -1035,8 +1038,8 @@ func TestLoad_YAMLFlatManyKeysBombRejected(t *testing.T) {
 // TIME (~25s at the cap).
 func TestLoad_YAMLFlatSeqBombRejected(t *testing.T) {
 	dir := t.TempDir()
-	// ~400k entries ≈ 800 KB, ~400k tokens.
-	src := flatSeqBomb(400000)
+	// ~100k entries ≈ 200 KB (under the 256 KiB byte cap), ~100k tokens.
+	src := flatSeqBomb(100000)
 	if len(src) > maxConfigBytes {
 		t.Fatalf("test bomb %d bytes exceeds the byte cap", len(src))
 	}
@@ -1102,21 +1105,7 @@ func TestLoad_ExampleConfigsLoad(t *testing.T) {
 // token count (~5000) is reported so the margin over the cap stays visible.
 func TestLoad_LargeLegitConfigLoads(t *testing.T) {
 	dir := t.TempDir()
-	var b strings.Builder
-	b.WriteString(validYAML)
-	b.WriteString("static_expansion:\n  queries:\n")
-	for i := 0; i < 1000; i++ {
-		fmt.Fprintf(&b, "  - q%d\n", i)
-	}
-	b.WriteString("overrides:\n")
-	for i := 0; i < 200; i++ {
-		fmt.Fprintf(&b, "  - {query: q%d, column: c, nullable: true}\n", i)
-	}
-	b.WriteString("policies:\n")
-	for i := 0; i < 20; i++ {
-		fmt.Fprintf(&b, "  - name: p%d\n    tables: [t%d]\n    predicate: \"{}.x = :y\"\n    param:\n      name: y\n      type: bigint\n", i, i)
-	}
-	src := b.String()
+	src := largeLegitConfig()
 	toks := len(lexer.Tokenize(src))
 	if toks >= maxStructuralTokens {
 		t.Fatalf("synthetic large-legit config has %d tokens, at/over the %d cap — the cap has too little margin over a legitimate config", toks, maxStructuralTokens)
@@ -1147,4 +1136,161 @@ func TestExceedsStructuralTokens(t *testing.T) {
 	if _, ok := exceedsStructuralTokens([]byte(flatSeqBomb(50000))); !ok {
 		t.Fatal("a flat block-sequence bomb must exceed the total-token cap")
 	}
+}
+
+// tabBomb builds a config whose value is a double-quoted scalar containing
+// `tabs` literal TAB bytes (0x09): `extra: "\t\t…x"`. goccy/go-yaml's
+// lexer.Tokenize is O(n^2) in the number of literal tabs inside a
+// double-quoted scalar, and the tabs produce FEW tokens, so neither the
+// total-token cap nor the depth cap can see the blow-up — Tokenize itself
+// hangs before either guard runs (measured: ~300 KB of tabs hangs Load for
+// >20s). The raw-byte tab pre-scan must refuse this before any goccy call.
+// The size is kept comfortably under maxConfigBytes so the reject exercises
+// the tab pre-scan itself, not the byte cap.
+func tabBomb(tabs int) string {
+	return validYAML + "extra: \"" + strings.Repeat("\t", tabs) + "x\"\n"
+}
+
+// TestLoad_TabBombRejectedFast pins the tab-tokenizer DoS fix: a
+// double-quoted scalar full of literal tabs must be refused with SQLETCH300
+// in O(input) by the raw-byte pre-scan, never handed to lexer.Tokenize. On
+// the UNFIXED code lexer.Tokenize is O(n^2) in the tab count and hangs before
+// any guard runs — so the deadline both proves the fix works and makes a
+// regression fail by TIMEOUT rather than wedging CI. The bomb is sized under
+// maxConfigBytes (so the byte cap is not what catches it) yet large enough
+// that the unfixed tokenizer hangs well past the deadline.
+func TestLoad_TabBombRejectedFast(t *testing.T) {
+	dir := t.TempDir()
+	src := tabBomb(200000) // ~200 KB, under the 256 KiB cap; ~O(n^2) tokenizer hang unfixed
+	if len(src) > maxConfigBytes {
+		t.Fatalf("tab bomb %d bytes exceeds the byte cap — it would be caught by size, not the tab scan", len(src))
+	}
+	path := write(t, dir, "sqletch.yaml", src)
+	diags := loadAsync(t, path, 2*time.Second)
+	if !refusedLiteralTab(diags) {
+		t.Fatalf("tab bomb must be refused with SQLETCH300 (literal tab), got %+v", diags)
+	}
+}
+
+func refusedLiteralTab(diags []diagnostics.Diagnostic) bool {
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error &&
+			strings.Contains(d.Message, "literal tab") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLoad_LiteralTabRejected pins that a literal tab ANYWHERE in the config
+// — not only in a quoted scalar — is refused with SQLETCH300. Tabs have no
+// legitimate use in a sqletch.yaml (YAML forbids tab indentation; no value
+// ever needs a literal tab), so this never false-rejects a real config.
+func TestLoad_LiteralTabRejected(t *testing.T) {
+	dir := t.TempDir()
+	// A single tab spliced into an otherwise-valid document.
+	src := "version:\t1\n" + validYAML[len("version: 1\n"):]
+	diags := loadAsync(t, path2(t, dir, src), time.Second)
+	if !refusedLiteralTab(diags) {
+		t.Fatalf("a config with a literal tab must be refused with SQLETCH300, got %+v", diags)
+	}
+}
+
+func path2(t *testing.T, dir, src string) string {
+	t.Helper()
+	return write(t, dir, "sqletch.yaml", src)
+}
+
+// TestLoad_SizeCapBoundary pins the tightened byte cap: a document just over
+// maxConfigBytes is refused with SQLETCH300 (read cap) and one just under
+// loads. The padding is a YAML comment (no tabs), so only the size cap — not
+// the tab scan or a structural guard — decides.
+func TestLoad_SizeCapBoundary(t *testing.T) {
+	dir := t.TempDir()
+	base := validYAML
+	// A run of '#'-comment bytes on one line inflates the file without adding
+	// structural tokens, tabs, or nesting.
+	padTo := func(target int) string {
+		pad := target - len(base) - len("\n#\n")
+		if pad < 0 {
+			t.Fatalf("base config already %d bytes", len(base))
+		}
+		return base + "\n#" + strings.Repeat("x", pad) + "\n"
+	}
+
+	over := padTo(maxConfigBytes + 1)
+	if len(over) <= maxConfigBytes {
+		t.Fatalf("over-cap fixture is only %d bytes", len(over))
+	}
+	if diags := loadDiags(Load(path2(t, dir, over))); !hasConfigParse(diags) {
+		t.Fatalf("a config over the %d-byte cap must be refused with SQLETCH300, got %+v", maxConfigBytes, diags)
+	}
+
+	under := padTo(maxConfigBytes - 1024)
+	if len(under) > maxConfigBytes {
+		t.Fatalf("under-cap fixture is %d bytes", len(under))
+	}
+	for _, d := range loadDiags(Load(path2(t, dir, under))) {
+		if d.Code == diagnostics.CodeConfigParse {
+			t.Fatalf("a config just under the cap wrongly refused: %+v", d)
+		}
+	}
+}
+
+func loadDiags(_ Config, diags []diagnostics.Diagnostic) []diagnostics.Diagnostic {
+	return diags
+}
+
+func hasConfigParse(diags []diagnostics.Diagnostic) bool {
+	for _, d := range diags {
+		if d.Code == diagnostics.CodeConfigParse && d.Severity == diagnostics.Error {
+			return true
+		}
+	}
+	return false
+}
+
+// TestConfigSizesUnderCap documents the margin the 256 KiB cap leaves over
+// every legitimate config: the three shipped examples and a synthetic large
+// config (1000 queries + 200 overrides + 20 policies) are all far under the
+// cap. If a plausible legitimate config could approach the cap this test —
+// and the design decision behind the tighter cap — would need revisiting.
+func TestConfigSizesUnderCap(t *testing.T) {
+	for _, ex := range []string{"postgres", "mysql", "sqlite"} {
+		path := filepath.Join("..", "..", "examples", ex, "sqletch.yaml")
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if info.Size() >= maxConfigBytes {
+			t.Fatalf("example %s is %d bytes, at/over the %d cap", ex, info.Size(), maxConfigBytes)
+		}
+		t.Logf("example %s: %d bytes (cap %d, ~%.0fx margin)", ex, info.Size(), maxConfigBytes, float64(maxConfigBytes)/float64(info.Size()))
+	}
+	large := largeLegitConfig()
+	if len(large) >= maxConfigBytes {
+		t.Fatalf("synthetic large-legit config is %d bytes, at/over the %d cap — the cap has too little margin over a legitimate config", len(large), maxConfigBytes)
+	}
+	t.Logf("large-legit config: %d bytes (cap %d, ~%.0fx margin)", len(large), maxConfigBytes, float64(maxConfigBytes)/float64(len(large)))
+}
+
+// largeLegitConfig builds the synthetic large-but-legitimate config shared by
+// the size-margin and load tests: 1000 expansion queries, 200 overrides, and
+// 20 policies.
+func largeLegitConfig() string {
+	var b strings.Builder
+	b.WriteString(validYAML)
+	b.WriteString("static_expansion:\n  queries:\n")
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "  - q%d\n", i)
+	}
+	b.WriteString("overrides:\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&b, "  - {query: q%d, column: c, nullable: true}\n", i)
+	}
+	b.WriteString("policies:\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "  - name: p%d\n    tables: [t%d]\n    predicate: \"{}.x = :y\"\n    param:\n      name: y\n      type: bigint\n", i, i)
+	}
+	return b.String()
 }
