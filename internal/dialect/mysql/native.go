@@ -731,15 +731,34 @@ func (v *refVisitor) Enter(n ast.Node) (ast.Node, bool) {
 
 func (v *refVisitor) Leave(n ast.Node) (ast.Node, bool) { return n, v.err == nil }
 
-// inertSubquery recognizes the one subquery shape the backend allows:
-// the dialect's own arity-0 @in emission (`SELECT NULL FROM DUAL
-// WHERE FALSE`-shaped) — no column references, no relations beyond
-// DUAL. Anything else is not inert.
+// inertSubquery reports whether q is EXACTLY the dialect's own arity-0
+// @in emission — `SELECT NULL FROM DUAL WHERE FALSE` (dialect.InEmptySQL).
+// That is the one and only subquery the native backend accepts: doc 15
+// §5.2 places subqueries outside the v1 subset (scalar/derived-table
+// typing is machinery v1 refuses to half-build), so the oracle must
+// refuse every OTHER subquery rather than guess.
+//
+// The match is deliberately narrow — a bare NULL projection, a
+// DUAL/empty FROM, a constant-FALSE WHERE, and no other clause. In
+// particular it rejects BOTH multi-column and single-column user
+// constant subqueries. Multi-column ones are the fail-closed hazard:
+// a real MySQL server rejects `(SELECT 1, 2)` at PREPARE with
+// ER_OPERAND_COLUMNS (1241), so blessing it here would statically
+// approve a shape the engine refuses (verified only at execution).
 func inertSubquery(q ast.ResultSetNode) bool {
 	sel, ok := q.(*ast.SelectStmt)
-	if !ok {
+	if !ok || sel.Kind != ast.SelectStmtKindSelect {
 		return false
 	}
+	// No clause the emission does not carry.
+	if sel.Distinct || sel.GroupBy != nil || sel.Having != nil ||
+		sel.OrderBy != nil || sel.Limit != nil || len(sel.WindowSpecs) != 0 ||
+		sel.LockInfo != nil || sel.With != nil || sel.SelectIntoOpt != nil {
+		return false
+	}
+	// `FROM DUAL` parses to a nil From; an explicit DUAL relation is
+	// tolerated, but nothing else (a real relation would demand the
+	// inner-scope typing v1 does not build).
 	if sel.From != nil {
 		var rels []dialect.RelRef
 		collectJoin(sel.From.TableRefs, dialect.JoinBase, false, &rels)
@@ -749,24 +768,25 @@ func inertSubquery(q ast.ResultSetNode) bool {
 			}
 		}
 	}
-	inert := true
-	check := &inertVisitor{ok: &inert}
-	sel.Accept(check)
-	return inert
-}
-
-type inertVisitor struct{ ok *bool }
-
-func (v *inertVisitor) Enter(n ast.Node) (ast.Node, bool) {
-	switch n.(type) {
-	case *ast.ColumnNameExpr, *ast.SubqueryExpr, *ast.ExistsSubqueryExpr:
-		*v.ok = false
-		return n, true
+	// Exactly one projected column, and it is the bare NULL literal.
+	if sel.Fields == nil || len(sel.Fields.Fields) != 1 {
+		return false
 	}
-	return n, false
+	f := sel.Fields.Fields[0]
+	if f.WildCard != nil || f.AsName.O != "" {
+		return false
+	}
+	if ve, ok := f.Expr.(ast.ValueExpr); !ok || ve.GetValue() != nil {
+		return false
+	}
+	// WHERE FALSE — the emission's constant-false guard (int64 0).
+	ve, ok := sel.Where.(ast.ValueExpr)
+	if !ok {
+		return false
+	}
+	iv, ok := ve.GetValue().(int64)
+	return ok && iv == 0
 }
-
-func (v *inertVisitor) Leave(n ast.Node) (ast.Node, bool) { return n, *v.ok }
 
 // ---- inputs ----------------------------------------------------------------
 

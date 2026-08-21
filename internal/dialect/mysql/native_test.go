@@ -294,6 +294,57 @@ func TestNativeDescribeInertInSubquery(t *testing.T) {
 	if _, err := describe(t, sql); err != nil {
 		t.Fatalf("arity-0 @in emission must be accepted: %v", err)
 	}
+	// It must be recognized verbatim from dialect.InEmptySQL, so a drift
+	// between the matcher and the emission cannot pass silently.
+	sql = "SELECT u.id FROM users AS u WHERE u.email " + (Profile{}).InEmptySQL()
+	if _, err := describe(t, sql); err != nil {
+		t.Fatalf("dialect.InEmptySQL emission must be accepted: %v", err)
+	}
+}
+
+// TestNativeDescribeMultiColumnSubqueryRefused is the fail-closed
+// regression: a multi-column constant subquery is ER_OPERAND_COLUMNS
+// (1241) at PREPARE on a real server, so the native oracle must refuse
+// it (SQLETCH214) rather than statically bless a shape the engine
+// rejects. Before the fix inertSubquery accepted these (err=nil).
+func TestNativeDescribeMultiColumnSubqueryRefused(t *testing.T) {
+	for _, tt := range []struct{ name, sql string }{
+		{"in list", "SELECT id FROM users WHERE id IN (SELECT 1, 2)"},
+		{"equality", "SELECT id FROM users WHERE id = (SELECT 1, 2)"},
+		{"projected", "-- @column x: bigint\nSELECT (SELECT 1, 2) AS x FROM users"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError, got %T: %v", err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "subquery") {
+				t.Errorf("refusal %q/%q should mention subquery", ne.Construct, ne.Hint)
+			}
+		})
+	}
+}
+
+// TestNativeDescribeUserConstSubqueryRefused pins the doc-15-faithful
+// choice: only the backend's own arity-0 emission is inert. Even a
+// single-column user constant subquery — server-acceptable, but not
+// something the v1 subset types — is refused, never silently skipped.
+func TestNativeDescribeUserConstSubqueryRefused(t *testing.T) {
+	for _, tt := range []struct{ name, sql string }{
+		{"single-column const in", "SELECT id FROM users WHERE id IN (SELECT 1)"},
+		{"single-column const eq", "SELECT id FROM users WHERE id = (SELECT 1)"},
+		{"null but where true", "SELECT id FROM users WHERE id IN (SELECT NULL FROM DUAL WHERE TRUE)"},
+		{"null but limited", "SELECT id FROM users WHERE id IN (SELECT NULL FROM DUAL WHERE FALSE LIMIT 1)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError, got %T: %v", err, err)
+			}
+		})
+	}
 }
 
 func TestNativeDescribeAliasVisibility(t *testing.T) {
