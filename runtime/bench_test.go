@@ -387,9 +387,10 @@ func BenchmarkTreeArgs(b *testing.B) {
 
 func BenchmarkTreeValidate(b *testing.B) {
 	tree := benchTree()
+	preds := benchTreeFrags()[1].Cases
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := tree.validate(3, DefaultTreeCaps); err != nil {
+		if err := tree.validate(preds, DefaultTreeCaps); err != nil {
 			b.Fatal(err)
 		}
 	}

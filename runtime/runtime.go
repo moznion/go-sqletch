@@ -17,8 +17,8 @@
 //     per-predicate constructors are generated into your package),
 //     [TreeCaps], and the sentinel errors [ErrFilterRequired],
 //     [ErrChooseRequired], [ErrOrderKey], [ErrTreeTooLarge],
-//     [ErrTreePredicate]. These follow Go API compatibility for all
-//     v1 releases.
+//     [ErrTreePredicate], [ErrTreeArity]. These follow Go API
+//     compatibility for all v1 releases.
 //
 //     The observability surface — [Observer], [CacheStats],
 //     [ShapeUse], [ShapeSpaceInfo] and the corresponding
@@ -512,7 +512,7 @@ func ComposeTreeStyle(style Style, frags []Frag, key ShapeKey, tree Tree, caps T
 				co.b = append(co.b, "TRUE"...)
 				continue
 			}
-			if err := tree.validate(len(f.Cases), caps); err != nil {
+			if err := tree.validate(f.Cases, caps); err != nil {
 				*bp = co.b[:0]
 				composeBufs.Put(bp)
 				return "", nil, err

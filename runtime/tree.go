@@ -69,7 +69,9 @@ func combine(op uint8, ts []Tree) Tree {
 }
 
 // NewLeaf is called by generated predicate constructors; user code
-// never calls it directly.
+// never calls it directly. args must be exactly the predicate's
+// parameters in declaration order — composition rejects any count
+// mismatch with [ErrTreeArity] (generated constructors always match).
 func NewLeaf(pred int16, args ...any) Tree {
 	return Tree{n: &node{op: opLeaf, pred: pred, args: args}}
 }
@@ -93,6 +95,16 @@ var (
 	ErrFilterRequired = errors.New("sqletch: required @filter-tree argument is the zero Tree (use the generated Unscoped() for deliberate opt-out)")
 	ErrTreeTooLarge   = errors.New("sqletch: filter tree exceeds the configured caps")
 	ErrTreePredicate  = errors.New("sqletch: filter tree references an unknown predicate")
+	// ErrTreeArity is returned when a leaf carries a different number of
+	// arguments than its predicate's parameters. The composer flattens
+	// leaf arguments into one preorder TreeArgs space and each leaf owns
+	// exactly the slice its predicate consumes, so an under-supplied
+	// leaf would bind a NEIGHBORING leaf's value (or index out of range
+	// at query time) and an over-supplied one would silently drop
+	// values; both are construction bugs, rejected before any SQL is
+	// built. Generated predicate constructors always match — this guards
+	// hand-written NewLeaf calls.
+	ErrTreeArity = errors.New("sqletch: filter tree leaf argument count does not match its predicate's parameters")
 )
 
 // MaxTreeArgs bounds the predicate arguments one tree may contribute.
@@ -136,8 +148,9 @@ func (t Tree) checkCaps(caps TreeCaps) error {
 	return rec(t.n, 1)
 }
 
-// validate checks caps and predicate ranges.
-func (t Tree) validate(numPreds int, caps TreeCaps) error {
+// validate checks caps, predicate ranges, and leaf arity against the
+// query's predicate table.
+func (t Tree) validate(preds []Case, caps TreeCaps) error {
 	if err := t.checkCaps(caps); err != nil {
 		return err
 	}
@@ -146,8 +159,29 @@ func (t Tree) validate(numPreds int, caps TreeCaps) error {
 	}
 	var rec func(n *node) error
 	rec = func(n *node) error {
-		if n.op == opLeaf && (n.pred < 0 || int(n.pred) >= numPreds) {
-			return fmt.Errorf("%w: %d", ErrTreePredicate, n.pred)
+		if n.op == opLeaf {
+			if n.pred < 0 || int(n.pred) >= len(preds) {
+				return fmt.Errorf("%w: %d", ErrTreePredicate, n.pred)
+			}
+			// The composer offsets a predicate's ParamIdx values into
+			// the leaf's own slice of the flattened TreeArgs space and
+			// then advances the base by the SUPPLIED count, so any
+			// mismatch desynchronizes every leaf after this one:
+			// under-supply makes a bind reference a NEIGHBOR's argument
+			// (silent wrong-value binding — in a tenant-scoped tree,
+			// one scope value substituted for another) or, on the last
+			// leaf, an index past TreeArgs (a query-time panic in
+			// ResolveArgs). Over-supply keeps the accounting aligned,
+			// but the surplus values are silently never bound — the
+			// caller's arguments do not correspond to the predicate's
+			// parameters, which is the same construction bug — so ANY
+			// mismatch is rejected. Generated constructors always pass
+			// exactly the predicate's parameters; this guards
+			// hand-written NewLeaf calls.
+			if want := leafArity(preds[n.pred]); len(n.args) != want {
+				return fmt.Errorf("%w: predicate %d takes %d argument(s), got %d",
+					ErrTreeArity, n.pred, want, len(n.args))
+			}
 		}
 		for _, k := range n.kids {
 			if err := rec(k); err != nil {
@@ -157,6 +191,22 @@ func (t Tree) validate(numPreds int, caps TreeCaps) error {
 		return nil
 	}
 	return rec(t.n)
+}
+
+// leafArity is the argument count a leaf of this predicate must carry.
+// A predicate Case's ParamIdx values index the leaf's argument list
+// (its distinct :params in first-occurrence order, per BuildFrags), so
+// the leaf owns exactly enough arguments to cover the largest index —
+// and codegen derives the parameter list from the body, so every index
+// up to the maximum occurs.
+func leafArity(c Case) int {
+	want := 0
+	for _, idx := range c.ParamIdx {
+		if int(idx)+1 > want {
+			want = int(idx) + 1
+		}
+	}
+	return want
 }
 
 // Encode is the canonical structural encoding (values excluded) used
