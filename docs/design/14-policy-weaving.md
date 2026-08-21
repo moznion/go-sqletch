@@ -192,9 +192,12 @@ Two sub-cases:
   recorded point.
 - **The query has no WHERE clause.** The weaver must synthesize
   `WHERE <predicate>` at the clause position (before GROUP BY /
-  ORDER BY / LIMIT / RETURNING). This is the common case for
-  `DELETE FROM orders` — i.e. the case with the most to gain — so it
-  cannot be deferred.
+  WINDOW / ORDER BY / LIMIT / RETURNING — and before a tail-slot
+  construct that *replaces* one of those clauses: `@order-by`, and a
+  `@choose` whose cases classify as GROUP BY/ORDER BY clauses, bound
+  the WHERE slot exactly like the literal keyword would). This is the
+  common case for `DELETE FROM orders` — i.e. the case with the most
+  to gain — so it cannot be deferred.
 
 In both sub-cases (and in the `ON`-clause case of the D2 refinement)
 every spliced predicate occurrence is wrapped in its own parentheses —

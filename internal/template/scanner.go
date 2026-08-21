@@ -663,6 +663,20 @@ func (qb *queryBuilder) transition(kw string, tok dialect.Token) {
 	case "LIMIT", "OFFSET", "FETCH", "FOR":
 		qb.ctx = ctxTail
 		qb.markTail(tok.Start)
+	case "WINDOW":
+		// The WINDOW clause starts the statement tail (it follows the
+		// WHERE slot), so a synthesized WHERE must land before it — the
+		// policy layer's tailKeywords already treat it that way. WINDOW
+		// is not a reserved word in every dialect, so gate on the
+		// contexts where the clause can legally start (after the FROM
+		// items or a WHERE/GROUP BY/HAVING clause); a bare column named
+		// `window` in the projection or a tail clause must not mark the
+		// tail. The context is deliberately left unchanged: nothing
+		// downstream keys on a WINDOW context, and ORDER BY etc. after
+		// it transition as usual.
+		if qb.ctx == ctxFrom || qb.ctx == ctxWhere || qb.ctx == ctxGroupBy || qb.ctx == ctxHaving {
+			qb.markTail(tok.Start)
+		}
 	case "UPDATE":
 		qb.ctx = ctxUpdateTarget
 	case "SET":
@@ -1305,6 +1319,15 @@ func (fs *fileScan) parseChoose(pos, nameEnd int) int {
 		qb.ctx = ctxOrderBy
 	case SlotGroupBy:
 		qb.ctx = ctxGroupBy
+	}
+	if item.Slot == SlotOrderBy || item.Slot == SlotGroupBy {
+		// The construct replaces the statement-level ORDER BY/GROUP BY
+		// clause, so it bounds the WHERE slot like the literal keyword
+		// would (same rule as @order-by): a synthesized WHERE must land
+		// before the construct, not after it. Safe to mark after the
+		// body is parsed — construct bodies never reach transition(),
+		// so nothing inside them touches WhereKwEnd/TailStart.
+		qb.markTail(pos)
 	}
 	qb.skelStart = endPos
 	return endPos

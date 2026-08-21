@@ -333,6 +333,54 @@ func TestWeave_SelectJoinOnConflictColumnSingleWhere(t *testing.T) {
 	}
 }
 
+// Tail constructs must bound the synthesized-WHERE insertion point: a
+// @choose whose cases are GROUP BY/ORDER BY clauses, and a WINDOW
+// clause, both start the statement tail, so the woven conjunct lands
+// BEFORE them and the woven SQL parses. (Regression: the conjunct was
+// spliced after them — `GROUP BY day WHERE …` — invalid SQL caught
+// loud as SQLETCH100, a false rejection.)
+func TestWeave_TailConstructPlacement(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string // maximal rendering of the woven template, trimmed
+	}{
+		{
+			name: "conjunct before a GROUP BY @choose",
+			src:  "-- name: Q :many\nSELECT count(*) FROM orders\n@choose(g)\n@case(day)\nGROUP BY day\n@case(week)\nGROUP BY week\n@end\n",
+			want: "SELECT count(*) FROM orders\nWHERE (orders.tenant_id = $1) \nGROUP BY day",
+		},
+		{
+			name: "conjunct before an ORDER BY @choose",
+			src:  "-- name: Q :many\nSELECT id FROM orders\n@choose(sort)\n@case(new)\nORDER BY id DESC\n@case(old)\nORDER BY id ASC\n@end\n",
+			want: "SELECT id FROM orders\nWHERE (orders.tenant_id = $1) \nORDER BY id DESC",
+		},
+		{
+			name: "conjunct before a WINDOW clause",
+			src:  "-- name: Q :many\nSELECT id, sum(amount) OVER w FROM orders WINDOW w AS (PARTITION BY id)\n",
+			want: "SELECT id, sum(amount) OVER w FROM orders WHERE (orders.tenant_id = $1) WINDOW w AS (PARTITION BY id)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := weaveOne(t, tc.src, tenantPolicy())
+			noDiags(t, res)
+			got := renderSQL(t, res.Query)
+			if got != tc.want {
+				t.Errorf("woven rendering:\n got: %q\nwant: %q", got, tc.want)
+			}
+			// The woven maximal rendering must parse — the regression
+			// produced invalid SQL.
+			if _, err := (postgres.Frontend{}).Parse(got); err != nil {
+				t.Errorf("woven rendering does not parse: %v\n%s", err, got)
+			}
+			if diags := enforceOn(t, res.Query, tenantPolicy()); len(diags) != 0 {
+				t.Errorf("enforcement rejects the woven output: %+v", diags)
+			}
+		})
+	}
+}
+
 func TestWeave_AppliesToFiltering(t *testing.T) {
 	p := tenantPolicy()
 	p.Kinds = []dialect.StmtKind{dialect.StmtSelect}

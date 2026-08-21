@@ -86,6 +86,48 @@ func TestScan_WeavePoints(t *testing.T) {
 			tailAt:       "FOR",
 			stmtEndAfter: "UPDATE\n",
 		},
+		{
+			// A @choose whose cases are GROUP BY clauses replaces the
+			// statement-level GROUP BY, so it bounds the WHERE slot like
+			// the literal keyword would (same rule as @order-by).
+			name:         "group-by choose construct bounds the where slot",
+			src:          "-- name: Q :many\nSELECT count(*) FROM orders\n@choose(g)\n@case(day)\nGROUP BY day\n@case(week)\nGROUP BY week\n@end\n",
+			tailAt:       "@choose",
+			stmtEndAfter: "@end",
+		},
+		{
+			name:         "order-by choose construct bounds the where slot",
+			src:          "-- name: Q :many\nSELECT id FROM orders\n@choose(sort)\n@case(new)\nORDER BY id DESC\n@case(old)\nORDER BY id ASC\n@end\n",
+			tailAt:       "@choose",
+			stmtEndAfter: "@end",
+		},
+		{
+			name:         "where before group-by choose construct",
+			src:          "-- name: Q :many\nSELECT count(*) FROM orders WHERE ok\n@choose(g)\n@case(day)\nGROUP BY day\n@end\n",
+			whereAfter:   "WHERE",
+			stmtEndAfter: "@end",
+		},
+		{
+			name:         "window clause marks tail",
+			src:          "-- name: Q :many\nSELECT id, sum(amount) OVER w FROM orders WINDOW w AS (PARTITION BY id)\n",
+			tailAt:       "WINDOW",
+			stmtEndAfter: "(PARTITION BY id)",
+		},
+		{
+			name:         "where before window clause",
+			src:          "-- name: Q :many\nSELECT id, sum(amount) OVER w FROM orders WHERE ok WINDOW w AS (PARTITION BY id)\n",
+			whereAfter:   "WHERE",
+			stmtEndAfter: "(PARTITION BY id)",
+		},
+		{
+			// `window` is not a reserved word in every dialect (SQLite
+			// allows it as a bare column name): in projection position it
+			// must not be read as the WINDOW clause keyword.
+			name:         "bare column named window in the projection",
+			src:          "-- name: Q :many\nSELECT window FROM orders ORDER BY window\n",
+			tailAt:       "ORDER",
+			stmtEndAfter: "BY window\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
