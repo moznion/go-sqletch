@@ -884,7 +884,48 @@ func (c *ComposedCache) get(style Style, queryName string, frags []Frag, key Sha
 	return e.sql, e.binds, nil
 }
 
+// treeFilterCases returns the predicate vocabulary of the query's
+// @filter-tree fragment. There is at most one FilterTree per query (a
+// spec-level restriction, doc 14), so the first match is authoritative;
+// a query with no FilterTree returns nil and only ever reaches here
+// with a zero Tree, which validate short-circuits.
+func treeFilterCases(frags []Frag) []Case {
+	for i := range frags {
+		if frags[i].Kind == FilterTree {
+			return frags[i].Cases
+		}
+	}
+	return nil
+}
+
 func (c *ComposedCache) entry(style Style, queryName string, frags []Frag, key ShapeKey, tree Tree, caps TreeCaps) (*cacheEntry, error) {
+	// Per-leaf arity is validated on EVERY served path, not only the
+	// cache-miss compose path below (ComposeTreeStyle). The cache key
+	// EXCLUDES per-leaf argument counts (Tree.Encode records only
+	// structure), so a wrong-arity tree that shares its structure with a
+	// previously composed good tree would otherwise HIT the cache and be
+	// handed a bind plan sized for the good tree — an index-out-of-range
+	// panic in ResolveArgs (under-supply on the last leaf) or, worse, a
+	// silent cross-leaf mis-bind where a neighboring leaf's value binds
+	// to the wrong predicate (compensating over/under-supply keeps the
+	// total count aligned, so a total-only check cannot catch it). This
+	// is exactly the desync ErrTreeArity exists to prevent, so it must
+	// be enforced before any lookup can serve an entry. Rejecting here —
+	// before the map key is even built, and before any lock, buffer, or
+	// mutation — leaves shared cache state untouched on the error path.
+	//
+	// Cheap: caps bound the walk to O(nodes) (default 32), and only
+	// tree-style queries pay it — every other query kind passes Tree{},
+	// whose IsZero short-circuits before any work. checkCaps ran already
+	// on the GetTreeStyle entry point; validate repeats it (bounded,
+	// harmless) and additionally checks predicate ranges and per-leaf
+	// arity against this shape's @filter-tree vocabulary.
+	if !tree.IsZero() {
+		if err := tree.validate(treeFilterCases(frags), caps); err != nil {
+			return nil, err
+		}
+	}
+
 	// The map key is built into stack scratch and indexed as
 	// string(buf), which the compiler lowers to a lookup that does not
 	// copy: a cache hit allocates nothing at all. Only a miss pays for
