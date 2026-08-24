@@ -153,6 +153,43 @@ func TestTargetItems(t *testing.T) {
 	}
 }
 
+// TestTargetItems_SchemaQualifiedFuncNotWhitelisted is the H2-mysql
+// regression: a schema-qualified user function must NOT surface a
+// builtin FuncName. The nullability analyzer keys funcWhitelist
+// (count/now) and strictAggs (sum/min/max/avg) on TargetItem.FuncName;
+// a stored function `mydb.count(x)` returning NULL is only callable
+// qualified, so if FuncName came back "count" it would be treated as
+// the total builtin and its column generated non-nullable — a NULL
+// slipping into a non-null field. A schema-qualified call must leave
+// FuncName blank so no whitelist/strictAggs entry can match.
+func TestTargetItems_SchemaQualifiedFuncNotWhitelisted(t *testing.T) {
+	qualified := []struct{ sql, name string }{
+		{"SELECT mydb.count(t.x) AS c FROM t", "count"},
+		{"SELECT mydb.now() AS c FROM t", "now"},
+		{"SELECT mydb.sum(t.id) AS c FROM t GROUP BY t.id", "sum"},
+	}
+	for _, tt := range qualified {
+		item := parse(t, tt.sql).TargetItems()[0]
+		if item.FuncName != "" {
+			t.Errorf("%q: FuncName = %q, want \"\" (schema-qualified %s must not impersonate the builtin)",
+				tt.sql, item.FuncName, tt.name)
+		}
+	}
+	// Control: unqualified builtin calls still surface their FuncName so
+	// the whitelist/strictAggs keep working.
+	unqualified := []struct{ sql, name string }{
+		{"SELECT count(t.x) AS c FROM t", "count"},
+		{"SELECT now() AS c FROM t", "now"},
+		{"SELECT sum(t.id) AS c FROM t GROUP BY t.id", "sum"},
+	}
+	for _, tt := range unqualified {
+		item := parse(t, tt.sql).TargetItems()[0]
+		if item.FuncName != tt.name {
+			t.Errorf("%q: FuncName = %q, want %q", tt.sql, item.FuncName, tt.name)
+		}
+	}
+}
+
 func TestTopConjunctLocs(t *testing.T) {
 	sql := "SELECT 1 FROM t WHERE TRUE AND (t.a = ? OR t.b = ?) AND t.c = ?"
 	locs := parse(t, sql).TopConjunctLocs()

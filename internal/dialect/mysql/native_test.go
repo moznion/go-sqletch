@@ -376,6 +376,62 @@ func TestNativeDescribeNonInertDualSubqueryRefused(t *testing.T) {
 	}
 }
 
+// TestNativeDescribeFromlessInSubqueryRefused is the M7(a) regression:
+// only the dialect's own arity-0 @in emission (dialect.InEmptySQL, which
+// carries FROM DUAL) is inert. The pinned TiDB parser drops FROM DUAL to
+// a nil From — so a genuinely FROM-less `SELECT NULL WHERE FALSE` parses
+// to the SAME nil-From shape yet is REJECTED by a real MySQL 8.0 server
+// (ER_NO_TABLES_USED: a SELECT with a WHERE and no FROM). Accepting it
+// was fail-open — native passed what the server refuses. It must be a
+// SQLETCH214 refusal; the genuine emission must still be accepted.
+func TestNativeDescribeFromlessInSubqueryRefused(t *testing.T) {
+	fromless := []struct{ name, sql string }{
+		{"fromless null where false", "SELECT id FROM users WHERE id IN (SELECT NULL WHERE FALSE)"},
+		{"fromless null where true", "SELECT id FROM users WHERE id IN (SELECT NULL WHERE TRUE)"},
+	}
+	for _, tt := range fromless {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError (SQLETCH214), got %T: %v", err, err)
+			}
+			if !strings.Contains(ne.Error()+ne.Construct+ne.Hint, "subquery") {
+				t.Errorf("refusal %q/%q should mention subquery", ne.Construct, ne.Hint)
+			}
+		})
+	}
+	// The genuine arity-0 @in emission (with FROM DUAL) must still pass.
+	sql := "SELECT u.id FROM users AS u WHERE u.email " + (Profile{}).InEmptySQL()
+	if _, err := describe(t, sql); err != nil {
+		t.Fatalf("dialect.InEmptySQL emission must still be accepted: %v", err)
+	}
+}
+
+// TestNativeDescribeIntoOutfileRefused is the M7(b) regression:
+// describeSelect never checked SelectIntoOpt, so `SELECT id FROM t1 INTO
+// OUTFILE '…'` described with one result column while a real server's
+// COM_STMT_PREPARE reports ZERO result columns (rows go to the file) — a
+// divergence. It must be refused (SQLETCH214). A normal SELECT with no
+// INTO clause still describes.
+func TestNativeDescribeIntoOutfileRefused(t *testing.T) {
+	for _, tt := range []struct{ name, sql string }{
+		{"into outfile", "SELECT id FROM users INTO OUTFILE '/tmp/x'"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := describe(t, tt.sql)
+			var ne *dialect.NativeUnsupportedError
+			if !errors.As(err, &ne) {
+				t.Fatalf("want *dialect.NativeUnsupportedError (SQLETCH214), got %T: %v", err, err)
+			}
+		})
+	}
+	// Control: a normal SELECT still describes.
+	if _, err := describe(t, "SELECT id FROM users"); err != nil {
+		t.Fatalf("plain SELECT must still describe: %v", err)
+	}
+}
+
 func TestNativeDescribeAliasVisibility(t *testing.T) {
 	// Output aliases are visible to GROUP BY / HAVING / ORDER BY,
 	// like MySQL's own resolution.

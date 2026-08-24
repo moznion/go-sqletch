@@ -378,11 +378,29 @@ func refuseNamedWindow(specs []ast.WindowSpec) error {
 		Hint:      "inline the window as OVER (...) or switch to database.oracle: \"server\""}
 }
 
+// refuseSelectInto rejects a `SELECT ... INTO OUTFILE/DUMPFILE/@var`
+// clause. Such a statement sends its rows to the target, so a real
+// server's COM_STMT_PREPARE reports ZERO result columns — while the
+// describer, ignoring SelectIntoOpt, would project the select list and
+// diverge. Fail closed (SQLETCH214). inertSubquery already checks
+// SelectIntoOpt; this is its describeSelect twin.
+func refuseSelectInto(into *ast.SelectIntoOption) error {
+	if into == nil {
+		return nil
+	}
+	return &dialect.NativeUnsupportedError{Pos: -1,
+		Construct: "a SELECT ... INTO clause",
+		Hint:      "drop the INTO target, or switch to database.oracle: \"server\""}
+}
+
 func (d *describer) describeSelect(s *ast.SelectStmt) ([]dialect.ColumnDesc, error) {
 	if err := refuseWith(s.With); err != nil {
 		return nil, err
 	}
 	if err := refuseNamedWindow(s.WindowSpecs); err != nil {
+		return nil, err
+	}
+	if err := refuseSelectInto(s.SelectIntoOpt); err != nil {
 		return nil, err
 	}
 	scope, err := d.scopeFrom(s.From)
@@ -747,6 +765,15 @@ func (v *refVisitor) Leave(n ast.Node) (ast.Node, bool) { return n, v.err == nil
 // a real MySQL server rejects `(SELECT 1, 2)` at PREPARE with
 // ER_OPERAND_COLUMNS (1241), so blessing it here would statically
 // approve a shape the engine refuses (verified only at execution).
+// inEmptyInnerText is the inner SELECT of the arity-0 @in emission —
+// dialect.InEmptySQL with the `IN (` … `)` wrapper stripped. inertSubquery
+// pins a candidate subquery's source text to this exact string so a
+// FROM-less user select (indistinguishable at the AST level, but rejected
+// by the server) cannot masquerade as the emission. Derived from the
+// dialect constant so a drift between the two cannot slip through.
+var inEmptyInnerText = strings.TrimSuffix(
+	strings.TrimPrefix((Profile{}).InEmptySQL(), "IN ("), ")")
+
 func inertSubquery(q ast.ResultSetNode) bool {
 	sel, ok := q.(*ast.SelectStmt)
 	if !ok || sel.Kind != ast.SelectStmtKindSelect {
@@ -764,6 +791,17 @@ func inertSubquery(q ast.ResultSetNode) bool {
 	// somedb.dual is a genuine table the server rejects at PREPARE with
 	// ER_NO_SUCH_TABLE — so any From at all is not the emission.
 	if sel.From != nil {
+		return false
+	}
+	// The parser ALSO drops `FROM DUAL` to a nil From, so a genuinely
+	// FROM-less `SELECT NULL WHERE FALSE` parses to the SAME nil-From
+	// shape as the emission — yet a real MySQL 8.0 server REJECTS a
+	// SELECT+WHERE with no FROM (ER_NO_TABLES_USED). The AST cannot tell
+	// the two apart, so pin the subquery's source text to the exact
+	// arity-0 emission (dialect.InEmptySQL, which carries FROM DUAL);
+	// anything else is refused fail-closed. An empty Text() (unexpected)
+	// fails this too, which is safe.
+	if strings.TrimSpace(sel.Text()) != inEmptyInnerText {
 		return false
 	}
 	// Exactly one projected column, and it is the bare NULL literal.

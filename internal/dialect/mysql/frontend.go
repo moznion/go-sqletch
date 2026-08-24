@@ -581,31 +581,48 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 				aliasSlot = false
 				if tok.Kind == dialect.KindIdent {
 					u := strings.ToUpper(tok.Text)
-					prev = u
-					// FROM-region state: openers enter it, clause-enders
-					// leave it. This gates the structural ',' predecessor so
-					// a `GROUP BY a, b` comma is never a table separator.
-					// A keyword that ARRIVED in FROM position (inPos) is
-					// being used as a non-reserved UNQUOTED table name —
-					// MySQL allows `FROM offset o, t2`, where `offset` is a
-					// relation, not the OFFSET clause. It is consumed as a
-					// relation here, so it must NOT also close the region and
-					// orphan the following comma-joined relation (Loc=-1).
-					// Likewise an alias-capable keyword filling an alias slot.
-					// Only a closer NOT in relation position and NOT filling
-					// an alias slot ends the region.
-					if !inPos {
-						if isFromOpener(u) {
-							inFrom = true
-						} else if isFromCloser(u) && !(curAlias && isAliasCapableCloser(u)) {
-							inFrom = false
+					// STRAIGHT_JOIN has TWO positions in MySQL: a join
+					// operator (`a STRAIGHT_JOIN b`, always inside an already
+					// open FROM region) and a SELECT modifier (`SELECT
+					// STRAIGHT_JOIN col …`, among the select options like
+					// SQL_CALC_FOUND_ROWS/DISTINCT). A modifier occurrence —
+					// reached with NO FROM region open and not itself in
+					// relation position — must NOT open the region or
+					// introduce the following identifier as a relation, or a
+					// bare select-list column equal to a table name would be
+					// pinned at its select-list offset. Neutralize prev so it
+					// is not a keyword predecessor for the next token; the
+					// join-operator form (inFrom already true) falls through
+					// and opens/continues the region as before.
+					if u == "STRAIGHT_JOIN" && !inFrom && !inPos {
+						prev = selectOptionPrev
+					} else {
+						prev = u
+						// FROM-region state: openers enter it, clause-enders
+						// leave it. This gates the structural ',' predecessor so
+						// a `GROUP BY a, b` comma is never a table separator.
+						// A keyword that ARRIVED in FROM position (inPos) is
+						// being used as a non-reserved UNQUOTED table name —
+						// MySQL allows `FROM offset o, t2`, where `offset` is a
+						// relation, not the OFFSET clause. It is consumed as a
+						// relation here, so it must NOT also close the region and
+						// orphan the following comma-joined relation (Loc=-1).
+						// Likewise an alias-capable keyword filling an alias slot.
+						// Only a closer NOT in relation position and NOT filling
+						// an alias slot ends the region.
+						if !inPos {
+							if isFromOpener(u) {
+								inFrom = true
+							} else if isFromCloser(u) && !(curAlias && isAliasCapableCloser(u)) {
+								inFrom = false
+							}
 						}
-					}
-					// Reopen the alias slot for the NEXT token: after a
-					// relation in FROM position, or after an `AS` that itself
-					// sat in an alias slot (`relation AS <alias>`).
-					if inPos || (curAlias && u == "AS") {
-						aliasSlot = true
+						// Reopen the alias slot for the NEXT token: after a
+						// relation in FROM position, or after an `AS` that itself
+						// sat in an alias slot (`relation AS <alias>`).
+						if inPos || (curAlias && u == "AS") {
+							aliasSlot = true
+						}
 					}
 				} else {
 					// A quoted identifier is never a keyword: keep its
@@ -649,6 +666,13 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 // identifier: a non-keyword, non-punctuation marker so quoted content can
 // never be read as a FROM-introducing token.
 const quotedIdentPrev = "\x00quoted"
+
+// selectOptionPrev is the neutral `prev` sentinel recorded for a
+// STRAIGHT_JOIN seen in SELECT-modifier position (like
+// SQL_CALC_FOUND_ROWS). It is a non-keyword, non-punctuation marker so
+// that occurrence neither opens the FROM region nor acts as a
+// relation-introducing predecessor for the following token.
+const selectOptionPrev = "\x00option"
 
 // keywordPred reports whether prev is a keyword that directly introduces
 // a relation name, valid anywhere (these keywords only appear as FROM
@@ -874,7 +898,14 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 		}
 		switch e := f.Expr.(type) {
 		case *ast.FuncCallExpr:
-			item.FuncName = e.FnName.L
+			// A schema-qualified call (`mydb.count(x)`) invokes a STORED
+			// function that merely shares a builtin's name — it is not the
+			// total builtin. Leaving FuncName blank keeps the nullability
+			// analyzer's funcWhitelist/strictAggs from matching it, so its
+			// column is not narrowed to non-nullable on a false pretense.
+			if e.Schema.O == "" {
+				item.FuncName = e.FnName.L
+			}
 		case *ast.AggregateFuncExpr:
 			item.FuncName = strings.ToLower(e.F)
 			// MySQL has no FILTER clause, and window functions parse
