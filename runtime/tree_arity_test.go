@@ -154,3 +154,99 @@ func TestTreeLeafArity_CachePath(t *testing.T) {
 		}
 	}
 }
+
+// TestTreeLeafArity_CachePath_GoodThenBad is the regression for audit
+// finding M1: per-leaf arity used to be checked ONLY on the cache-miss
+// compose path, while the cache key EXCLUDES per-leaf argument counts.
+// So once a correct-arity tree of a given STRUCTURE is warm, a
+// same-structure wrong-arity tree hit the cache and was served the
+// cached bind plan without validate ever running — a query-time panic
+// (under-supply) or a silent cross-leaf mis-bind (compensating
+// over/under-supply). Both variants below MUST be rejected with
+// ErrTreeArity, never a cached plan and never a panic.
+func TestTreeLeafArity_CachePath_GoodThenBad(t *testing.T) {
+	frags := arityFrags()
+
+	// Warm the cache with a well-formed tree so a structurally identical
+	// malformed one would find its entry.
+	warm := func(c *ComposedCache) {
+		good := And(NewLeaf(0, int64(1)), NewLeaf(1, "p", "q"), NewLeaf(2, int64(3)))
+		if _, _, err := c.GetTree("Q", frags, ShapeKey{}, good, DefaultTreeCaps); err != nil {
+			t.Fatalf("warming with a well-formed tree: %v", err)
+		}
+		if s := c.Stats(); s.Entries != 1 {
+			t.Fatalf("warm-up left %d cache entries, want 1", s.Entries)
+		}
+	}
+
+	t.Run("under-supply", func(t *testing.T) {
+		c := NewComposedCache(8)
+		warm(c)
+		// Same structure (And of three leaves 0,1,2) but predicate 1 is
+		// under-supplied: one argument instead of two.
+		bad := And(NewLeaf(0, int64(9)), NewLeaf(1, "only-one"), NewLeaf(2, int64(11)))
+		sql, binds, err := c.GetTree("Q", frags, ShapeKey{}, bad, DefaultTreeCaps)
+		if !errors.Is(err, ErrTreeArity) {
+			t.Fatalf("good-then-bad under-supply on cache path: got err %v, want ErrTreeArity", err)
+		}
+		if sql != "" || binds != nil {
+			t.Fatalf("rejected tree still returned a cached plan: %q / %v", sql, binds)
+		}
+	})
+
+	t.Run("compensating-over-under-supply", func(t *testing.T) {
+		c := NewComposedCache(8)
+		warm(c)
+		// Total argument count stays 4 (1 + 3 + 0) as in the good tree,
+		// so a mere total-count check would NOT catch it — predicate 1 is
+		// over-supplied by one and predicate 2 is under-supplied by one.
+		bad := And(
+			NewLeaf(0, int64(9)),
+			NewLeaf(1, "p", "q", "SURPLUS"),
+			NewLeaf(2), // takes 1, given 0
+		)
+		sql, binds, err := c.GetTree("Q", frags, ShapeKey{}, bad, DefaultTreeCaps)
+		if !errors.Is(err, ErrTreeArity) {
+			t.Fatalf("good-then-bad compensating supply on cache path: got err %v, want ErrTreeArity", err)
+		}
+		if sql != "" || binds != nil {
+			t.Fatalf("rejected tree still returned a cached plan: %q / %v", sql, binds)
+		}
+	})
+}
+
+// TestTreeLeafArity_CachePath_MisBind is the concrete tenant mis-bind
+// from finding M1: predicate0 takes 1 arg, predicate1 takes 2. Warming
+// with And(leaf0("X"), leaf1("Y","Z")) then serving a same-structure
+// And(leaf0(), leaf1("TENANT_B","C","SURPLUS")) — total count 3 either
+// way — previously returned SQL plus a mis-ordered bind plan that bound
+// a neighboring leaf's value to the wrong predicate. It must be
+// rejected before any SQL is served.
+func TestTreeLeafArity_CachePath_MisBind(t *testing.T) {
+	frags := []Frag{
+		{Kind: Skel, Text: "SELECT id FROM t WHERE TRUE AND "},
+		{Kind: FilterTree, Cases: []Case{
+			{Text: "a = :one", ParamSpans: []Span{{Start: 4, End: 8}}, ParamIdx: []int16{0}},
+			{Text: "b = :p AND c = :q",
+				ParamSpans: []Span{{Start: 4, End: 6}, {Start: 15, End: 17}},
+				ParamIdx:   []int16{0, 1}},
+		}},
+	}
+	c := NewComposedCache(8)
+
+	good := And(NewLeaf(0, "X"), NewLeaf(1, "Y", "Z"))
+	if _, _, err := c.GetTree("Q", frags, ShapeKey{}, good, DefaultTreeCaps); err != nil {
+		t.Fatalf("warming with a well-formed tree: %v", err)
+	}
+
+	// leaf0 under-supplied (0 args), leaf1 over-supplied (3 args): same
+	// structure, same total count (3), previously a silent tenant leak.
+	bad := And(NewLeaf(0), NewLeaf(1, "TENANT_B", "C", "SURPLUS"))
+	sql, binds, err := c.GetTree("Q", frags, ShapeKey{}, bad, DefaultTreeCaps)
+	if !errors.Is(err, ErrTreeArity) {
+		t.Fatalf("mis-bind tree on cache path: got err %v, want ErrTreeArity", err)
+	}
+	if sql != "" || binds != nil {
+		t.Fatalf("mis-bind tree still returned SQL/binds: %q / %v", sql, binds)
+	}
+}
