@@ -25,6 +25,57 @@ var joinKeywords = map[string]bool{
 	"FULL": true, "CROSS": true, "NATURAL": true, "STRAIGHT_JOIN": true,
 }
 
+// infixOperandKeywords are word-form binary/prefix operators after which
+// an OPERAND (not a clause keyword) is expected. They keep the
+// operand-position tracker correct across `col LIKE x`, `col IS NULL`,
+// `col IN (…)`, `col BETWEEN a AND b`, etc., so a keyword-named column
+// used as their right operand (`name LIKE offset`) is not mistaken for a
+// clause terminator. The set need not be exhaustive: an omission only
+// leaves the pre-existing behavior (the RHS ident is treated as
+// operand-complete), never a new terminator misread.
+var infixOperandKeywords = map[string]bool{
+	"IS": true, "IN": true, "LIKE": true, "ILIKE": true, "GLOB": true,
+	"MATCH": true, "REGEXP": true, "RLIKE": true, "BETWEEN": true,
+	"SIMILAR": true, "ESCAPE": true, "COLLATE": true, "ANY": true,
+	"ALL": true, "SOME": true, "OVERLAPS": true, "DIV": true,
+	"MOD": true, "XOR": true,
+}
+
+// afterOperand reports the operand-position state produced by consuming
+// tok, given the current state. It returns true when the NEXT depth-0
+// identifier is in operand position (a column/function name, never a
+// clause keyword), and false when it is in operator position (where a
+// bona-fide clause keyword such as GROUP/ORDER/OFFSET or a boolean
+// AND/OR appears). A word matching a keyword is only ever a clause
+// boundary in operator position; in operand position it is a column even
+// if it spells `offset`/`group`/`window` (a reserved word after `.`, or
+// a non-reserved word bare, is a legal column) — misreading it ends the
+// scan early and hides a following OR, leaking the tenant scope
+// (audit-15/16). Callers pass the identifier's uppercased text for the
+// KindIdent case.
+func afterOperand(tok dialect.Token, up string, cur bool) bool {
+	switch tok.Kind {
+	case dialect.KindNumber, dialect.KindString, dialect.KindQuotedIdent,
+		dialect.KindParamRef, dialect.KindPositionalParam, dialect.KindRParen:
+		return false // an operand just completed
+	case dialect.KindLParen, dialect.KindComma, dialect.KindOperator, dialect.KindCast:
+		return true // an operand is expected next
+	case dialect.KindOther:
+		if tok.Text == "." {
+			return true // a column name follows a qualifier dot
+		}
+		return cur
+	case dialect.KindIdent:
+		// AND/OR/NOT and the infix word-operators expect a right operand;
+		// any other identifier IS an operand (column/function name).
+		if up == "AND" || up == "OR" || up == "NOT" || infixOperandKeywords[up] {
+			return true
+		}
+		return false
+	}
+	return cur
+}
+
 // clauseScan is the shared result of lexically scanning a clause
 // region (a WHERE clause or one join's ON expression) of a template's
 // item stream: its depth-0 AND-separated conjunct segments in
@@ -87,21 +138,24 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 	col := &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}}
 	depth := 0
 	inWhere := false
-	// prevDot tracks whether the previous non-trivia token was a `.`
-	// (dialect.KindOther, Text "."). An identifier in indirection
-	// position — the column of a `table.column` reference — must NOT be
-	// classified as a clause keyword: reserved words are legal column
-	// names after a dot (e.g. `o.group`, `o.order`), and misreading one
-	// as GROUP/ORDER/… ends the WHERE scan early, missing a following
-	// depth-0 OR so the weave is not wrapped and the OR escapes the
-	// tenant scope — a silent leak (audit-15).
+	// A keyword-spelled identifier is a clause boundary only in OPERATOR
+	// position; in OPERAND position it is a column/function name (a
+	// reserved word after `.`, or a non-reserved word bare, is a legal
+	// column). expectOperand tracks that position within the WHERE
+	// expression — misreading a keyword-column as GROUP/ORDER/OFFSET/…
+	// ends the scan early and hides a following depth-0 OR, so the weave
+	// is not wrapped and the OR escapes the tenant scope (audit-15/16).
+	// prevDot handles the same hazard for the WHERE keyword itself
+	// (`t.where`) before the expression is entered.
 	prevDot := false
+	expectOperand := false
 	for _, it := range q.Items {
 		s, isSkel := it.(*template.Skeleton)
 		if !isSkel {
 			prevDot = false
 			if inWhere {
 				col.flush()
+				expectOperand = false
 				if whereBoundary(it) {
 					return col.cs
 				}
@@ -135,39 +189,45 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 			}
 			dotted := prevDot
 			prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
+			var up string
+			if tok.Kind == dialect.KindIdent {
+				up = strings.ToUpper(tok.Text)
+			}
 			if depth == 0 {
-				switch tok.Kind {
-				case dialect.KindSemicolon:
+				if tok.Kind == dialect.KindSemicolon {
 					col.flush()
 					return col.cs
-				case dialect.KindIdent:
-					up := strings.ToUpper(tok.Text)
-					if !inWhere {
-						if up == "WHERE" && !dotted {
-							inWhere = true
-						}
+				}
+				if !inWhere {
+					if tok.Kind == dialect.KindIdent && up == "WHERE" && !dotted {
+						inWhere = true
+						expectOperand = true
+					}
+					continue
+				}
+				if tok.Kind == dialect.KindIdent && !expectOperand {
+					if tailKeywords[up] {
+						col.flush()
+						return col.cs
+					}
+					if up == "AND" {
+						col.flush()
+						expectOperand = true
 						continue
 					}
-					if !dotted {
-						if tailKeywords[up] {
-							col.flush()
-							return col.cs
-						}
-						if up == "AND" {
-							col.flush()
-							continue
-						}
-						if up == "OR" {
-							col.cs.hasOR = true
-							col.flush()
-							continue
-						}
+					if up == "OR" {
+						col.cs.hasOR = true
+						col.flush()
+						expectOperand = true
+						continue
 					}
 				}
 			}
-			if inWhere {
-				col.content(tok, abs)
+			if !inWhere {
+				continue
 			}
+			expectOperand = afterOperand(tok, up, expectOperand)
+			col.content(tok, abs)
 		}
 	}
 	col.flush()
@@ -272,9 +332,13 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	naturalRight := naturalIntroducesRight(profile, q, relOff)
 	// prevDot: was the previous non-trivia token a `.`? An identifier in
 	// indirection position (the column of `table.column`) is never a
-	// clause keyword — see whereClause for the same guard and why a
-	// dotted reserved word (`o.group`, `o.on`) must not end the scan.
+	// clause keyword — used before the ON is entered (a dotted `t.on`).
+	// expectOperand: once inside the ON expression, a keyword-spelled
+	// identifier is a boundary only in OPERATOR position — see whereClause
+	// and afterOperand for why a keyword-column (`o.group`, bare `window`)
+	// in operand position must not end the ON and hide a following OR.
 	prevDot := false
+	expectOperand := false
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
@@ -320,6 +384,10 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 				dotted = prevDot
 				prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
 			}
+			var up string
+			if tok.Kind == dialect.KindIdent {
+				up = strings.ToUpper(tok.Text)
+			}
 			switch tok.Kind {
 			case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 				continue
@@ -341,17 +409,17 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 					return finish()
 				}
 			case dialect.KindIdent:
-				if depth == 0 && !dotted {
-					up := strings.ToUpper(tok.Text)
+				if depth == 0 && !inOn && !dotted {
 					switch {
-					case !inOn && up == "ON":
+					case up == "ON":
 						inOn = true
+						expectOperand = true
 						continue
-					case !inOn && (up == "USING" || up == "NATURAL"):
+					case up == "USING" || up == "NATURAL":
 						return finish()
-					case !inOn && (tailKeywords[up] || up == "WHERE" || up == "SET"):
+					case tailKeywords[up] || up == "WHERE" || up == "SET":
 						return finish()
-					case !inOn && joinKeywords[up]:
+					case joinKeywords[up]:
 						// The reference is a left operand: its ON lies
 						// past the join keywords and the joined
 						// relation. The FIRST such keyword names its
@@ -380,26 +448,35 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 							secondJoin = true
 						}
 						continue
-					case inOn && (joinKeywords[up] || tailKeywords[up] || up == "WHERE" || up == "SET"):
+					}
+				}
+				// Inside the ON expression, classify a keyword as a
+				// boundary only in OPERATOR position; in OPERAND position it
+				// is a column even when spelled `group`/`window`/… — see
+				// afterOperand and audit-15/16.
+				if depth == 0 && inOn && !expectOperand {
+					switch {
+					case joinKeywords[up] || tailKeywords[up] || up == "WHERE" || up == "SET":
 						// SET ends a MySQL multi-table UPDATE's join list
 						// (the ON is followed by SET, not WHERE). Without
 						// this the scan swallows the SET assignments as ON
 						// content and splices the conjunct into the assigned
 						// value — gating nothing, a silent leak (audit-14).
-						// The `!inOn` terminator above already lists SET; this
-						// mirrors it for the inside-ON scan.
 						return finish()
-					case inOn && up == "AND":
+					case up == "AND":
 						col.flush()
+						expectOperand = true
 						continue
-					case inOn && up == "OR":
+					case up == "OR":
 						col.cs.hasOR = true
 						col.flush()
+						expectOperand = true
 						continue
 					}
 				}
 			}
 			if inOn {
+				expectOperand = afterOperand(tok, up, expectOperand)
 				col.content(tok, abs)
 			}
 		}
@@ -479,11 +556,17 @@ func onGates(ownJoin dialect.JoinType, crossedJoinKw bool, crossedJoin dialect.J
 // token, and answers as soon as it reaches relOff.
 func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int) bool {
 	runHasNatural := false
+	// prevDot: a dotted `a.natural` is a column, not the NATURAL keyword —
+	// without this guard it would spuriously flag the run and refuse a
+	// perfectly gate-able join (a loud false refusal; consistency with the
+	// audit-15 whereClause/joinOn guard).
+	prevDot := false
 	for _, it := range q.Items {
 		s, isSkel := it.(*template.Skeleton)
 		if !isSkel {
 			// A construct item is a content boundary: it cannot be part of a
 			// join-keyword run, so reset.
+			prevDot = false
 			runHasNatural = false
 			continue
 		}
@@ -506,6 +589,8 @@ func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTempl
 			if abs >= relOff {
 				return runHasNatural
 			}
+			dotted := prevDot
+			prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
 			switch tok.Kind {
 			case dialect.KindLParen, dialect.KindRParen:
 				// A paren boundary changes depth; the introducing run of the
@@ -513,12 +598,13 @@ func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTempl
 				runHasNatural = false
 			case dialect.KindIdent:
 				up := strings.ToUpper(tok.Text)
-				if joinKeywords[up] {
+				if !dotted && joinKeywords[up] {
 					if up == "NATURAL" {
 						runHasNatural = true
 					}
 				} else {
-					// Any other identifier (a relation name, FROM, SELECT, …)
+					// Any other identifier (a relation name, a dotted
+					// keyword-column like `a.natural`, FROM, SELECT, …)
 					// ends the current join-keyword run.
 					runHasNatural = false
 				}
