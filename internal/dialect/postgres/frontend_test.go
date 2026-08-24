@@ -180,6 +180,56 @@ func TestFrontend_ProbeJoinItem(t *testing.T) {
 	}
 }
 
+// M5: a single guarded join fragment must not smuggle a statement-level
+// HAVING / OFFSET / WINDOW / DISTINCT clause past R1's one-node-per-slot
+// probe (the SELECT/GROUP BY probes already reject these; the join and
+// order-key probes must too).
+func TestFrontend_ProbeJoinItem_RejectsStatementClauses(t *testing.T) {
+	fe := Frontend{}
+	invalid := []string{
+		"JOIN x ON true HAVING sum(x.a) > 0",
+		"JOIN x ON true OFFSET 3",
+		"JOIN x ON true WINDOW w AS (PARTITION BY x.a)",
+		"JOIN x ON true GROUP BY x.a HAVING count(*) > 0",
+	}
+	for _, item := range invalid {
+		if err := fe.ProbeJoinItem(item); err == nil {
+			t.Errorf("ProbeJoinItem(%q) = nil, want error", item)
+		}
+	}
+	// A plain single join item must still pass.
+	if err := fe.ProbeJoinItem("JOIN x ON true"); err != nil {
+		t.Errorf("ProbeJoinItem(%q) = %v, want nil", "JOIN x ON true", err)
+	}
+}
+
+func TestFrontend_ProbeOrderByKey(t *testing.T) {
+	fe := Frontend{}
+	valid := []string{
+		"a",
+		"u.created_at DESC",
+		"1",
+	}
+	for _, k := range valid {
+		if err := fe.ProbeOrderByKey(k); err != nil {
+			t.Errorf("ProbeOrderByKey(%q) = %v, want nil", k, err)
+		}
+	}
+	// M5: a sort key must not carry a trailing statement-level clause.
+	invalid := []string{
+		"a OFFSET 5",
+		"a HAVING sum(a) > 0",
+		"a WINDOW w AS (PARTITION BY a)",
+		"a, b", // two keys
+		"a LIMIT 3",
+	}
+	for _, k := range invalid {
+		if err := fe.ProbeOrderByKey(k); err == nil {
+			t.Errorf("ProbeOrderByKey(%q) = nil, want error", k)
+		}
+	}
+}
+
 func TestFrontend_ProbeOrderBy(t *testing.T) {
 	fe := Frontend{}
 	valid := []string{
