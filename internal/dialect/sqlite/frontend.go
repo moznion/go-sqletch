@@ -575,8 +575,36 @@ func (w *tableWalker) walkSelect(s *rsql.SelectStatement) {
 	}
 	w.walkExpr(s.LimitExpr)
 	w.walkExpr(s.OffsetExpr)
+	for _, win := range s.Windows {
+		if win != nil {
+			w.walkWindowDef(win.Definition)
+		}
+	}
 	if s.Compound != nil {
 		w.walkSelect(s.Compound)
+	}
+}
+
+// walkWindowDef descends the subquery-bearing expressions of a window
+// definition (an inline OVER(...) or a named WINDOW). Only Partitions,
+// OrderingTerms, and the frame bounds can hold expressions; the Base
+// window name is a reference to another WINDOW definition, which is
+// itself walked via SelectStatement.Windows.
+func (w *tableWalker) walkWindowDef(d *rsql.WindowDefinition) {
+	if d == nil {
+		return
+	}
+	for _, p := range d.Partitions {
+		w.walkExpr(p)
+	}
+	for _, ot := range d.OrderingTerms {
+		if ot != nil {
+			w.walkExpr(ot.X)
+		}
+	}
+	if d.Frame != nil {
+		w.walkExpr(d.Frame.X)
+		w.walkExpr(d.Frame.Y)
 	}
 }
 
@@ -643,6 +671,14 @@ func (w *tableWalker) walkExpr(e rsql.Expr) {
 		}
 		if v.Filter != nil {
 			w.walkExpr(v.Filter.X)
+		}
+		// A window function's OVER(...) can carry subqueries in its
+		// PARTITION BY / ORDER BY / frame-bound expressions; without
+		// descending them a designated table reached only there is
+		// invisible to DeepTables and reads unscoped (audit-13, the H5
+		// blind spot relocated to the window clause).
+		if v.Over != nil {
+			w.walkWindowDef(v.Over.Definition)
 		}
 	case *rsql.CaseExpr:
 		w.walkExpr(v.Operand)
@@ -797,8 +833,34 @@ func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool, enclosing []
 	}
 	w.walkExpr(s.LimitExpr, inSub, scope)
 	w.walkExpr(s.OffsetExpr, inSub, scope)
+	for _, win := range s.Windows {
+		if win != nil {
+			w.walkWindowDef(win.Definition, inSub, scope)
+		}
+	}
 	if s.Compound != nil {
 		w.walkSelect(s.Compound, inSub, enclosing)
+	}
+}
+
+// walkWindowDef mirrors tableWalker.walkWindowDef for column-ref
+// collection: refs inside a window's PARTITION BY / ORDER BY / frame
+// bounds must be resolved (R3) like any other expression.
+func (w *refWalker) walkWindowDef(d *rsql.WindowDefinition, inSub bool, scope []string) {
+	if d == nil {
+		return
+	}
+	for _, p := range d.Partitions {
+		w.walkExpr(p, inSub, scope)
+	}
+	for _, ot := range d.OrderingTerms {
+		if ot != nil {
+			w.walkExpr(ot.X, inSub, scope)
+		}
+	}
+	if d.Frame != nil {
+		w.walkExpr(d.Frame.X, inSub, scope)
+		w.walkExpr(d.Frame.Y, inSub, scope)
 	}
 }
 
@@ -885,6 +947,9 @@ func (w *refWalker) walkExpr(e rsql.Expr, inSub bool, scope []string) {
 		}
 		if v.Filter != nil {
 			w.walkExpr(v.Filter.X, inSub, scope)
+		}
+		if v.Over != nil {
+			w.walkWindowDef(v.Over.Definition, inSub, scope)
 		}
 	case *rsql.CaseExpr:
 		w.walkExpr(v.Operand, inSub, scope)
