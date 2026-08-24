@@ -512,6 +512,7 @@ func (t *tree) DeepTables() []dialect.TableRef {
 			w.out = append(w.out, dialect.TableRef{Name: s.Table.Name.Name, Schema: qtnSchema(s.Table), Loc: s.Table.Name.NamePos.Offset})
 		}
 		w.walkExpr(s.WhereExpr)
+		w.walkReturning(s.ReturningClause)
 	case *rsql.InsertStatement:
 		w.walkWith(s.WithClause)
 		if s.Table != nil {
@@ -523,6 +524,7 @@ func (t *tree) DeepTables() []dialect.TableRef {
 			}
 		}
 		w.walkSelect(s.Select)
+		w.walkUpsert(s.UpsertClause)
 		w.walkReturning(s.ReturningClause)
 	}
 	for i := range w.out {
@@ -542,6 +544,24 @@ func (w *tableWalker) walkReturning(rc *rsql.ReturningClause) {
 	}
 }
 
+// walkUpsert descends the expression-bearing positions of an
+// INSERT ... ON CONFLICT clause: the DO UPDATE SET assignment values,
+// the DO UPDATE ... WHERE, and the ON CONFLICT (...) WHERE. A designated
+// table reached only through a subquery/IN operand in any of them would
+// otherwise be invisible to DeepTables and read unscoped (audit-14).
+func (w *tableWalker) walkUpsert(u *rsql.UpsertClause) {
+	if u == nil {
+		return
+	}
+	w.walkExpr(u.WhereExpr)
+	for _, a := range u.Assignments {
+		if a != nil {
+			w.walkExpr(a.Expr)
+		}
+	}
+	w.walkExpr(u.UpdateWhereExpr)
+}
+
 // walkWith walks every CTE body of a WITH clause (on any statement
 // kind). CTE names shadowing a designated table are surfaced by the
 // body's own table refs; the weaver treats such names conservatively.
@@ -559,6 +579,14 @@ func (w *tableWalker) walkSelect(s *rsql.SelectStatement) {
 		return
 	}
 	w.walkWith(s.WithClause)
+	// A SELECT in VALUES form (standalone, a derived-table body, a CTE
+	// body, or a compound branch) carries its rows in ValueLists, which
+	// can hold subqueries reading a designated table (audit-14).
+	for _, vl := range s.ValueLists {
+		for _, e := range vl.Exprs {
+			w.walkExpr(e)
+		}
+	}
 	for _, rc := range s.Columns {
 		if rc != nil {
 			w.walkExpr(rc.Expr)
@@ -760,6 +788,11 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 	case *rsql.DeleteStatement:
 		w.walkWith(s.WithClause, nil)
 		w.walkExpr(s.WhereExpr, false, nil)
+		if s.ReturningClause != nil {
+			for _, rc := range s.ReturningClause.Columns {
+				w.walkResultColumn(rc, false, nil)
+			}
+		}
 	case *rsql.InsertStatement:
 		w.walkWith(s.WithClause, nil)
 		for _, vl := range s.ValueLists {
@@ -770,6 +803,7 @@ func (t *tree) ColumnRefs() []dialect.ColRef {
 		if s.Select != nil {
 			w.walkSelect(s.Select, true, nil)
 		}
+		w.walkUpsert(s.UpsertClause, false, nil)
 		if s.ReturningClause != nil {
 			for _, rc := range s.ReturningClause.Columns {
 				w.walkResultColumn(rc, false, nil)
@@ -819,6 +853,13 @@ func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool, enclosing []
 		}
 	}
 	w.walkWith(s.WithClause, enclosing)
+	// VALUES-form rows (see tableWalker.walkSelect) can carry subqueries
+	// whose column refs must be resolved.
+	for _, vl := range s.ValueLists {
+		for _, e := range vl.Exprs {
+			w.walkExpr(e, inSub, scope)
+		}
+	}
 	for _, rc := range s.Columns {
 		w.walkResultColumn(rc, inSub, scope)
 	}
@@ -841,6 +882,22 @@ func (w *refWalker) walkSelect(s *rsql.SelectStatement, inSub bool, enclosing []
 	if s.Compound != nil {
 		w.walkSelect(s.Compound, inSub, enclosing)
 	}
+}
+
+// walkUpsert mirrors tableWalker.walkUpsert for column-ref collection:
+// refs in the ON CONFLICT DO UPDATE SET values / WHERE clauses must be
+// resolved (R3) like any other expression.
+func (w *refWalker) walkUpsert(u *rsql.UpsertClause, inSub bool, scope []string) {
+	if u == nil {
+		return
+	}
+	w.walkExpr(u.WhereExpr, inSub, scope)
+	for _, a := range u.Assignments {
+		if a != nil {
+			w.walkExpr(a.Expr, inSub, scope)
+		}
+	}
+	w.walkExpr(u.UpdateWhereExpr, inSub, scope)
 }
 
 // walkWindowDef mirrors tableWalker.walkWindowDef for column-ref
