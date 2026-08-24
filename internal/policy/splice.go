@@ -87,9 +87,19 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 	col := &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}}
 	depth := 0
 	inWhere := false
+	// prevDot tracks whether the previous non-trivia token was a `.`
+	// (dialect.KindOther, Text "."). An identifier in indirection
+	// position — the column of a `table.column` reference — must NOT be
+	// classified as a clause keyword: reserved words are legal column
+	// names after a dot (e.g. `o.group`, `o.order`), and misreading one
+	// as GROUP/ORDER/… ends the WHERE scan early, missing a following
+	// depth-0 OR so the weave is not wrapped and the OR escapes the
+	// tenant scope — a silent leak (audit-15).
+	prevDot := false
 	for _, it := range q.Items {
 		s, isSkel := it.(*template.Skeleton)
 		if !isSkel {
+			prevDot = false
 			if inWhere {
 				col.flush()
 				if whereBoundary(it) {
@@ -123,6 +133,8 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 					depth--
 				}
 			}
+			dotted := prevDot
+			prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
 			if depth == 0 {
 				switch tok.Kind {
 				case dialect.KindSemicolon:
@@ -131,23 +143,25 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 				case dialect.KindIdent:
 					up := strings.ToUpper(tok.Text)
 					if !inWhere {
-						if up == "WHERE" {
+						if up == "WHERE" && !dotted {
 							inWhere = true
 						}
 						continue
 					}
-					if tailKeywords[up] {
-						col.flush()
-						return col.cs
-					}
-					if up == "AND" {
-						col.flush()
-						continue
-					}
-					if up == "OR" {
-						col.cs.hasOR = true
-						col.flush()
-						continue
+					if !dotted {
+						if tailKeywords[up] {
+							col.flush()
+							return col.cs
+						}
+						if up == "AND" {
+							col.flush()
+							continue
+						}
+						if up == "OR" {
+							col.cs.hasOR = true
+							col.flush()
+							continue
+						}
 					}
 				}
 			}
@@ -256,6 +270,11 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	// nothing (audit-12 H4). The introducing NATURAL keyword precedes the
 	// reference, so it is detected by a backward-aware lexical scan.
 	naturalRight := naturalIntroducesRight(profile, q, relOff)
+	// prevDot: was the previous non-trivia token a `.`? An identifier in
+	// indirection position (the column of `table.column`) is never a
+	// clause keyword — see whereClause for the same guard and why a
+	// dotted reserved word (`o.group`, `o.on`) must not end the scan.
+	prevDot := false
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
@@ -296,6 +315,11 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 			}
 			pos = tok.End
 			abs := s.Span.Start + tok.Start
+			dotted := false
+			if tok.Kind != dialect.KindWhitespace && tok.Kind != dialect.KindLineComment && tok.Kind != dialect.KindBlockComment {
+				dotted = prevDot
+				prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
+			}
 			switch tok.Kind {
 			case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 				continue
@@ -317,7 +341,7 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 					return finish()
 				}
 			case dialect.KindIdent:
-				if depth == 0 {
+				if depth == 0 && !dotted {
 					up := strings.ToUpper(tok.Text)
 					switch {
 					case !inOn && up == "ON":
