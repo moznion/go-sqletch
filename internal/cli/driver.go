@@ -61,12 +61,24 @@ func schemaSQLOf(schema []cache.SchemaFile) []string {
 // (config.Config.Dir's invariant) — otherwise the dev database would
 // follow the caller's working directory, so `--config ../x/sqletch.yaml`
 // and a `//go:generate` one level down would silently use different
-// files. The URI spellings SQLite accepts are not paths and pass
-// through untouched.
+// files. A `file:` URI names a real on-disk file too (ncruces opens with
+// OPEN_URI|OPEN_CREATE): a RELATIVE path component is re-rooted against the
+// config dir the same way and the URI rebuilt (query params preserved),
+// while an absolute component, an in-memory database, and `:memory:` pass
+// through untouched. An unsafe `file:` URI is already refused at config
+// load (SQLETCH306); this keeps its classification in sync with
+// config.Load via config.ParseSQLiteFileURI.
 func sqliteDSNPath(cfg config.Config) string {
 	dsn := cfg.Database.DSN
-	if dsn == "" || dsn == ":memory:" || strings.HasPrefix(dsn, "file:") {
+	if dsn == "" || dsn == ":memory:" {
 		return dsn
+	}
+	if strings.HasPrefix(dsn, "file:") {
+		u := config.ParseSQLiteFileURI(dsn)
+		if u.InMemory || u.Abs || !u.Safe {
+			return dsn
+		}
+		return config.SQLiteFileURIString(cfg.Abs(u.Path), u.Query)
 	}
 	return cfg.Abs(dsn)
 }

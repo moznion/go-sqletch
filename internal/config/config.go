@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -489,13 +490,33 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	// paths. But an ABSOLUTE dev-database path is a normal operator choice
 	// (not generated output), so it is accepted without the absolute-path
 	// warning — warning here would break the common `dsn: /abs/dev.sqlite3`
-	// setup, since config-load diagnostics are fatal to the run. The URI
-	// spellings (`:memory:`, `file:`) are not paths and are exempt,
-	// matching cli.sqliteDSNPath; for the server dialects the DSN is a
-	// connection URL and must not be path-checked at all.
+	// setup, since config-load diagnostics are fatal to the run. `:memory:`
+	// is an in-memory database, not a path. A `file:` URI is NOT exempt: it
+	// can name a relative on-disk path that escapes the project
+	// (`file:../../outside/x.db`), and ncruces opens with OPEN_URI|OPEN_CREATE
+	// so that file is CREATED outside the root — the very redirection
+	// SQLETCH306 refuses for the plain spelling. Its decoded path component
+	// gets the SAME check (relative escape → SQLETCH306, absolute allowed,
+	// in-memory exempt); keep this in sync with cli.sqliteDSNPath. For the
+	// server dialects the DSN is a connection URL and is not path-checked.
 	if cfg.Dialect == "sqlite" {
-		if dsn := cfg.Database.DSN; dsn != "" && dsn != ":memory:" &&
-			!strings.HasPrefix(dsn, "file:") {
+		dsn := cfg.Database.DSN
+		switch {
+		case dsn == "" || dsn == ":memory:":
+			// In-memory / private-temp: not a filesystem path.
+		case strings.HasPrefix(dsn, "file:"):
+			u := ParseSQLiteFileURI(dsn)
+			switch {
+			case u.InMemory || u.Abs:
+				// Exempt, exactly as for `:memory:` and a plain absolute path.
+			case !u.Safe:
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
+					"database.dsn %q cannot be proven to stay inside the project directory (unsupported `file:` authority or percent-escape): a cloned repository could otherwise redirect the SQLite database to an arbitrary location", dsn).
+					WithHint("use a project-relative `file:` path with no authority, an absolute path, or `:memory:`"))
+			default:
+				checkPath("database.dsn", u.Path, false)
+			}
+		default:
 			checkPath("database.dsn", dsn, false)
 		}
 	}
@@ -788,6 +809,88 @@ func (c Config) Abs(p string) string {
 		return p
 	}
 	return filepath.Join(c.Dir, p)
+}
+
+// SQLiteFileURI is the classified result of parsing a SQLite `file:` DSN.
+// A `file:` URI is a real filesystem reference (ncruces opens SQLite with
+// OPEN_URI|OPEN_CREATE), so its path component must go through the same
+// SQLETCH306 escape check as a plain path. Both the config validator
+// (Load → the SQLETCH306 refusal) and the DSN resolver (cli.sqliteDSNPath)
+// classify with this type, so the parse lives in one place and they cannot
+// drift.
+type SQLiteFileURI struct {
+	// InMemory is true for an in-memory / private-temp database — an empty
+	// or ":memory:" path component. It is not a filesystem path, so it is
+	// exempt from the escape check and passes through resolution untouched.
+	InMemory bool
+	// Abs is true when the path component is absolute. An absolute dev-DB
+	// path is a normal operator choice (allowed like the plain absolute
+	// spelling) and is never re-rooted against the config dir.
+	Abs bool
+	// Safe is false when the URI cannot be proven to stay inside the project
+	// — a non-local authority (`file://host/…` with host other than
+	// localhost) or an undecodable percent-escape. A trusted config never
+	// produces one; callers refuse it (SQLETCH306) rather than guess.
+	Safe bool
+	// Path is the DECODED path component: relative to the config dir when
+	// !Abs, absolute when Abs, empty when InMemory.
+	Path string
+	// Query is the raw query string after '?' (without the '?'), preserved
+	// verbatim by SQLiteFileURIString.
+	Query string
+}
+
+// ParseSQLiteFileURI classifies a DSN the caller already knows begins with
+// "file:". net/url does the heavy lifting: a relative path component lands
+// in Opaque (kept percent-encoded), an absolute one in Path (already
+// decoded), and any authority in Host. Only an empty or "localhost"
+// authority is provably safe — SQLite rejects the rest — so anything else
+// is refused conservatively (a false-reject on trusted config is a LOW
+// annoyance; a false-accept is the vulnerability).
+func ParseSQLiteFileURI(dsn string) SQLiteFileURI {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return SQLiteFileURI{Safe: false}
+	}
+	if u.Host != "" && u.Host != "localhost" {
+		return SQLiteFileURI{Safe: false}
+	}
+	res := SQLiteFileURI{Safe: true, Query: u.RawQuery}
+	switch {
+	case u.Opaque != "":
+		// Relative path component (net/url leaves Opaque undecoded, so a
+		// `%2e%2e%2f` escape must be decoded before the lexical `..` check).
+		p, derr := url.PathUnescape(u.Opaque)
+		if derr != nil {
+			return SQLiteFileURI{Safe: false}
+		}
+		switch {
+		case p == "" || p == ":memory:":
+			res.InMemory = true
+		case filepath.IsAbs(p):
+			res.Abs = true
+			res.Path = p
+		default:
+			res.Path = p
+		}
+	case u.Path != "":
+		// Absolute path component (net/url already decoded it).
+		res.Abs = true
+		res.Path = u.Path
+	default:
+		// `file:`, `file:?query`, `file://localhost` — no path ⇒ in-memory.
+		res.InMemory = true
+	}
+	return res
+}
+
+// SQLiteFileURIString rebuilds a `file:` URI for an absolute path, preserving
+// a raw query string verbatim. It is how cli.sqliteDSNPath re-roots a
+// relative `file:` DSN against the config directory. url.URL escapes the path
+// (spaces, `#`, …) so the emitted URI round-trips through SQLite's decoder.
+func SQLiteFileURIString(absPath, rawQuery string) string {
+	u := url.URL{Scheme: "file", Path: absPath, RawQuery: rawQuery}
+	return u.String()
 }
 
 // ExpandGlobs resolves config-relative globs into a sorted, duplicate-

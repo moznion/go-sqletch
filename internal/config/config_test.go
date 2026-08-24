@@ -271,6 +271,71 @@ func TestLoad_SQLiteDSNPathEscape(t *testing.T) {
 			}
 		}
 	})
+
+	// M2: a `file:` URI is a real on-disk reference (ncruces opens with
+	// OPEN_URI|OPEN_CREATE), so its path component gets the same escape
+	// check as the plain spelling. A relative `file:` path climbing out
+	// with `..` must be refused — it used to slip through the `file:`
+	// exemption and CREATE the database outside the project root.
+	t.Run("file: URI relative escape is an error", func(t *testing.T) {
+		for _, dsn := range []string{
+			`"file:../../outside/x.db"`,
+			// A percent-encoded `../` must not defeat the lexical check.
+			`"file:..%2f..%2foutside%2fx.db"`,
+		} {
+			dir := t.TempDir()
+			_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(dsn)))
+			if !hasEscapeError(diags) {
+				t.Fatalf("want SQLETCH306 error for sqlite dsn %s, got %+v", dsn, diags)
+			}
+		}
+	})
+
+	// A `file:` URI escaping through a symlinked directory component is
+	// refused too, exactly like the plain path.
+	t.Run("file: URI symlinked directory escape is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(`"file:link/dev.sqlite"`)))
+		if !hasEscapeError(diags) {
+			t.Fatalf("want SQLETCH306 error for file: dsn via symlinked dir, got %+v", diags)
+		}
+	})
+
+	// A non-local `file://host/…` authority cannot be proven safe and is
+	// refused conservatively (SQLite rejects it anyway).
+	t.Run("file: URI non-local authority is an error", func(t *testing.T) {
+		dir := t.TempDir()
+		_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(`"file://darkstar/x.db"`)))
+		if !hasEscapeError(diags) {
+			t.Fatalf("want SQLETCH306 error for file: dsn with non-local authority, got %+v", diags)
+		}
+	})
+
+	// In-tree relative, absolute, and in-memory `file:` spellings stay
+	// clean — the fix must not start flagging legitimate dev databases.
+	t.Run("safe file: URIs are clean", func(t *testing.T) {
+		dir := t.TempDir()
+		abs := filepath.Join(t.TempDir(), "dev.db")
+		for _, dsn := range []string{
+			`"file:subdir/dev.db"`,
+			`"file:dev.db?mode=rwc&_pragma=busy_timeout(1000)"`,
+			`"file:` + abs + `"`,
+			`"file://` + abs + `"`,
+			`"file::memory:?cache=shared"`,
+			`"file:"`,
+		} {
+			_, diags := Load(write(t, dir, "sqletch.yaml", sqliteYAML(dsn)))
+			for _, d := range diags {
+				if d.Code == diagnostics.CodePathEscape {
+					t.Errorf("safe file: dsn %s must not flag: %+v", dsn, d)
+				}
+			}
+		}
+	})
 }
 
 func TestLoad_UnknownKey(t *testing.T) {
