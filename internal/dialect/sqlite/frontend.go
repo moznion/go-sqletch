@@ -245,6 +245,16 @@ func (t *tree) Kind() dialect.StmtKind {
 	}
 }
 
+func (t *tree) HasConflictUpdate() bool {
+	ins, ok := t.first().(*rsql.InsertStatement)
+	if !ok {
+		return false
+	}
+	// ON CONFLICT … DO UPDATE modifies rows on a conflict; DO NOTHING
+	// (DoUpdate position invalid) does not.
+	return ins.UpsertClause != nil && ins.UpsertClause.DoUpdate.IsValid()
+}
+
 func (t *tree) sel() *rsql.SelectStatement {
 	s, _ := t.first().(*rsql.SelectStatement)
 	return s

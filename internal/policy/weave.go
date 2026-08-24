@@ -71,7 +71,8 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	w := &weaver{
 		profile: profile, q: q, maxR: maxR, kind: tree.Kind(),
 		rels: tree.Relations(), deep: tree.DeepTables(),
-		onInfo: map[int]*joinOnResult{},
+		upsertUpdate: tree.HasConflictUpdate(),
+		onInfo:       map[int]*joinOnResult{},
 	}
 	w.overread = overreadDeep(profile, fe, q, w.deep)
 	w.where = whereClause(profile, q)
@@ -179,6 +180,10 @@ type weaver struct {
 	kind    dialect.StmtKind
 	rels    []dialect.RelRef
 	deep    []dialect.TableRef
+	// upsertUpdate reports an INSERT whose ON CONFLICT DO UPDATE (MySQL:
+	// ON DUPLICATE KEY UPDATE) arm modifies rows — refused on a
+	// designated target (audit-12 M10).
+	upsertUpdate bool
 
 	// overread is the set of lowercased base-table names that some
 	// non-maximal verified rendering reads more often than the maximal
@@ -202,7 +207,7 @@ type applicability struct {
 	active bool             // the policy applies to this query at all
 }
 
-func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []dialect.RelRef, deep []dialect.TableRef) applicability {
+func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []dialect.RelRef, deep []dialect.TableRef, upsertUpdate bool) applicability {
 	var a applicability
 	topCount := map[string]int{}
 	for _, r := range rels {
@@ -224,8 +229,14 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []dialect.RelRe
 	if kind == dialect.StmtInsert {
 		// The INSERT target is never a weave target (no rows are
 		// filtered); only a read inside an INSERT … SELECT body bites,
-		// and only when the policy covers reads (design 14 §D6).
-		a.active = a.hidden && p.coversSelect()
+		// and only when the policy covers reads (design 14 §D6). One
+		// exception (owner decision 2026-08-21, audit-12 M10): an
+		// INSERT … ON CONFLICT DO UPDATE on a designated target MODIFIES
+		// rows like an UPDATE — the policy is active (to be REFUSED in
+		// apply/Enforce) when it covers updates and the target is
+		// designated.
+		a.active = (a.hidden && p.coversSelect()) ||
+			(upsertUpdate && len(a.topOcc) > 0 && p.appliesTo(dialect.StmtUpdate))
 	} else {
 		a.active = p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)
 	}
@@ -374,7 +385,7 @@ func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 // record (nil when the policy does not touch the query), the WHERE
 // conjuncts to insert, the ON-clause needs, and diagnostics.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []onNeed, []diagnostics.Diagnostic) {
-	a := analyzeApplicability(p, w.kind, w.rels, w.deep)
+	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.upsertUpdate)
 	over := designatedOverread(p, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
 		return nil, nil, nil, nil
@@ -399,6 +410,16 @@ func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []onNeed, []diagnosti
 			fmt.Sprintf("designated table %q is read only inside a non-first @choose alternative or an @order-by @default body, a rendering the weaver cannot see or scope (it works from the maximal rendering)", over[0])))
 	}
 	if w.kind == dialect.StmtInsert {
+		if w.upsertUpdate && len(a.topOcc) > 0 {
+			// An INSERT … ON CONFLICT DO UPDATE (MySQL: ON DUPLICATE KEY
+			// UPDATE) on a designated target modifies rows on a conflict,
+			// but the DO UPDATE arm cannot carry a woven WHERE that scopes
+			// the conflict — a cross-tenant unique-key collision could
+			// overwrite another tenant's row. Refuse (owner decision
+			// 2026-08-21, audit-12 M10).
+			return fail(w.unweavable(p, w.relSpan(a.topOcc[0]),
+				fmt.Sprintf("table %q is the target of an INSERT … ON CONFLICT DO UPDATE (upsert); its DO UPDATE arm modifies rows but cannot carry a scoping conjunct, so the upsert cannot be woven", a.topOcc[0].Table)))
+		}
 		return fail(w.unweavable(p, w.q.HeaderSpan,
 			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope"))
 	}

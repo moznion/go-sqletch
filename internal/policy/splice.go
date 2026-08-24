@@ -248,13 +248,29 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	// leaks the designated table's own rows, so it is a wrongJoin.
 	firstJoinAnchored := false
 	secondJoin := false
+	// naturalRight reports that the reference is the RIGHT operand of a
+	// NATURAL join. Such a join owns no ON expression, but the PG frontend
+	// folds NATURAL to JoinInner (mapJoinType), erasing that fact from
+	// ownJoin — so an ON reached without crossing a join keyword would be
+	// mis-attributed to the reference's ON-less NATURAL join and gate
+	// nothing (audit-12 H4). The introducing NATURAL keyword precedes the
+	// reference, so it is detected by a backward-aware lexical scan.
+	naturalRight := naturalIntroducesRight(profile, q, relOff)
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
 		res.found = inOn
 		res.noOn = !inOn
 		if inOn {
-			res.wrongJoin = secondJoin || !onGates(ownJoin, crossedJoinKw, crossedJoin)
+			// A located ON belongs to the reference's own introducing join
+			// only when that join can own one. For a RIGHT operand
+			// (!crossedJoinKw) whose own join is an ON-less CROSS (onGates
+			// refuses JoinCross) or NATURAL (naturalRight) join, the ON was
+			// reached from a later/enclosing join and cannot be proven to
+			// gate this occurrence's rows — a wrongJoin (audit-12 H4).
+			res.wrongJoin = secondJoin ||
+				!onGates(ownJoin, crossedJoinKw, crossedJoin) ||
+				(!crossedJoinKw && naturalRight)
 		}
 		return res
 	}
@@ -393,6 +409,11 @@ func joinKindOf(up string) dialect.JoinType {
 //   - A FULL join preserves BOTH sides, so its ON gates neither; a table
 //     on the preserved side of any outer join is null-extended farther
 //     out and its own ON does not gate it. Those are the leak cases.
+//   - A CROSS join owns no ON, so for a RIGHT operand of one a located ON
+//     always belongs to a later/enclosing join and cannot be proven to
+//     gate the reference's rows — refuse (audit-12 H4). (A LEFT-operand
+//     crossing of a CROSS keyword maps to JoinInner via joinKindOf, so
+//     the crossedJoin path never actually sees JoinCross.)
 func onGates(ownJoin dialect.JoinType, crossedJoinKw bool, crossedJoin dialect.JoinType) bool {
 	if crossedJoinKw {
 		// Left operand of crossedJoin.
@@ -407,13 +428,76 @@ func onGates(ownJoin dialect.JoinType, crossedJoinKw bool, crossedJoin dialect.J
 	}
 	// Right operand of ownJoin.
 	switch ownJoin {
-	case dialect.JoinInner, dialect.JoinCross:
+	case dialect.JoinInner:
 		return true
 	case dialect.JoinLeft:
 		return true
-	default: // JoinRight, JoinFull, and anything unexpected: refuse.
+	default: // JoinRight, JoinFull, JoinCross, and anything unexpected: refuse.
 		return false
 	}
+}
+
+// naturalIntroducesRight reports whether the relation at template offset
+// relOff is the RIGHT operand of a NATURAL join — i.e. the contiguous
+// run of join keywords that introduces the relation at its own paren
+// depth contains NATURAL. A NATURAL join owns no ON expression, so any
+// ON located after such a reference belongs to an enclosing join; the PG
+// frontend folds NATURAL to JoinInner, so this lexical check is the only
+// signal (audit-12 H4). The scan walks the item stream from the start,
+// resetting the run on paren boundaries and on any non-join content
+// token, and answers as soon as it reaches relOff.
+func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int) bool {
+	runHasNatural := false
+	for _, it := range q.Items {
+		s, isSkel := it.(*template.Skeleton)
+		if !isSkel {
+			// A construct item is a content boundary: it cannot be part of a
+			// join-keyword run, so reset.
+			runHasNatural = false
+			continue
+		}
+		src := []byte(s.Text)
+		pos := 0
+		for {
+			tok, err := profile.NextToken(src, pos)
+			if err != nil {
+				return false
+			}
+			if tok.Kind == dialect.KindEOF {
+				break
+			}
+			pos = tok.End
+			abs := s.Span.Start + tok.Start
+			switch tok.Kind {
+			case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
+				continue
+			}
+			if abs >= relOff {
+				return runHasNatural
+			}
+			switch tok.Kind {
+			case dialect.KindLParen, dialect.KindRParen:
+				// A paren boundary changes depth; the introducing run of the
+				// operand at the new depth starts fresh.
+				runHasNatural = false
+			case dialect.KindIdent:
+				up := strings.ToUpper(tok.Text)
+				if joinKeywords[up] {
+					if up == "NATURAL" {
+						runHasNatural = true
+					}
+				} else {
+					// Any other identifier (a relation name, FROM, SELECT, …)
+					// ends the current join-keyword run.
+					runHasNatural = false
+				}
+			default:
+				// Operators, commas, dots, params: not join keywords.
+				runHasNatural = false
+			}
+		}
+	}
+	return runHasNatural
 }
 
 // normalizedTokens lexes text into the same normalized form the
