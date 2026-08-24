@@ -356,7 +356,14 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 							secondJoin = true
 						}
 						continue
-					case inOn && (joinKeywords[up] || tailKeywords[up] || up == "WHERE"):
+					case inOn && (joinKeywords[up] || tailKeywords[up] || up == "WHERE" || up == "SET"):
+						// SET ends a MySQL multi-table UPDATE's join list
+						// (the ON is followed by SET, not WHERE). Without
+						// this the scan swallows the SET assignments as ON
+						// content and splices the conjunct into the assigned
+						// value — gating nothing, a silent leak (audit-14).
+						// The `!inOn` terminator above already lists SET; this
+						// mirrors it for the inside-ON scan.
 						return finish()
 					case inOn && up == "AND":
 						col.flush()
