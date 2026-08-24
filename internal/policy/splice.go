@@ -66,9 +66,14 @@ func afterOperand(tok dialect.Token, up string, cur bool) bool {
 		}
 		return cur
 	case dialect.KindIdent:
-		// AND/OR/NOT and the infix word-operators expect a right operand;
-		// any other identifier IS an operand (column/function name).
-		if up == "AND" || up == "OR" || up == "NOT" || infixOperandKeywords[up] {
+		// AND/OR/NOT, the CASE arms (CASE/WHEN/THEN/ELSE — each introduces
+		// a value at paren depth 0, the one unparenthesized operand slot in
+		// a WHERE/ON expression), and the infix word-operators expect a
+		// right operand; any other identifier (a column/function name, or
+		// END which completes the CASE value) IS an operand.
+		if up == "AND" || up == "OR" || up == "NOT" ||
+			up == "CASE" || up == "WHEN" || up == "THEN" || up == "ELSE" ||
+			infixOperandKeywords[up] {
 			return true
 		}
 		return false
