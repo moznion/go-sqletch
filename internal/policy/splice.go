@@ -28,17 +28,23 @@ var joinKeywords = map[string]bool{
 // infixOperandKeywords are word-form binary/prefix operators after which
 // an OPERAND (not a clause keyword) is expected. They keep the
 // operand-position tracker correct across `col LIKE x`, `col IS NULL`,
-// `col IN (…)`, `col BETWEEN a AND b`, etc., so a keyword-named column
-// used as their right operand (`name LIKE offset`) is not mistaken for a
-// clause terminator. The set need not be exhaustive: an omission only
-// leaves the pre-existing behavior (the RHS ident is treated as
-// operand-complete), never a new terminator misread.
+// `col IN (…)`, `col BETWEEN a AND b`, a MySQL `x = BINARY y` cast or a
+// `t + INTERVAL n DAY` term, etc., so a keyword-named column used as
+// their right operand (`name LIKE offset`, `INTERVAL offset DAY`) is not
+// mistaken for a clause terminator. The set need not be exhaustive: an
+// omission only leaves the pre-existing behavior (the RHS ident is
+// treated as operand-complete), never a new terminator misread —
+// unmodeled operators simply keep the residual, not a regression.
 var infixOperandKeywords = map[string]bool{
 	"IS": true, "IN": true, "LIKE": true, "ILIKE": true, "GLOB": true,
 	"MATCH": true, "REGEXP": true, "RLIKE": true, "BETWEEN": true,
 	"SIMILAR": true, "ESCAPE": true, "COLLATE": true, "ANY": true,
 	"ALL": true, "SOME": true, "OVERLAPS": true, "DIV": true,
 	"MOD": true, "XOR": true,
+	// Value-introducing prefix keywords lexed as identifiers (MySQL):
+	// `INTERVAL <qty> <unit>` and the `BINARY <expr>` cast both take an
+	// operand to their right (audit-18).
+	"INTERVAL": true, "BINARY": true,
 }
 
 // afterOperand reports the operand-position state produced by consuming
