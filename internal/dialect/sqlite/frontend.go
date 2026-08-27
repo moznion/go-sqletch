@@ -20,6 +20,17 @@ type Frontend struct{}
 var _ dialect.Frontend = Frontend{}
 
 func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
+	// rqlite/sql predates SQLite 3.39's RIGHT/FULL JOIN and has no operator
+	// for them: it silently parses `a RIGHT JOIN b` as `a AS "RIGHT" INNER
+	// JOIN b` (RIGHT becomes an alias). The real engine runs it as a true
+	// RIGHT/FULL OUTER JOIN, so the analyzer would see INNER and miss the
+	// null-extension — narrowing a NOT NULL column on the preserved side
+	// that the engine can return NULL for (silent for BLOB columns, where
+	// a NULL scans as nil with no error; audit-18). Detect the construct
+	// lexically and reject it, per this frontend's stated contract.
+	if pos, ok := unsupportedRightFullJoin(sqlText); ok {
+		return nil, &dialect.ParseError{Pos: pos, Msg: "RIGHT/FULL JOIN is not supported by the SQLite frontend; rewrite it as a LEFT JOIN"}
+	}
 	r2b := runeToByteTable(sqlText)
 	p := rsql.NewParser(strings.NewReader(sqlText))
 	stmts, err := p.ParseStatements()
@@ -27,6 +38,59 @@ func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
 		return nil, toParseError(err, r2b)
 	}
 	return &tree{stmts: stmts, r2b: r2b}, nil
+}
+
+// unsupportedRightFullJoin reports the byte offset of a `RIGHT`/`FULL`
+// [`OUTER`] `JOIN` keyword sequence that rqlite/sql cannot represent, so
+// the query must be rejected rather than silently mis-analyzed. A `RIGHT`
+// or `FULL` identifier introduced by `AS` is a deliberate table alias
+// (`t AS right JOIN u`), which both rqlite and the engine run as an INNER
+// join, so it is NOT flagged.
+func unsupportedRightFullJoin(sqlText string) (int, bool) {
+	prof := Profile{}
+	src := []byte(sqlText)
+	type tk struct {
+		up   string
+		off  int
+		isAS bool
+	}
+	var toks []tk
+	pos := 0
+	for {
+		t, err := prof.NextToken(src, pos)
+		if err != nil {
+			return 0, false // a lex error is surfaced by the real parse
+		}
+		if t.Kind == dialect.KindEOF {
+			break
+		}
+		pos = t.End
+		switch t.Kind {
+		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
+			continue
+		}
+		up := ""
+		if t.Kind == dialect.KindIdent {
+			up = strings.ToUpper(t.Text)
+		}
+		toks = append(toks, tk{up: up, off: t.Start, isAS: up == "AS"})
+	}
+	for i, t := range toks {
+		if t.up != "RIGHT" && t.up != "FULL" {
+			continue
+		}
+		if i > 0 && toks[i-1].isAS {
+			continue // an explicit alias, not a join keyword
+		}
+		j := i + 1
+		if j < len(toks) && toks[j].up == "OUTER" {
+			j++
+		}
+		if j < len(toks) && toks[j].up == "JOIN" {
+			return t.off, true
+		}
+	}
+	return 0, false
 }
 
 // runeToByteTable maps a rune index to its byte offset in s. rqlite/sql
