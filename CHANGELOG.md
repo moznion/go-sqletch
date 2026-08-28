@@ -1,0 +1,129 @@
+# Changelog
+
+## [v0.0.2](https://github.com/moznion/go-sqletch/compare/v0.0.1...v0.0.2) - 2026-08-28
+
+- release: introduce Songmu/tagpr for release automation by @moznion in https://github.com/moznion/go-sqletch/pull/129
+
+## [v0.0.1](https://github.com/moznion/go-sqletch/commits/v0.0.1) - 2026-08-28
+
+- Enforce the @filter-tree conjunct-anchor discipline and allow the HAVING slot by @moznion in https://github.com/moznion/go-sqletch/pull/1
+- Cross-query policy weaving and enforcement (doc 14) by @moznion in https://github.com/moznion/go-sqletch/pull/2
+- Native-inference oracle backend for MySQL (doc 15) by @moznion in https://github.com/moznion/go-sqletch/pull/3
+- codegen: keep capital runs one word in generated file names by @moznion in https://github.com/moznion/go-sqletch/pull/8
+- codegen: name generated files *.gen.go by @moznion in https://github.com/moznion/go-sqletch/pull/9
+- codegen/runtime: make a required scope impossible to omit or nil by @moznion in https://github.com/moznion/go-sqletch/pull/10
+- codegen: give each policy parameter a distinct named type by @moznion in https://github.com/moznion/go-sqletch/pull/11
+- runtime: cut the query hot path to one allocation and scale cache hits by @moznion in https://github.com/moznion/go-sqletch/pull/12
+- cache: detect the server a committed cache was generated against by @moznion in https://github.com/moznion/go-sqletch/pull/13
+- cli: make explain's shape cap a diagnostic, add --max-shapes by @moznion in https://github.com/moznion/go-sqletch/pull/15
+- cli/config: make the exhaustive shape cap configurable (verification.max_shapes) by @moznion in https://github.com/moznion/go-sqletch/pull/16
+- template/runtime: enforce the shape key's structural limits by @moznion in https://github.com/moznion/go-sqletch/pull/17
+- runtime: bound @in arity and filter-tree traversal by @moznion in https://github.com/moznion/go-sqletch/pull/18
+- scanner/codegen/lsp: close three residual unchecked bounds by @moznion in https://github.com/moznion/go-sqletch/pull/19
+- codegen: adopt go-optional (Option[T]) across the generated surface, add :maybe-one by @moznion in https://github.com/moznion/go-sqletch/pull/21
+- config: migrate YAML decoding off the archived yaml.v3 to goccy/go-yaml by @moznion in https://github.com/moznion/go-sqletch/pull/23
+- nullability: gate SrcRel narrowing on provenance trust (soundness) by @moznion in https://github.com/moznion/go-sqletch/pull/20
+- Runtime metrics for generated executors (design doc 18) by @moznion in https://github.com/moznion/go-sqletch/pull/22
+- go.mod: bump protobuf / testcontainers-go / ncruces-go-sqlite3 by @moznion in https://github.com/moznion/go-sqletch/pull/25
+- contrib/otel: tidy go.mod against the root module's otel bump by @moznion in https://github.com/moznion/go-sqletch/pull/33
+- e2e/fuzz: continuous verdict-soundness verification lane by @moznion in https://github.com/moznion/go-sqletch/pull/24
+- e2e: pin trust in MySQL's engine-computed view nullability by @moznion in https://github.com/moznion/go-sqletch/pull/26
+- nullability/cli: explain per-column reasons + null_overrides hygiene by @moznion in https://github.com/moznion/go-sqletch/pull/27
+- nullability: sound precision pack (total exprs, GROUP BY aggregates, skeleton IS NOT NULL) by @moznion in https://github.com/moznion/go-sqletch/pull/28
+- dialect: tighten SQLite's carve-outs, name MySQL's SET by @moznion in https://github.com/moznion/go-sqletch/pull/32
+- cache/nullability: drop vestigial entry field; close the PG inheritance hole by @moznion in https://github.com/moznion/go-sqletch/pull/29
+- nullability: recursive CTE/derived-table provenance analysis by @moznion in https://github.com/moznion/go-sqletch/pull/34
+- config: remove ${VAR} environment expansion (secret-exfil / SSRF vector) by @moznion in https://github.com/moznion/go-sqletch/pull/35
+- nullability: treat SQLite views as a provenance kill-switch (view-piercing unsound narrowing) by @moznion in https://github.com/moznion/go-sqletch/pull/36
+- nullability: positional CTE scoping (forward CTE-name reference dropped null-extension hazard) by @moznion in https://github.com/moznion/go-sqletch/pull/37
+- sqlite: translate rqlite rune offsets to byte offsets (silent unsound narrowing on multibyte SQL) by @moznion in https://github.com/moznion/go-sqletch/pull/38
+- docs: commit the doc-16 scoped-executors design; tidy docs/design/ by @moznion in https://github.com/moznion/go-sqletch/pull/39
+- devdb: gate destructive schema reset to self-provisioned databases by @moznion in https://github.com/moznion/go-sqletch/pull/40
+- contrib/otel: add README by @moznion in https://github.com/moznion/go-sqletch/pull/42
+- Upgrade go runtime: 1.27rc2 -> 1.27rc3 by @moznion in https://github.com/moznion/go-sqletch/pull/41
+- codegen/scanner: reject ambiguous leading-zero and overflowing @when integer literals by @moznion in https://github.com/moznion/go-sqletch/pull/43
+- policy: reject policy-parameter collision with optional/control query params by @moznion in https://github.com/moznion/go-sqletch/pull/44
+- ast/cli: cap total renderings to the shape budget (crafted-template OOM) by @moznion in https://github.com/moznion/go-sqletch/pull/45
+- runtime: flush deferred publish, bound cache bytes, remove otel hot-path lock by @moznion in https://github.com/moznion/go-sqletch/pull/46
+- cache/cli/config: symlink-safe writes, bounded cache reads, contained output paths by @moznion in https://github.com/moznion/go-sqletch/pull/47
+- dialect/mysql: order native catalog by information_schema collation (byte-identity) by @moznion in https://github.com/moznion/go-sqletch/pull/48
+- dialect/sqlite: expose WITH and UPDATE…FROM relations to the policy weaver by @moznion in https://github.com/moznion/go-sqletch/pull/49
+- lsp: bound header reads and memoize catalog/per-query analysis across keystrokes by @moznion in https://github.com/moznion/go-sqletch/pull/50
+- docs: document R3 qualified-ref subquery-shadowing limitation by @moznion in https://github.com/moznion/go-sqletch/pull/51
+- codegen: validate oracle-derived Go identifiers and complete the reserved-locals set by @moznion in https://github.com/moznion/go-sqletch/pull/52
+- dialect: correct plan-stage error offsets, mysql relation locating, sqlite trailing-comment by @moznion in https://github.com/moznion/go-sqletch/pull/53
+- runtime: atomic observer install and non-panicking ComposeStyle on shape-key limit by @moznion in https://github.com/moznion/go-sqletch/pull/54
+- scanner/diagnostics: CR-only line ends, skip leading BOM, O(n+d) diagnostic rendering by @moznion in https://github.com/moznion/go-sqletch/pull/55
+- lsp: canonicalize URIs, degrade on unreadable files, fix JSON-RPC id/response handling by @moznion in https://github.com/moznion/go-sqletch/pull/56
+- rules: innermost-first scope resolution for qualified refs (R3 subquery-shadowing false positive) by @moznion in https://github.com/moznion/go-sqletch/pull/57
+- dialect/mysql: refuse WITH (CTE) in the native oracle (fail-closed SQLETCH214) by @moznion in https://github.com/moznion/go-sqletch/pull/59
+- nullability: fix deeper-CTE env and PG/MySQL view-provenance unsound narrows by @moznion in https://github.com/moznion/go-sqletch/pull/60
+- lsp: bound position conversion (quadratic hang) and absolutize config paths (false duplicates) by @moznion in https://github.com/moznion/go-sqletch/pull/61
+- Bound three adversarial-input DoS blowups (scanner/gosrc/diagnostics) by @moznion in https://github.com/moznion/go-sqletch/pull/62
+- rules/facades: stop ScopeAliases over-collection (R3 qualified-ref soundness) by @moznion in https://github.com/moznion/go-sqletch/pull/63
+- policy: refuse designated reads confined to non-maximal renderings (silent tenant leak) by @moznion in https://github.com/moznion/go-sqletch/pull/64
+- config: refuse cache/output paths escaping the project via a symlinked directory (SQLETCH306) by @moznion in https://github.com/moznion/go-sqletch/pull/58
+- Upgrade go1.27.0 by @moznion in https://github.com/moznion/go-sqletch/pull/65
+- build(deps): bump google.golang.org/protobuf from 1.36.11 to 1.36.12 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/66
+- build(deps): bump go.opentelemetry.io/otel/sdk from 1.41.0 to 1.43.0 in /contrib/otel in the go_modules group across 1 directory by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/67
+- build(deps): bump github.com/moby/go-archive from 0.2.0 to 0.3.0 in the go_modules group across 1 directory by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/68
+- Reland: native-oracle differential fuzz + adversarial corpus case (doc 15 §7.3) by @moznion in https://github.com/moznion/go-sqletch/pull/69
+- Reland: ON-clause weaving for outer-join occurrences (D2a) + OR-precedence fix by @moznion in https://github.com/moznion/go-sqletch/pull/70
+- dialect/sqlite: narrow the rowid-alias heuristic (NULLable PK marked NOT NULL) by @moznion in https://github.com/moznion/go-sqletch/pull/71
+- nullability: poison tables of data-modifying CTE bodies (provenance-trust soundness) by @moznion in https://github.com/moznion/go-sqletch/pull/72
+- dialect/mysql: fail-closed native oracle for JOIN ON/USING, NATURAL/USING, duplicate aliases, multi-table DELETE by @moznion in https://github.com/moznion/go-sqletch/pull/73
+- lsp: isolate per-message panics so a bad buffer can't crash-loop the server by @moznion in https://github.com/moznion/go-sqletch/pull/74
+- template: reject non-plain @when string literals (silently dead guard) by @moznion in https://github.com/moznion/go-sqletch/pull/75
+- dialect/mysql: track FROM context in lexical relation-location recovery (soundness) by @moznion in https://github.com/moznion/go-sqletch/pull/76
+- policy: refuse D2a ON-weaving when the located ON is not the null-extending join (tenant leak) by @moznion in https://github.com/moznion/go-sqletch/pull/77
+- codegen: complete the SQLETCH307 identifier gate (uncompilable generated modules) by @moznion in https://github.com/moznion/go-sqletch/pull/78
+- rules: close three R3/R2 soundness holes (guarded derived tables, output-alias masking, case-insensitive dialects) by @moznion in https://github.com/moznion/go-sqletch/pull/79
+- policy: refuse D2a ON-weaving across an ON-less CROSS join (tenant leak) by @moznion in https://github.com/moznion/go-sqletch/pull/80
+- nullability: memoize CTE body analysis (exponential re-analysis DoS) by @moznion in https://github.com/moznion/go-sqletch/pull/81
+- codegen: gate colliding required-arg names (SQLETCH307; uncompilable module) by @moznion in https://github.com/moznion/go-sqletch/pull/82
+- dialect/sqlite: make table-valued-function FROM sources visible to rules/policy by @moznion in https://github.com/moznion/go-sqletch/pull/83
+- dialect/mysql: fix FROM-region regression, refuse schema-qualified native FROM, handle executable comments by @moznion in https://github.com/moznion/go-sqletch/pull/84
+- rules: forbid mixing @in and scalar binds of one param; case-fold the R7 INSERT-column check by @moznion in https://github.com/moznion/go-sqletch/pull/85
+- hardening: guard RenderExcerpt against negative spans; dotted-prefix version pin for MySQL/PG by @moznion in https://github.com/moznion/go-sqletch/pull/86
+- config: bound YAML alias expansion (billion-laughs DoS) and path-escape-check input globs by @moznion in https://github.com/moznion/go-sqletch/pull/87
+- gosrc: bound each const's scan view to its own extent (quadratic CPU on many consts) by @moznion in https://github.com/moznion/go-sqletch/pull/88
+- template: fix ON CONFLICT phantom VALUES row / WhereKwEnd and directive-comment mis-attachment by @moznion in https://github.com/moznion/go-sqletch/pull/89
+- template: gate ON CONFLICT detection on INSERT (spurious WhereKwEnd suppression) by @moznion in https://github.com/moznion/go-sqletch/pull/90
+- config: bound YAML structural nesting depth before parsing (deep-nesting OOM DoS) by @moznion in https://github.com/moznion/go-sqletch/pull/91
+- dialect/mysql: don't close FROM region on a keyword alias; fail closed on executable-comment placeholder count by @moznion in https://github.com/moznion/go-sqletch/pull/92
+- template: clear pending join-ON on CROSS/NATURAL join so ON CONFLICT is recognized by @moznion in https://github.com/moznion/go-sqletch/pull/93
+- config: kill O(n^2) YAML error formatting and bound block-context nesting (relocated DoS) by @moznion in https://github.com/moznion/go-sqletch/pull/94
+- template: arm crossNaturalPending only in join position; pin INSERT-read refusal invariant by @moznion in https://github.com/moznion/go-sqletch/pull/95
+- config: bound total YAML structural complexity to stop flat-width parser O(n^2) DoS by @moznion in https://github.com/moznion/go-sqletch/pull/96
+- template: gate CROSS/NATURAL/STRAIGHT_JOIN arming to FROM context (ON-CONFLICT misclassification) by @moznion in https://github.com/moznion/go-sqletch/pull/97
+- docs: document the config/template trust boundary (threat model) by @moznion in https://github.com/moznion/go-sqletch/pull/98
+- config: reject literal tabs before tokenizing and tighten the size cap (defense-in-depth) by @moznion in https://github.com/moznion/go-sqletch/pull/99
+- dialect/mysql: refuse non-arity-0 subqueries in the native oracle (multi-column ER_OPERAND_COLUMNS) by @moznion in https://github.com/moznion/go-sqletch/pull/100
+- config: reject on excessive tab COUNT, not any tab (fix false-reject of tabs in comments/strings) by @moznion in https://github.com/moznion/go-sqletch/pull/101
+- ci: run the devdb corpus ground-truth tests in the e2e job by @moznion in https://github.com/moznion/go-sqletch/pull/102
+- dialect/mysql: refuse schema-qualified/quoted dual and param markers in inertSubquery by @moznion in https://github.com/moznion/go-sqletch/pull/103
+- dialect/mysql: range-check ordinal_position before int16 narrowing in Snapshot by @moznion in https://github.com/moznion/go-sqletch/pull/104
+- runtime: reject filter-tree leaves whose arg count mismatches the predicate by @moznion in https://github.com/moznion/go-sqletch/pull/105
+- runtime: rate-cap the mutex-path snapshot flush to amortize churn by @moznion in https://github.com/moznion/go-sqletch/pull/106
+- lsp,cli: cap the tracked-open-document set and the per-file memo by @moznion in https://github.com/moznion/go-sqletch/pull/107
+- codegen: pin compose conformance for policy-woven templates by @moznion in https://github.com/moznion/go-sqletch/pull/108
+- policy: weave/enforce symmetry — parenthesized splice, placeholder-free mirror, tail placement, synth source map by @moznion in https://github.com/moznion/go-sqletch/pull/109
+- runtime: validate filter-tree leaf arity on the cache-hit path (audit-12 M1) by @moznion in https://github.com/moznion/go-sqletch/pull/110
+- config,cli: close SQLETCH306 file: URI path-escape bypass (audit-12 M2) by @moznion in https://github.com/moznion/go-sqletch/pull/111
+- nullability,postgres,rules: fix 4 audit-12 soundness findings (H1/H2/H3/M5) by @moznion in https://github.com/moznion/go-sqletch/pull/112
+- sqlite: close IN-table leak + probe/insert-schema findings (audit-12 H5/M6/M8) by @moznion in https://github.com/moznion/go-sqletch/pull/113
+- mysql: qualified-func nullability, STRAIGHT_JOIN, native fail-open (audit-12 H2/M4/M7) by @moznion in https://github.com/moznion/go-sqletch/pull/114
+- policy: close weaving leaks — D2a wrong-join, predicate relation, upsert (audit-12 H4/M9/M10) by @moznion in https://github.com/moznion/go-sqletch/pull/115
+- sqlite: close window-clause tenant leak (audit-13) by @moznion in https://github.com/moznion/go-sqletch/pull/116
+- sqlite: close upsert/DELETE-RETURNING/VALUES hidden-read leaks (audit-14) by @moznion in https://github.com/moznion/go-sqletch/pull/117
+- policy: end ON-weave scan at SET — MySQL multi-table UPDATE leak (audit-14) by @moznion in https://github.com/moznion/go-sqletch/pull/118
+- policy: don't read a dotted keyword-column as a clause terminator (audit-15 leak) by @moznion in https://github.com/moznion/go-sqletch/pull/119
+- policy: classify clause keywords by operand position (audit-16 bare-keyword-column leak) by @moznion in https://github.com/moznion/go-sqletch/pull/120
+- policy: treat CASE arms as operand-introducing (audit-17 keyword-column-in-CASE leak) by @moznion in https://github.com/moznion/go-sqletch/pull/121
+- policy: treat INTERVAL/BINARY as operand-introducing (audit-18 prefix keyword-column leak) by @moznion in https://github.com/moznion/go-sqletch/pull/122
+- sqlite: reject RIGHT/FULL JOIN misread as an alias (audit-18 nullability leak) by @moznion in https://github.com/moznion/go-sqletch/pull/123
+- policy: recognize depth-0 AND/OR regardless of operand position (audit-19 leak) by @moznion in https://github.com/moznion/go-sqletch/pull/124
+- e2e: remove accidentally-committed audit probe test file by @moznion in https://github.com/moznion/go-sqletch/pull/125
+- nullability: don't trust SQLite sublink provenance for a scalar subquery (audit-19 BLOB leak) by @moznion in https://github.com/moznion/go-sqletch/pull/126
+- nullability: poison a descended body whose projection is a sublink (audit-20 BLOB leak) by @moznion in https://github.com/moznion/go-sqletch/pull/127
+- nullability: suppress narrowing when a star hides a sublink (audit-21 BLOB leak) by @moznion in https://github.com/moznion/go-sqletch/pull/128
