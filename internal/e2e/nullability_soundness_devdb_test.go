@@ -626,6 +626,14 @@ CREATE TABLE upd_members (
     id     INTEGER PRIMARY KEY,
     org_id INTEGER
 );
+-- tags carries a BLOB NOT NULL column read by a scalar-subquery
+-- projection (audit-19): SQLite attributes the sublink column through to
+-- tags.label, but the subquery returns NULL on zero matches.
+CREATE TABLE tags (
+    id     INTEGER PRIMARY KEY,
+    doc_id INTEGER,
+    label  BLOB NOT NULL
+);
 `
 
 var sqliteNullSoundCases = []struct {
@@ -641,6 +649,18 @@ FROM members AS m LEFT JOIN orgs AS o ON o.id = m.org_id
 ORDER BY m.id;
 `,
 		note: "sanity: direct LEFT JOIN handling",
+	},
+	{
+		name: "scalar_subquery_projection_blob",
+		src: `-- name: SiblingLabel :many
+SELECT t.label AS own_label,
+       (SELECT s.label FROM tags AS s
+        WHERE s.doc_id = t.doc_id AND s.id <> t.id
+        ORDER BY s.id LIMIT 1) AS sibling_label
+FROM tags AS t
+ORDER BY t.id;
+`,
+		note: "SQLite attributes the scalar-subquery column sibling_label through the sublink to tags.label (BLOB NOT NULL), and tags is also present non-null-extended in the outer FROM — but the subquery yields NULL on zero matches, so sibling_label must stay nullable (audit-19). own_label is a real column reference and stays non-null.",
 	},
 	{
 		name: "view_with_internal_left_join",
@@ -776,6 +796,9 @@ func TestSQLiteNullabilitySoundnessAdversarial(t *testing.T) {
 INSERT INTO orgs VALUES (1, 'acme');
 INSERT INTO members VALUES (1, 'a@example.com', 1), (2, 'b@example.com', NULL);
 INSERT INTO upd_members VALUES (1, 5);
+-- one tag whose doc has no sibling: the sibling scalar subquery matches
+-- zero rows and yields NULL for its BLOB column.
+INSERT INTO tags VALUES (1, 100, x'aa');
 `); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

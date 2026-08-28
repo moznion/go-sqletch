@@ -150,7 +150,15 @@ type TargetItem struct {
 	// a non-nullable column of a non-null-extended relation is
 	// non-null when every output row's group is non-empty.
 	AggArg []string
-	Loc    int
+	// Sublink marks a projection item that IS a scalar subquery
+	// (`(SELECT …)`). Such a column can be NULL when the subquery matches
+	// no rows, regardless of the subquery column's catalog nullability.
+	// PostgreSQL/MySQL report no base-table provenance for it (SrcRel=0),
+	// but SQLite's sqlite3_column_origin_name resolves THROUGH the sublink
+	// to the base column, so the analyzer must not trust that provenance
+	// for a Sublink item (audit-19).
+	Sublink bool
+	Loc     int
 }
 
 // Tree is the narrow dialect-AST facade the rules engine consumes.

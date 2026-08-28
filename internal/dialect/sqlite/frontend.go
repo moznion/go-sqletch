@@ -1184,6 +1184,28 @@ func exprPos(e rsql.Expr) int {
 	}
 }
 
+// isScalarSubquery reports whether a projection expression IS a scalar
+// subquery `(SELECT …)` (possibly wrapped in redundant parens). SQLite
+// attributes such a column's provenance THROUGH the subquery to the base
+// column, which is unsound for nullability (the subquery yields NULL on
+// zero matches); the analyzer must not narrow it. An expression that
+// merely CONTAINS a subquery (`(SELECT …) + 0`, `coalesce((SELECT …),x)`)
+// already loses SQLite's attribution, so only the bare form matters.
+func isScalarSubquery(e rsql.Expr) bool {
+	for {
+		switch v := e.(type) {
+		case *rsql.ParenExpr:
+			e = v.X
+		case rsql.SelectExpr:
+			return true
+		case *rsql.SelectExpr:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 func (t *tree) TargetItems() []dialect.TargetItem {
 	sel := t.sel()
 	if sel == nil {
@@ -1225,6 +1247,7 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 				}
 			}
 			item.Total = totalExpr(rc.Expr)
+			item.Sublink = isScalarSubquery(rc.Expr)
 		}
 		out = append(out, item)
 	}

@@ -187,8 +187,13 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 			continue
 		}
 		// Direct column reference: catalog NOT NULL, provided the
-		// source relation is trusted, present, and not null-extended.
-		if col.SrcRel != 0 && cat != nil {
+		// source relation is trusted, present, and not null-extended. A
+		// scalar-subquery projection is NOT a direct reference — SQLite
+		// resolves its provenance through the sublink to the base column,
+		// but the sublink yields NULL on zero matches, so that provenance
+		// must not be trusted (audit-19; PG/MySQL report SrcRel=0 here).
+		sublink := aligned && targets[i].Sublink
+		if col.SrcRel != 0 && cat != nil && !sublink {
 			out[i] = srcVerdict(col, cat, trustSrc, untrusted, present, filtered)
 			continue
 		}
