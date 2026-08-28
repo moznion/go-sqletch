@@ -663,6 +663,28 @@ ORDER BY t.id;
 		note: "SQLite attributes the scalar-subquery column sibling_label through the sublink to tags.label (BLOB NOT NULL), and tags is also present non-null-extended in the outer FROM — but the subquery yields NULL on zero matches, so sibling_label must stay nullable (audit-19). own_label is a real column reference and stays non-null.",
 	},
 	{
+		name: "sublink_in_derived_table_body",
+		src: `-- name: SublinkInDerived :many
+SELECT d.sl FROM (
+  SELECT (SELECT s.label FROM tags AS s WHERE s.id = t.id + 999) AS sl
+  FROM tags AS t
+) AS d
+ORDER BY d.sl;
+`,
+		note: "the scalar subquery lives in a DERIVED-TABLE body's projection; SQLite resolves d.sl through the derived table and the sublink to tags.label (BLOB), and tags is present via the body's own FROM — the top-level TargetItem.Sublink guard never reaches it, so d.sl must stay nullable (audit-20). The subquery matches zero rows → NULL.",
+	},
+	{
+		name: "sublink_in_cte_body",
+		src: `-- name: SublinkInCTE :many
+WITH c AS (
+  SELECT (SELECT s.label FROM tags AS s WHERE s.id = t.id + 999) AS sl
+  FROM tags AS t
+)
+SELECT c.sl FROM c ORDER BY c.sl;
+`,
+		note: "same as sublink_in_derived_table_body but through a CTE body (audit-20).",
+	},
+	{
 		name: "view_with_internal_left_join",
 		src: `-- name: ViaView :many
 SELECT v.member_id, v.email, v.org_name

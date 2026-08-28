@@ -553,6 +553,20 @@ func mergePresence(dst map[uint32]*presence, delta map[uint32]presence) {
 	}
 }
 
+// hasSublinkProjection reports whether any of a body's projection items
+// is a scalar subquery (TargetItem.Sublink). Only the SQLite frontend
+// sets that flag — the dialect whose column-origin attribution resolves
+// THROUGH a sublink to a base column — so on PostgreSQL/MySQL this is
+// always false and descend's behavior is unchanged (audit-20).
+func hasSublinkProjection(sub dialect.Tree) bool {
+	for _, ti := range sub.TargetItems() {
+		if ti.Sublink {
+			return true
+		}
+	}
+	return false
+}
+
 // descend enters one subquery. A nil tree cannot occur here: a
 // data-modifying CTE never reaches descend (its poisoning is handled
 // at the reference site in collectPresence, where its PoisonTables are
@@ -586,7 +600,17 @@ func descend(sub dialect.Tree, recursive bool, env map[string]cteBinding,
 	// bodies poison without descending), so no key is re-entered before it
 	// is stored.
 	scratch := map[uint32]*presence{}
-	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() {
+	if recursive || sub.HasSetOperation() || sub.HasGroupingSets() || hasSublinkProjection(sub) {
+		// A body whose projection is a scalar subquery is a hazard on
+		// SQLite: sqlite3_column_origin_name resolves the outer column
+		// THROUGH the derived table / CTE and through the sublink to the
+		// base column, so an outer reference to that body column would
+		// narrow via provenance the body's own FROM grants — but the
+		// sublink yields NULL on zero matches. The top-level guard
+		// (TargetItem.Sublink) only reaches the analyzed statement's own
+		// projection; poisoning every table this body mentions closes the
+		// nested case (audit-20; PG/MySQL never set Sublink and report no
+		// through-provenance, so this is a no-op there).
 		poison(sub.DeepTables(), cat, scratch)
 	} else {
 		collectPresence(sub, env, maxR, cat, nullExt, scratch, res, false, memo)
