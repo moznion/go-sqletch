@@ -216,11 +216,13 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 					}
 					continue
 				}
-				if tok.Kind == dialect.KindIdent && !expectOperand {
-					if tailKeywords[up] {
-						col.flush()
-						return col.cs
-					}
+				if tok.Kind == dialect.KindIdent && !dotted {
+					// AND/OR are reserved in every dialect and can never be a
+					// bare column, so they are recognized regardless of the
+					// operand-position state. This makes a keyword-column
+					// mis-classification (a bare `binary`/`glob`/… wrongly
+					// left in operand position) unable to hide a following
+					// depth-0 OR — the wrap always fires (audit-19).
 					if up == "AND" {
 						col.flush()
 						expectOperand = true
@@ -231,6 +233,14 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 						col.flush()
 						expectOperand = true
 						continue
+					}
+					// A tailKeyword ends the clause only in OPERATOR
+					// position; in operand position it is a column (a
+					// non-reserved word like `offset`/`window` bare, or any
+					// reserved word after `.`).
+					if !expectOperand && tailKeywords[up] {
+						col.flush()
+						return col.cs
 					}
 				}
 			}
@@ -461,28 +471,29 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 						continue
 					}
 				}
-				// Inside the ON expression, classify a keyword as a
-				// boundary only in OPERATOR position; in OPERAND position it
-				// is a column even when spelled `group`/`window`/… — see
-				// afterOperand and audit-15/16.
-				if depth == 0 && inOn && !expectOperand {
-					switch {
-					case joinKeywords[up] || tailKeywords[up] || up == "WHERE" || up == "SET":
-						// SET ends a MySQL multi-table UPDATE's join list
-						// (the ON is followed by SET, not WHERE). Without
-						// this the scan swallows the SET assignments as ON
-						// content and splices the conjunct into the assigned
-						// value — gating nothing, a silent leak (audit-14).
-						return finish()
-					case up == "AND":
+				if depth == 0 && inOn && !dotted {
+					// AND/OR are reserved in every dialect and never a bare
+					// column, so recognize them regardless of operand
+					// position — a keyword-column mis-classification can't
+					// hide a depth-0 OR inside the ON (audit-19).
+					if up == "AND" {
 						col.flush()
 						expectOperand = true
 						continue
-					case up == "OR":
+					}
+					if up == "OR" {
 						col.cs.hasOR = true
 						col.flush()
 						expectOperand = true
 						continue
+					}
+					// A join/tail/WHERE/SET keyword ends the ON only in
+					// OPERATOR position; in operand position it is a column
+					// (`group`/`window`/… — see afterOperand, audit-15/16).
+					// SET ends a MySQL multi-table UPDATE's join list, the ON
+					// being followed by SET not WHERE (audit-14).
+					if !expectOperand && (joinKeywords[up] || tailKeywords[up] || up == "WHERE" || up == "SET") {
+						return finish()
 					}
 				}
 			}
