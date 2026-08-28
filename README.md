@@ -13,10 +13,15 @@ selects and concatenates those pre-verified constants.
 One sentence positioning: **a query builder's everyday dynamism,
 authored the sqlc way.**
 
-> **Status: v1.0.** PostgreSQL, MySQL, and SQLite. The template
+> **Status: v0.0.1 — first published release.** PostgreSQL, MySQL, and
+> SQLite. The feature set is the v1 design freeze: the template
 > language, the generated API, the `runtime` package, `sqletch.yaml`,
 > the CLI, and the meanings of the `SQLETCHnnn` diagnostic codes are
-> stable for all of v1 — see
+> all implemented and intended to be final. The *promise* is not made
+> yet — a v0.x version number carries no compatibility guarantee under
+> semantic versioning, so pin an exact version and read the release
+> notes when you bump. What v1.0.0 will freeze, and what may still
+> change before it, is in
 > [compatibility and versioning](docs/manual/11-compatibility.md).
 
 ## The problem

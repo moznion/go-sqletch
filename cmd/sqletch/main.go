@@ -19,6 +19,10 @@ import (
 // version with no release tooling.
 var version = ""
 
+// versionLine is the template both spellings of the version render:
+// the binary's name and the resolved version, nothing else.
+const versionLine = "sqletch {{.Version}}"
+
 func resolvedVersion() string {
 	if version != "" {
 		return version
@@ -30,6 +34,15 @@ func resolvedVersion() string {
 }
 
 func main() {
+	if err := newRootCommand().Execute(); err != nil {
+		os.Exit(cli.ExitEnvironment)
+	}
+}
+
+// newRootCommand builds the whole command tree. It exists as a
+// function so tests can execute a command without going through
+// os.Exit.
+func newRootCommand() *cobra.Command {
 	var configPath string
 	var jsonFormat bool
 
@@ -38,7 +51,11 @@ func main() {
 		Short:         "statically verified, dynamically composed SQL for Go",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       resolvedVersion(),
 	}
+	// `--version` and the `version` subcommand print the same line: one
+	// spelling of the version, whichever the user reaches for.
+	root.SetVersionTemplate(versionLine + "\n")
 	root.PersistentFlags().StringVar(&configPath, "config", "sqletch.yaml", "path to sqletch.yaml")
 	root.PersistentFlags().BoolVar(&jsonFormat, "json", false, "emit diagnostics as JSON lines")
 
@@ -129,7 +146,5 @@ func main() {
 		},
 	})
 
-	if err := root.Execute(); err != nil {
-		os.Exit(cli.ExitEnvironment)
-	}
+	return root
 }

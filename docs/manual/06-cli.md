@@ -1,7 +1,7 @@
 # CLI reference
 
 Global flags: `--config sqletch.yaml` (path), `--json` (diagnostics as
-JSON lines on stderr).
+JSON lines on stderr), `--version` (print the version and exit).
 
 | Command | What it does |
 | --- | --- |
@@ -10,7 +10,7 @@ JSON lines on stderr).
 | `sqletch explain` | Per-query summary: guard bits, cases, shape count, parameter and column types, [policy coverage](12-policies.md) (woven / opted out with reason), maximal SQL (reads the data written by the last generate). `--enumerate` prints every shape's SQL (cap 4096). `--analyze` runs the dialect's plan explainer on every shape against the dev database (cap 64). `--max-shapes N` raises either cap; stopping at one is SQLETCH304 — a warning under `--enumerate`, an error (exit 1) under `--analyze`. |
 | `sqletch fmt` | Canonicalizes construct layout and inserts missing `TRUE` anchors. Skeleton SQL is preserved byte-for-byte; fmt∘fmt = fmt. `--check` lists files that would change (exit 1) instead of writing. |
 | `sqletch lsp` | The language server over stdio ([editors](09-editors.md)). Strictly offline. |
-| `sqletch version` | Prints the version. |
+| `sqletch version` | Prints the version — the same line as `sqletch --version`. Build-time `-ldflags="-X main.version=…"` wins; otherwise it comes from the module build info, so `go install …@vX.Y.Z` reports the right version with no release tooling. |
 
 `generate` and `check` also take `--allow-server-drift`: accept a
 committed cache generated against a different server version than the

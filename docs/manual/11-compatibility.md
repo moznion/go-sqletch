@@ -1,13 +1,34 @@
 # Compatibility and versioning
 
 sqletch follows semantic versioning on a single Go module,
-`github.com/moznion/go-sqletch`. This chapter states what stays stable
-for the whole of v1 and what may still change under you, so that
-upgrading is a decision you can make from the version number alone.
+`github.com/moznion/go-sqletch`. The published version is currently
+**v0.x**, and semantic versioning promises nothing below v1.0.0. This
+chapter therefore states two things: the contract v1.0.0 will freeze,
+so that upgrading becomes a decision you can make from the version
+number alone, and what may still change under you before then.
 
 `sqletch version` prints the release you have.
 
-## The promises
+## Where v0.x stands
+
+Every surface named below is implemented and intended to be final —
+the freeze audit behind them is
+[`docs/design/12-v1.md`](../design/12-v1.md). What v0.x withholds is
+the *promise*, not the feature:
+
+- Any release may make a breaking change to any of those surfaces: the
+  template language, the generated API, the `runtime` package,
+  `sqletch.yaml`, the CLI, the meanings of diagnostic codes.
+- Breaking changes are called out in the release notes, but the
+  version number alone will not warn you — under semver a v0 major
+  carries no such signal, so v0.0.1 → v0.0.2 may break you.
+- Pin an exact version, and read the release notes when you bump.
+
+Everything under *The promises* below therefore reads as **stable from
+v1.0.0 on**. Nothing there is weaker in intent today; it is simply not
+yet backed by the version number.
+
+## The promises (from v1.0.0)
 
 ### Template language
 
@@ -110,6 +131,8 @@ committed before the record existed keep working unchanged.
 
 ## What is not promised
 
+- Anything at all, before v1.0.0 — see *Where v0.x stands* above. The
+  list below is what stays unpromised once v1.0.0 ships.
 - Message text of diagnostics, and the layout of human-readable CLI
   output.
 - The internal packages (`internal/...`) — not importable, by
@@ -133,6 +156,8 @@ committed before the record existed keep working unchanged.
 
 If step 2 or 3 surfaces a new diagnostic on an unchanged template, that
 is a bug in the release — the promises above say it should not happen.
+While the version is v0.x it may instead be a deliberate breaking
+change; the release notes say which.
 
 ### One-time step: the `.gen.go` rename
 
