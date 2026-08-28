@@ -1,0 +1,14 @@
+# tagpr (https://github.com/Songmu/tagpr) keeps a release pull request
+# open for the unreleased changes on main; merging it tags the commit
+# and publishes the GitHub Release.
+[tagpr]
+	releaseBranch = main
+	vPrefix = true
+	# Tag-only: the binary's version is not stored in any file. It comes
+	# from -ldflags="-X main.version=…" at build time and otherwise from
+	# the module's build info (see cmd/sqletch/main.go), so there is
+	# nothing for tagpr to rewrite — and auto-detection must not go
+	# looking for a version file under examples/ or internal/.
+	versionFile = -
+	changelog = true
+	release = true

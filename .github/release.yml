@@ -1,0 +1,6 @@
+# Configures GitHub's generated release notes, which tagpr turns into
+# both the CHANGELOG.md entry and the GitHub Release body.
+changelog:
+  exclude:
+    labels:
+      - tagpr
