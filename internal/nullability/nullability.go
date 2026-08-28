@@ -169,9 +169,13 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	// equal lengths.
 	targets := maxTree.TargetItems()
 	aligned := len(targets) == len(desc.Columns)
+	hasSublinkTarget := false
 	for _, ti := range targets {
 		if ti.Star {
 			aligned = false
+		}
+		if ti.Sublink {
+			hasSublinkTarget = true
 		}
 	}
 
@@ -192,8 +196,15 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 		// resolves its provenance through the sublink to the base column,
 		// but the sublink yields NULL on zero matches, so that provenance
 		// must not be trusted (audit-19; PG/MySQL report SrcRel=0 here).
-		sublink := aligned && targets[i].Sublink
-		if col.SrcRel != 0 && cat != nil && !sublink {
+		// When a `*` is in the projection the target items cannot be
+		// index-aligned to desc columns, so a per-column Sublink flag is
+		// unavailable — if ANY target is a sublink we then cannot tell
+		// which desc column it is, so no through-attributed column may be
+		// narrowed (audit-21; a star + a sublink over a BLOB otherwise
+		// narrows the sublink column that returns NULL on zero matches).
+		suppressSrc := (aligned && targets[i].Sublink) ||
+			(!aligned && hasSublinkTarget)
+		if col.SrcRel != 0 && cat != nil && !suppressSrc {
 			out[i] = srcVerdict(col, cat, trustSrc, untrusted, present, filtered)
 			continue
 		}

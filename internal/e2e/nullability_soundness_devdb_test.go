@@ -685,6 +685,16 @@ SELECT c.sl FROM c ORDER BY c.sl;
 		note: "same as sublink_in_derived_table_body but through a CTE body (audit-20).",
 	},
 	{
+		name: "star_plus_sublink_projection",
+		src: `-- name: StarPlusSublink :many
+SELECT t.*,
+       (SELECT s.label FROM tags AS s WHERE s.id = t.id + 999) AS sl
+FROM tags AS t
+ORDER BY t.id;
+`,
+		note: "a `*` de-aligns the projection so the per-column Sublink flag is unavailable; the sublink column sl is still attributed through to tags.label (BLOB) and must not narrow (audit-21). The subquery matches zero rows → NULL.",
+	},
+	{
 		name: "view_with_internal_left_join",
 		src: `-- name: ViaView :many
 SELECT v.member_id, v.email, v.org_name
