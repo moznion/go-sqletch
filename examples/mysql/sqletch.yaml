@@ -5,7 +5,8 @@ database:
   # dsn: user@tcp(h)/db      # optional, literal only (no ${VAR}); empty = disposable testcontainers MySQL
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen

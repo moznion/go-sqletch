@@ -153,6 +153,7 @@ type RunOptions struct {
 
 type compiledQuery struct {
 	q           *template.QueryTemplate // woven: every phase past scanChecks reads this
+	target      int                     // index into the run's resolved targets
 	woven       []policy.WovenPolicy    // policy coverage (enforcement, explain)
 	rs          []ast.Rendering
 	descs       []dialect.Desc
@@ -189,31 +190,41 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	store := cache.NewStore(cfg.Abs(cfg.Cache.Path))
 
 	// ---- scan + catalog-free checks -------------------------------------
-	queryPaths, err := cfg.ExpandGlobs(cfg.Queries)
-	if err != nil {
-		return nil, fmt.Errorf("queries: %w", err)
+	// Targets resolve BEFORE scanning: which file belongs to which
+	// generated package decides the scope of duplicate-name detection
+	// (two packages may each define GetUser) and, later, which
+	// emission each query feeds.
+	resolution, targetDiags := cfg.ResolveTargets()
+	res.Diags = append(res.Diags, targetDiags...)
+	if diagnostics.HasErrors(res.Diags) {
+		return res, nil
 	}
 	scanner := template.NewScanner(profile)
 	var queries []*compiledQuery
-	names := map[string]string{}
-	for _, p := range queryPaths {
-		src, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
-		}
-		res.Sources[p] = src
-		file, diags := scanSource(scanner, p, src)
-		res.Diags = append(res.Diags, diags...)
-		for _, q := range file.Queries {
-			if prev, dup := names[q.Name]; dup {
-				res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeDuplicateQueryName,
-					q.HeaderSpan, "query %q already defined in %s", q.Name, prev))
-				continue
+	queryTargets := map[string][]string{} // query name -> output paths defining it
+	for ti, t := range resolution.Targets {
+		names := map[string]string{}
+		for _, p := range t.Files {
+			src, err := os.ReadFile(p)
+			if err != nil {
+				return nil, err
 			}
-			names[q.Name] = p
-			queries = append(queries, &compiledQuery{q: q})
+			res.Sources[p] = src
+			file, diags := scanSource(scanner, p, src)
+			res.Diags = append(res.Diags, diags...)
+			for _, q := range file.Queries {
+				if prev, dup := names[q.Name]; dup {
+					res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeDuplicateQueryName,
+						q.HeaderSpan, "query %q already defined in %s (within the target %s)", q.Name, prev, t.Path))
+					continue
+				}
+				names[q.Name] = p
+				queryTargets[q.Name] = append(queryTargets[q.Name], t.Path)
+				queries = append(queries, &compiledQuery{q: q, target: ti})
+			}
 		}
 	}
+	res.Diags = append(res.Diags, nameScopeDiags(cfg, queryTargets)...)
 	res.QueryCount = len(queries)
 	pols, polDiags := compilePolicies(drv, cfg)
 	res.Diags = append(res.Diags, polDiags...)
@@ -416,13 +427,13 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	// ---- codegen ---------------------------------------------------------
 	expandedNames := map[string]bool{}
 	for _, name := range cfg.Expansion.Queries {
-		if _, ok := names[name]; !ok {
+		if _, ok := queryTargets[name]; !ok {
 			res.Diags = append(res.Diags, diagnostics.Errorf(diagnostics.CodeConfigInvalid,
 				diagnostics.Span{File: cfg.Dir}, "static_expansion.queries lists unknown query %q", name))
 		}
 		expandedNames[name] = true
 	}
-	var inputs []codegen.QueryInput
+	inputsByTarget := make([][]codegen.QueryInput, len(resolution.Targets))
 	for _, cq := range queries {
 		frags := codegen.BuildFrags(profile, cq.q)
 		in := codegen.QueryInput{
@@ -455,40 +466,50 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			if shapes != nil {
 				in.ExpandedShapes = shapes
 				if mode == ModeGenerate {
-					if err := writeExpandedFiles(cfg, cq.q.Name, shapes); err != nil {
+					if err := writeExpandedFiles(cfg, resolution.Targets[cq.target], cq.q.Name, shapes); err != nil {
 						return nil, err
 					}
 				}
 			}
 		}
-		inputs = append(inputs, in)
+		inputsByTarget[cq.target] = append(inputsByTarget[cq.target], in)
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
 	}
-	files, diags := codegen.Generate(codegen.Options{
-		Package:  cfg.Output.Package,
-		TreeCaps: runtime.TreeCaps{MaxNodes: cfg.TreeCaps.MaxNodes, MaxDepth: cfg.TreeCaps.MaxDepth},
-		Style:    drv.style,
-	}, drv.typemap, inputs)
-	res.Diags = append(res.Diags, diags...)
+	for ti, t := range resolution.Targets {
+		files, diags := codegen.Generate(codegen.Options{
+			Package:  t.Package,
+			TreeCaps: runtime.TreeCaps{MaxNodes: cfg.TreeCaps.MaxNodes, MaxDepth: cfg.TreeCaps.MaxDepth},
+			Style:    drv.style,
+		}, drv.typemap, inputsByTarget[ti])
+		res.Diags = append(res.Diags, diags...)
+		if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {
+			continue
+		}
+		outDir := t.Abs(cfg)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return nil, err
+		}
+		for name, content := range files {
+			path := filepath.Join(outDir, name)
+			if prev, err := os.ReadFile(path); err == nil && string(prev) == string(content) {
+				continue // unchanged: keep mtime for build systems
+			}
+			if err := cache.WriteFileAtomic(path, content, 0o644); err != nil {
+				return nil, err
+			}
+		}
+		d, err := removeStaleGenerated(cfg, t, files)
+		if err != nil {
+			return nil, err
+		}
+		res.Diags = append(res.Diags, d...)
+	}
 	if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {
 		return res, nil
 	}
-	outDir := cfg.Abs(cfg.Output.Path)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, err
-	}
-	for name, content := range files {
-		path := filepath.Join(outDir, name)
-		if prev, err := os.ReadFile(path); err == nil && string(prev) == string(content) {
-			continue // unchanged: keep mtime for build systems
-		}
-		if err := cache.WriteFileAtomic(path, content, 0o644); err != nil {
-			return nil, err
-		}
-	}
-	if err := writeExplainData(cfg, queries); err != nil {
+	if err := writeExplainData(cfg, resolution, queries); err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -579,9 +600,12 @@ func paramSpan(q *template.QueryTemplate, name string) diagnostics.Span {
 }
 
 // writeExpandedFiles materializes the audit surface: one .sql file per
-// shape under .sqletch/expanded/<query>/.
-func writeExpandedFiles(cfg config.Config, query string, shapes map[string]runtime.Expanded) error {
-	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "expanded", query))
+// shape under .sqletch/expanded/<target>/<query>/. The target slug is
+// part of the path because a query name is unique only within its
+// target — without it two packages' same-named queries would overwrite
+// each other's audit surface.
+func writeExpandedFiles(cfg config.Config, t config.ResolvedTarget, query string, shapes map[string]runtime.Expanded) error {
+	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "expanded", filepath.FromSlash(t.Slug()), query))
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
@@ -642,11 +666,8 @@ func policyCoverageOf(cq *compiledQuery) []policyCoverage {
 	return out
 }
 
-func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
-	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
+func writeExplainData(cfg config.Config, resolution config.Resolution, queries []*compiledQuery) error {
+	root := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
 	drv := driverFor(cfg)
 	for _, cq := range queries {
 		d := explainData{Name: cq.q.Name, ShapeCount: shape.CountExpand(cq.q, drv.expandIn).String(),
@@ -692,12 +713,90 @@ func writeExplainData(cfg config.Config, queries []*compiledQuery) error {
 		if err != nil {
 			return err
 		}
+		dir := filepath.Join(root, filepath.FromSlash(resolution.Targets[cq.target].Slug()))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
 		path := filepath.Join(dir, cq.q.Name+".json")
 		if err := cache.WriteFileAtomic(path, append(data, '\n'), 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// nameScopeDiags warns when a query name that `overrides` or
+// `static_expansion.queries` references exists in more than one target.
+// Both key on a NAME, which is unique only within a target since
+// design 19, so such an entry silently applies to several queries —
+// visible here rather than as a surprise in the generated code.
+func nameScopeDiags(cfg config.Config, queryTargets map[string][]string) []diagnostics.Diagnostic {
+	referenced := map[string]string{} // name -> which config key names it
+	for _, o := range cfg.Overrides {
+		if o.Query != "" {
+			referenced[o.Query] = "overrides"
+		}
+	}
+	for _, n := range cfg.Expansion.Queries {
+		referenced[n] = "static_expansion.queries"
+	}
+	names := make([]string, 0, len(referenced))
+	for n := range referenced {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var diags []diagnostics.Diagnostic
+	for _, n := range names {
+		paths := queryTargets[n]
+		if len(paths) < 2 {
+			continue
+		}
+		diags = append(diags, diagnostics.Warnf(diagnostics.CodeTargetNameSpan,
+			diagnostics.Span{File: cfg.Path},
+			"%s names query %q, which is defined in %d targets (%s): the entry applies to all of them",
+			referenced[n], n, len(paths), strings.Join(paths, ", ")).
+			WithHint("rename one of the queries if only one was meant"))
+	}
+	return diags
+}
+
+// removeStaleGenerated deletes the *.gen.go files in a target's output
+// directory that this run did not write — a deleted or renamed query
+// otherwise leaves a stale method compiled into the package forever.
+//
+// Only `*.gen.go` is ever removed: every file sqletch emits ends in
+// that suffix (pinned by a codegen test), so a hand-written file in the
+// same directory is never touched, and neither is a subdirectory. An
+// output directory OUTSIDE the project (the absolute path config.Load
+// only warns about) is skipped with a warning rather than swept:
+// deleting files outside the repository sqletch was pointed at is not
+// something a committed config gets to ask for.
+func removeStaleGenerated(cfg config.Config, t config.ResolvedTarget, written map[string][]byte) ([]diagnostics.Diagnostic, error) {
+	dir := t.Abs(cfg)
+	rel, err := filepath.Rel(cfg.Dir, dir)
+	outside := err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	if filepath.IsAbs(t.Path) || outside {
+		return []diagnostics.Diagnostic{diagnostics.Warnf(diagnostics.CodePathEscape,
+			diagnostics.Span{File: cfg.Path},
+			"output %q is outside the project directory, so stale generated files there are not removed", t.Path).
+			WithHint("move the output inside the project so sqletch can keep it consistent, or delete obsolete *.gen.go files yourself")}, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".gen.go") {
+			continue
+		}
+		if _, ok := written[e.Name()]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
 }
 
 // PrintDiags renders diagnostics in text or JSON to w.

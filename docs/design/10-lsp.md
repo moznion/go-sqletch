@@ -160,9 +160,12 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 
 One `Check` call is one consistent snapshot; the server runs it per
 didOpen/didChange/didSave/didClose and publishes per file. The file
-set is `cfg.ExpandGlobs(cfg.Queries)` ∪ overlay keys (an open
-unsaved buffer participates even before it matches a glob on disk).
-Overlay content wins over disk.
+set is every resolved target's files (`cfg.ResolveTargets()`, design
+19 — the same seam the pipeline resolves through) ∪ overlay keys (an
+open unsaved buffer participates even before it matches a pattern on
+disk). Overlay content wins over disk. The resolution is memoized
+against the stat signature of every directory its walk consulted plus
+the config file, so a keystroke never re-walks a `**` subtree.
 
 The glob and overlay sides are deduped by **symlink-resolved identity**,
 not by string equality: a file reached one way as `/tmp/ws/q.sql` (an
@@ -192,8 +195,12 @@ Phases, mirroring pipeline.Run's order:
    the pipeline).
 2. **Workspace**: duplicate query names (`SQLETCH004`), first
    definition wins in sorted-path order — same ordering the pipeline
-   gets from `ExpandGlobs`, so the CLI and the LSP flag the same
-   duplicate. Overlay-only paths sort in the same collation.
+   gets from the resolution, so the CLI and the LSP flag the same
+   duplicate. The scope is the TARGET, not the workspace (design 19
+   §4): two generated packages may each define `GetUser`, and a buffer
+   belonging to no target is its own scope. Overlay-only paths sort in
+   the same collation. Resolution diagnostics (SQLETCH301/306/314/315/
+   316) publish against the config file, like the policy ones.
 3. **Oracle-cached, per query, only if phases 1–2 left no errors for
    that file**: recompute the schema fingerprint from disk, load the
    catalog; for a query whose every rendering hits the oracle cache,

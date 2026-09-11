@@ -17,12 +17,12 @@ database:
 schema:
   files: [db/schema.sql]       # required: ordered globs of plain DDL
 
-queries: [queries/*.sql]       # required: globs of template files;
+targets:                       # required: one entry per output package
+  - queries: [queries/*.sql]   # required: patterns of template files;
                                # `.go` paths are read for //sqletch:query consts
-
-output:
-  package: gen                 # required: generated package name
-  path: gen                    # required: output directory
+    output:
+      package: gen             # required: generated package name
+      path: gen                # required: output directory
 
 cache:
   path: .sqletch/cache         # default shown; COMMIT this directory
@@ -88,10 +88,13 @@ policies:                      # cross-query policies (see the policies chapter)
   the oracle entries, the cache directory holds one `env-<fp>.json`
   per fingerprint recording the server a run actually connected to —
   see [environment drift](#server-environment-drift) below.
-- **`queries`** globs may list `.sql` template files, `.go` files
-  holding `//sqletch:query` consts, or both; the input form follows the
-  extension (see [the template language](02-template-language.md)).
-  Query names are global across every file and both forms.
+- **`targets`** is a list: each entry pairs query patterns with the Go
+  package they generate into. See [Targets](#targets-one-config-many-packages)
+  below. A target's `queries` patterns may list `.sql` template files,
+  `.go` files holding `//sqletch:query` consts, or both; the input form
+  follows the extension (see [the template language](02-template-language.md)).
+  Query names are unique **within a target** — two generated packages
+  may each define `GetUser`.
 - **`overrides`** force a result column's nullability where the
   analysis is conservative (the analyzer never narrows from optional
   fragments by design — see the manual's runtime chapter).
@@ -115,6 +118,71 @@ policies:                      # cross-query policies (see the policies chapter)
   [Cross-query policies](12-policies.md). Malformed declarations are
   SQLETCH303. A config using `policies:` is rejected by pre-policy
   sqletch binaries (strict decoding) — the desired failure direction.
+
+## Targets: one config, many packages
+
+Each `targets` entry is a set of query patterns plus the package they
+generate into. A project that wants its generated code next to the
+code that uses it lists several entries — or lets ONE entry fan out
+with a capture group:
+
+```yaml
+targets:
+  # Generated code beside each app that owns the queries.
+  - queries:
+      - "(api/internal/app/*/db/queries)/*.sql"
+      - "(api/internal/app/*/db/queries)/*.go"
+    output:
+      package: gen
+      path: $1/gen
+
+  # A shared package, written the plain way.
+  - queries: [shared/queries/*.sql]
+    output: {package: shared, path: internal/db/shared}
+```
+
+**Patterns.** `*`, `?` and `[…]` match within one path segment. A
+segment that is exactly `**` matches **zero or more** segments, so
+`queries/**/*.sql` finds templates at any depth. Patterns are
+project-relative; an absolute or `..`-climbing pattern is refused
+(SQLETCH306). A pattern that matches nothing is a **warning**
+(SQLETCH316), not an error — in a monorepo an app may not exist yet.
+
+**Captures.** `(` … `)` around whole path segments captures the text
+they matched; `$1`…`$9` (or `${1}`) substitute it into `output.path`
+and `output.package`, and `$$` is a literal `$`. Every `$n` the output
+uses must exist in *every* pattern of that entry.
+
+**Grouping.** The key is the *substituted output*, not the config
+entry: patterns that land on the same `(package, path)` merge into one
+package, and a capture fans one entry out into one package per matched
+directory. Two entries that resolve to one path with different package
+names are an error (SQLETCH315), and a template file claimed by two
+different outputs is an error too (SQLETCH314).
+
+**What stays global.** `schema`, `database`, `dialect`,
+`server_version`, `cache`, `verification`, `filter_tree_caps`,
+`overrides`, `static_expansion`, and `policies` apply to the whole
+run. That is the point of one config: however many packages you
+generate, there is **one** schema fingerprint, **one** committed
+cache, and **one** dev-database startup. Policies in particular weave
+into every target alike — splitting output packages is not a way to
+escape a tenant-scoping policy. `overrides` and
+`static_expansion.queries` key on a query NAME, which is unique only
+within a target, so an entry that matches queries in several targets
+applies to all of them and says so (SQLETCH317).
+
+**Stale output.** `generate` removes the `*.gen.go` files in a
+target's directory that the run did not write, so a deleted or renamed
+query leaves nothing behind. Only `*.gen.go` is removed — hand-written
+neighbours and subdirectories are untouched — and a target whose
+output is outside the project directory is skipped with a warning
+rather than swept. `check` never deletes anything.
+
+**Derived output** (`.sqletch/explain/`, `.sqletch/expanded/`) is
+namespaced by target path, so two packages' same-named queries cannot
+overwrite each other. `sqletch explain NAME` prints every target that
+defines the name, each under its own heading.
 
 ## Server environment drift
 

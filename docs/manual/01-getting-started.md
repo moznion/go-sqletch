@@ -32,10 +32,11 @@ database:
   # dsn: postgres://…      # optional, LITERAL (no ${VAR}); empty = auto-managed disposable DB
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:                   # one entry per generated package
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 ```
 
 The dev database is **disposable by contract**: sqletch resets it and

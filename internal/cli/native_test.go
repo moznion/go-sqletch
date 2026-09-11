@@ -33,10 +33,11 @@ database:
   oracle: native
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 `)
 	cfg, diags := config.Load(filepath.Join(dir, "sqletch.yaml"))
 	if len(diags) > 0 {
@@ -197,10 +198,11 @@ database:
   oracle: native
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}

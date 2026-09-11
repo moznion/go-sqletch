@@ -104,7 +104,9 @@ http_scopes:
   - name: tenant                # → generated identifiers TenantScope, TenantFrom, …
     predicate: tenant           # member = every @filter-tree query declaring
                                 #   a predicate with this name (D2)
-    package: scoped             # subpackage under `out:`, default "scoped" (D3)
+    package: scoped             # subpackage under the owning target's
+                                # output.path, default "scoped" (D3;
+                                # re-read against design 19's `targets`)
 ```
 
 Validation at generate time (codes in §8): a declared predicate name

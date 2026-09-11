@@ -41,10 +41,11 @@ database:
   dsn: `+filepath.Join(dir, "dev.sqlite3")+`
 schema:
   files: [db/schema.sql]
-queries: [`+queriesGlob+`]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [`+queriesGlob+`]
+    output:
+      package: gen
+      path: gen
 cache:
   path: .sqletch/cache
 `)

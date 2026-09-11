@@ -25,11 +25,12 @@ schema:
   # setup_cmd: "goose -dir db/migrations postgres $SQLETCH_DSN up"
   # fingerprint_globs:       # required with setup_cmd
   #   - db/migrations/*.sql
-queries:
-  - queries/**/*.sql
-output:
-  package: gen
-  path: internal/gen
+targets:                     # one entry per generated package;
+  - queries:                 # captures fan one entry out (design 19)
+      - queries/**/*.sql
+    output:
+      package: gen
+      path: internal/gen
 cache:
   path: .sqletch/cache       # committed to VCS
 runtime:
@@ -54,8 +55,10 @@ wants the DSN from the environment leaves `database.dsn` empty and
 relies on the driver's own DSN environment variables, or templates the
 config file outside sqletch.
 
-`cache.path` and `output.path` drive every write sqletch performs, so
-`Load` also validates them (`SQLETCH306`): a **relative** path escaping
+`cache.path` and each target's `output.path` drive every write sqletch
+performs, so they are validated (`SQLETCH306`) — at `Load` for a
+`$`-free path, and at resolution for one built from a capture, which
+is the first moment the written path exists (design 19 §4): a **relative** path escaping
 the project directory via `..` is an **error** (a committed relative
 path climbing out of the repo is the clone-and-run write-redirection
 vector), while an **absolute** path is a deliberate operator choice and

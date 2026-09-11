@@ -46,10 +46,11 @@ database:
   dsn: ` + dsn + `
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 cache:
   path: .sqletch/cache
 static_expansion:
@@ -100,8 +101,9 @@ static_expansion:
 
 	// Static expansion: the audit .sql files exist (8 shapes: 2 guards
 	// x 2 sort cases) and the generated code dispatches via the
-	// precomposed shape table instead of the composer.
-	expanded, err := filepath.Glob(filepath.Join(dir, ".sqletch/expanded/SearchUsers/*.sql"))
+	// precomposed shape table instead of the composer. The tree is
+	// namespaced by target (design 19 §5) — `gen` here.
+	expanded, err := filepath.Glob(filepath.Join(dir, ".sqletch/expanded/gen/SearchUsers/*.sql"))
 	if err != nil || len(expanded) != 8 {
 		t.Fatalf("expanded shape files = %d (%v), want 8", len(expanded), err)
 	}

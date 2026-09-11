@@ -135,6 +135,16 @@ const (
 	// same-named columns forces all of them at once.
 	CodeOverrideUnknownColumn   Code = "SQLETCH312" // null_overrides names no result column of the query
 	CodeOverrideAmbiguousColumn Code = "SQLETCH313" // null_overrides matches multiple same-named result columns
+
+	// Multi-target resolution (docs/design/19-multi-target-output.md §4).
+	// A template file belongs to exactly one generated package, and an
+	// output directory to exactly one package name — otherwise "which
+	// package is this query in" has no answer, and generate would emit
+	// two packages over one directory.
+	CodeTargetFileOverlap Code = "SQLETCH314" // a template file is claimed by two targets
+	CodeTargetCollision   Code = "SQLETCH315" // two targets resolve to one path with different packages
+	CodeTargetNoMatch     Code = "SQLETCH316" // a queries pattern matched no file (warning)
+	CodeTargetNameSpan    Code = "SQLETCH317" // an overrides/static_expansion name exists in several targets (warning)
 )
 
 type Diagnostic struct {

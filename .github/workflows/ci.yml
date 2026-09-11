@@ -94,6 +94,8 @@ jobs:
         run: go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=30s
       - name: Native-describe robustness fuzz (30s)
         run: go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=30s
+      - name: Query-pattern robustness fuzz (30s)
+        run: go test ./internal/pathpat -run '^$' -fuzz=FuzzPattern -fuzztime=30s
       # A crasher is written to testdata/fuzz/<target>/ inside the runner.
       # Without this the input is discarded with the runner and the finding
       # is unreproducible; commit the uploaded file to pin the regression.
@@ -107,6 +109,7 @@ jobs:
             internal/codegen/testdata/fuzz/
             internal/dialect/postgres/testdata/fuzz/
             internal/dialect/mysql/testdata/fuzz/
+            internal/pathpat/testdata/fuzz/
           if-no-files-found: ignore
 
   grammars:

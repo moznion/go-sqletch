@@ -184,10 +184,9 @@ dialect: postgres
 server_version: "16"
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output: {package: gen, path: gen}
 
 $ go run github.com/moznion/go-sqletch/cmd/sqletch generate
 sqletch: 3 queries ok (oracle cache: 0 hits, 6 misses; offline: no)
@@ -235,7 +234,7 @@ WHERE TRUE
 `
 ```
 
-List the file in `queries:` and generate as usual. Conditionality
+List the file in a target's `queries:` and generate as usual. Conditionality
 still lives in the constructs — the const requirement is what keeps
 Go control flow out of SQL construction. See
 [the template language](docs/manual/02-template-language.md).

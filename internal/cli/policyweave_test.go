@@ -17,10 +17,11 @@ dialect: postgres
 server_version: "16"
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 policies:
   - name: tenant_scope
     tables: [orders]

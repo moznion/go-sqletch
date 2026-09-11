@@ -138,8 +138,7 @@ type Config struct {
 	ServerVersion string       `yaml:"server_version"`
 	Database      Database     `yaml:"database"`
 	Schema        Schema       `yaml:"schema"`
-	Queries       []string     `yaml:"queries"`
-	Output        Output       `yaml:"output"`
+	Targets       []Target     `yaml:"targets"`
 	Cache         Cache        `yaml:"cache"`
 	Overrides     []Override   `yaml:"overrides"`
 	Expansion     Expansion    `yaml:"static_expansion"`
@@ -153,6 +152,26 @@ type Config struct {
 	// Path is the config file itself, so later phases can attach
 	// diagnostics to it (e.g. SQLETCH200). Not part of the YAML.
 	Path string `yaml:"-"`
+
+	// LegacyQueries and LegacyOutput decode the pre-`targets` spelling
+	// (one config, one output package) for ONE purpose: to answer it
+	// with the rewrite (SQLETCH301) instead of goccy's generic
+	// "unknown field". Neither is ever consumed — the presence of
+	// either is an error, so there is no ambiguity about which
+	// spelling won. See docs/design/19-multi-target-output.md §7.
+	LegacyQueries []string `yaml:"queries"`
+	LegacyOutput  *Output  `yaml:"output"`
+}
+
+// Target pairs a set of query-file patterns with the Go package they
+// generate into (docs/design/19-multi-target-output.md). Patterns may
+// carry capture groups whose text substitutes into Output, so ONE
+// target can fan out into one package per matched directory; the
+// grouping key is the SUBSTITUTED output, not the config entry, so
+// several patterns landing on the same output merge into one package.
+type Target struct {
+	Queries []string `yaml:"queries"`
+	Output  Output   `yaml:"output"`
 }
 
 type Database struct {
@@ -181,6 +200,13 @@ type Schema struct {
 type Output struct {
 	Package string `yaml:"package"`
 	Path    string `yaml:"path"`
+}
+
+// HasCaptureRefs reports whether the output spells a `$n` capture
+// reference, i.e. whether it can only be validated once patterns have
+// been expanded against the filesystem.
+func (o Output) HasCaptureRefs() bool {
+	return strings.Contains(o.Package, "$") || strings.Contains(o.Path, "$")
 }
 
 type Cache struct {
@@ -383,14 +409,17 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	if len(cfg.Schema.Files) == 0 {
 		invalid("schema.files is required (ordered globs of plain .sql files)")
 	}
-	if len(cfg.Queries) == 0 {
-		invalid("queries is required (globs of template .sql files)")
+	if len(cfg.LegacyQueries) > 0 || cfg.LegacyOutput != nil {
+		d := diagnostics.Errorf(diagnostics.CodeConfigInvalid, span,
+			"top-level `queries`/`output` were replaced by `targets`, a list of (queries, output) pairs — one config can now generate several packages, and a pattern may capture part of its path into the output path")
+		diags = append(diags, d.WithHint("targets:\n  - queries: [%s]\n    output: { package: %s, path: %s }",
+			legacyQueriesHint(cfg.LegacyQueries), legacyOutputHint(cfg.LegacyOutput, "gen"),
+			legacyOutputPathHint(cfg.LegacyOutput, "gen")))
+	} else if len(cfg.Targets) == 0 {
+		invalid("targets is required: a list of (queries, output) pairs, e.g. targets: [{queries: [queries/*.sql], output: {package: gen, path: gen}}]")
 	}
-	if cfg.Output.Package == "" {
-		invalid("output.package is required")
-	}
-	if cfg.Output.Path == "" {
-		invalid("output.path is required")
+	for i, t := range cfg.Targets {
+		diags = append(diags, cfg.validateTarget(span, i, t)...)
 	}
 	if cfg.Cache.Path == "" {
 		cfg.Cache.Path = ".sqletch/cache"
@@ -440,50 +469,11 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 		}
 	}
 
-	// cache.path and output.path drive every write sqletch performs.
-	// A committed relative path climbing out of the project with `..`
-	// is the clone-and-run write-redirection vector, so it is refused;
-	// the `..` test is purely lexical, so it misses a committed DIRECTORY
-	// symlink whose path stays in-tree but whose real target escapes; the
-	// symlink-aware pass below closes that (a cloned repo can commit
-	// `link -> /outside` and point the field at `link/...`).
-	//
-	// warnAbsolute distinguishes the two kinds of path this policy covers.
-	// For generated-output paths an absolute path is a deliberate operator
-	// choice that only WARNS ("output belongs in the repo"). For a SQLite
-	// database.dsn an absolute path is entirely normal — a dev database
-	// legitimately lives outside the tree (often /tmp) and is not
-	// generated output — so it must be accepted silently; only the sneaky
-	// in-tree-LOOKING escapes (relative `..`, symlinked directory) are the
-	// committed-repo attack vector worth refusing there.
+	// The write-path escape policy (SQLETCH306); see pathEscapeDiags.
 	checkPath := func(field, p string, warnAbsolute bool) {
-		if p == "" {
-			return
-		}
-		if filepath.IsAbs(p) {
-			if warnAbsolute {
-				diags = append(diags, diagnostics.Warnf(diagnostics.CodePathEscape, span,
-					"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
-					WithHint("prefer a project-relative path so generated output stays inside the repository"))
-			}
-			return
-		}
-		resolved := filepath.Clean(filepath.Join(cfg.Dir, p))
-		rel, err := filepath.Rel(cfg.Dir, resolved)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
-				"%s %q escapes the project directory (resolves to %q): a relative path climbing out with `..` is refused because a cloned repository could otherwise redirect writes to arbitrary locations", field, p, resolved).
-				WithHint("keep %s inside the project directory", field))
-			return
-		}
-		if real, outside := resolvesOutsideRoot(cfg.Dir, resolved); outside {
-			diags = append(diags, diagnostics.Errorf(diagnostics.CodePathEscape, span,
-				"%s %q escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise commit a directory symlink to redirect writes to arbitrary locations", field, p, real).
-				WithHint("keep %s inside the project directory and remove any symlinked components", field))
-		}
+		diags = append(diags, cfg.pathEscapeDiags(field, p, warnAbsolute)...)
 	}
 	checkPath("cache.path", cfg.Cache.Path, true)
-	checkPath("output.path", cfg.Output.Path, true)
 	// For SQLite, database.dsn is a FILE PATH that generate/check creates
 	// and opens, so a committed in-tree-looking path that escapes the
 	// project is the same clone-and-run redirection risk as the output
@@ -937,15 +927,73 @@ func (c Config) ExpandGlobs(patterns []string) ([]string, error) {
 // exact). The error cites SQLETCH306 so the path-escape refusal is
 // recognizable even though ExpandGlobs's channel is a plain error.
 func (c Config) checkMatchInRoot(pat, match string) error {
+	if msg, escapes := c.matchEscapes(pat, match); escapes {
+		return fmt.Errorf("%s: %s", diagnostics.CodePathEscape, msg)
+	}
+	return nil
+}
+
+// matchEscapes is the shared body of the match-escape rule: it returns
+// the user-facing message when match lands outside the project
+// directory. Two channels consume it — ExpandGlobs's plain error
+// (schema.files) and ResolveTargets's SQLETCH306 diagnostic (query
+// patterns) — and they must refuse exactly the same paths, so the rule
+// lives in one place.
+func (c Config) matchEscapes(pat, match string) (string, bool) {
 	resolved := filepath.Clean(match)
 	rel, err := filepath.Rel(c.Dir, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("%s: glob %q matches %q, which escapes the project directory: a cloned repository could otherwise read arbitrary host files through queries/schema.files; keep globs inside the project directory",
-			diagnostics.CodePathEscape, pat, resolved)
+		return fmt.Sprintf("pattern %q matches %q, which escapes the project directory: a cloned repository could otherwise read arbitrary host files through queries/schema.files; keep patterns inside the project directory",
+			pat, resolved), true
 	}
 	if real, outside := resolvesOutsideRoot(c.Dir, resolved); outside {
-		return fmt.Errorf("%s: glob %q matches %q, which escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise read arbitrary host files; keep globs inside the project directory and remove any symlinked components",
-			diagnostics.CodePathEscape, pat, resolved, real)
+		return fmt.Sprintf("pattern %q matches %q, which escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise read arbitrary host files; keep patterns inside the project directory and remove any symlinked components",
+			pat, resolved, real), true
+	}
+	return "", false
+}
+
+// pathEscapeDiags is the write-path policy for a configured directory:
+// cache.path, a target's output.path, and a SQLite database.dsn all
+// drive writes, so a committed relative path climbing out of the
+// project with `..` is the clone-and-run write-redirection vector and
+// is refused; the `..` test is purely lexical, so it misses a committed
+// DIRECTORY symlink whose path stays in-tree but whose real target
+// escapes — the symlink-aware pass closes that (a cloned repo can
+// commit `link -> /outside` and point the field at `link/...`).
+//
+// warnAbsolute distinguishes the two kinds of path this policy covers.
+// For generated-output paths an absolute path is a deliberate operator
+// choice that only WARNS ("output belongs in the repo"). For a SQLite
+// database.dsn an absolute path is entirely normal — a dev database
+// legitimately lives outside the tree (often /tmp) and is not
+// generated output — so it must be accepted silently; only the sneaky
+// in-tree-LOOKING escapes (relative `..`, symlinked directory) are the
+// committed-repo attack vector worth refusing there.
+func (c Config) pathEscapeDiags(field, p string, warnAbsolute bool) []diagnostics.Diagnostic {
+	span := diagnostics.Span{File: c.Path}
+	if p == "" {
+		return nil
+	}
+	if filepath.IsAbs(p) {
+		if warnAbsolute {
+			return []diagnostics.Diagnostic{diagnostics.Warnf(diagnostics.CodePathEscape, span,
+				"%s %q is an absolute path: sqletch will write outside the project directory", field, p).
+				WithHint("prefer a project-relative path so generated output stays inside the repository")}
+		}
+		return nil
+	}
+	resolved := filepath.Clean(filepath.Join(c.Dir, filepath.FromSlash(p)))
+	rel, err := filepath.Rel(c.Dir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodePathEscape, span,
+			"%s %q escapes the project directory (resolves to %q): a relative path climbing out with `..` is refused because a cloned repository could otherwise redirect writes to arbitrary locations", field, p, resolved).
+			WithHint("keep %s inside the project directory", field)}
+	}
+	if real, outside := resolvesOutsideRoot(c.Dir, resolved); outside {
+		return []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodePathEscape, span,
+			"%s %q escapes the project directory through a symlink (resolves to %q): a cloned repository could otherwise commit a directory symlink to redirect writes to arbitrary locations", field, p, real).
+			WithHint("keep %s inside the project directory and remove any symlinked components", field)}
 	}
 	return nil
 }
