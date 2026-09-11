@@ -43,10 +43,11 @@ dialect: postgres
 server_version: "16"
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 `)
 	return dir, filepath.Join(dir, "sqletch.yaml")
 }

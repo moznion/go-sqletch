@@ -8,7 +8,8 @@ database:
                      # `check` runs from the committed cache and never touches it.
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen

@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/gosrc"
 	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 )
@@ -108,37 +110,59 @@ func Explain(ctx context.Context, configPath string, queryNames []string, opts E
 	if opts.Enumerate {
 		return explainEnumerate(cfg, queryNames, shapeCap(opts.MaxShapes, enumerateCap), out, errW)
 	}
-	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		fmt.Fprintf(errW, "sqletch: no explain data (run `sqletch generate` first): %v\n", err)
-		return ExitEnvironment
-	}
+	root := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
 	want := map[string]bool{}
 	for _, n := range queryNames {
 		want[n] = true
 	}
-	printed := 0
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		name := e.Name()[:len(e.Name())-len(".json")]
-		if len(want) > 0 && !want[name] {
-			continue
-		}
-		data, err := cache.ReadFileCapped(filepath.Join(dir, e.Name()))
+	// Explain data is namespaced by target (design 19 §5), so a name
+	// can legitimately exist in several packages: print every match,
+	// each under its target, rather than picking one arbitrarily.
+	var targets []string
+	byTarget := map[string][]explainData{}
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			fmt.Fprintf(errW, "sqletch: %v\n", err)
-			return ExitEnvironment
+			return err
 		}
-		var d explainData
-		if err := json.Unmarshal(data, &d); err != nil {
-			fmt.Fprintf(errW, "sqletch: %v\n", err)
-			return ExitEnvironment
+		if d.IsDir() || filepath.Ext(p) != ".json" {
+			return nil
 		}
-		printExplain(out, d)
-		printed++
+		name := strings.TrimSuffix(filepath.Base(p), ".json")
+		if len(want) > 0 && !want[name] {
+			return nil
+		}
+		data, err := cache.ReadFileCapped(p)
+		if err != nil {
+			return err
+		}
+		var ed explainData
+		if err := json.Unmarshal(data, &ed); err != nil {
+			return err
+		}
+		target := filepath.ToSlash(filepath.Dir(p))
+		if rel, err := filepath.Rel(root, filepath.Dir(p)); err == nil {
+			target = filepath.ToSlash(rel)
+		}
+		if _, seen := byTarget[target]; !seen {
+			targets = append(targets, target)
+		}
+		byTarget[target] = append(byTarget[target], ed)
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(errW, "sqletch: no explain data (run `sqletch generate` first): %v\n", err)
+		return ExitEnvironment
+	}
+	sort.Strings(targets)
+	printed := 0
+	for _, t := range targets {
+		if len(targets) > 1 {
+			fmt.Fprintf(out, "# target %s\n", t)
+		}
+		for _, ed := range byTarget[t] {
+			printExplain(out, ed)
+			printed++
+		}
 	}
 	if printed == 0 {
 		fmt.Fprintf(errW, "sqletch: no matching queries\n")
@@ -221,13 +245,26 @@ func shapeCapDiag(q *template.QueryTemplate, capN int, sev diagnostics.Severity,
 			"so the ones left out are the later guard combinations, not a random sample")
 }
 
+// queryFiles resolves the union of every target's template files, for
+// the commands that work over the whole workspace (fmt, explain). They
+// do not care which package a file belongs to — only the pipeline and
+// the LSP do — but they must see exactly the same file set, so they
+// go through the same resolution seam.
+func queryFiles(cfg config.Config, errW io.Writer) ([]string, int, bool) {
+	resolution, diags := cfg.ResolveTargets()
+	if diagnostics.HasErrors(diags) {
+		printBare(errW, diags, false)
+		return nil, ExitDiagnostics, false
+	}
+	return resolution.Files, ExitOK, true
+}
+
 func explainEnumerate(cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
 	drv := driverFor(cfg)
 	profile := drv.profile
-	paths, err := cfg.ExpandGlobs(cfg.Queries)
-	if err != nil {
-		fmt.Fprintf(errW, "sqletch: %v\n", err)
-		return ExitEnvironment
+	paths, code, ok := queryFiles(cfg, errW)
+	if !ok {
+		return code
 	}
 	want := map[string]bool{}
 	for _, n := range queryNames {
@@ -242,7 +279,7 @@ func explainEnumerate(cfg config.Config, queryNames []string, capN int, out, err
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
 			return ExitEnvironment
 		}
-		file, diags := scanner.ScanFile(p, src)
+		file, diags := scanSource(scanner, p, src)
 		if diagnostics.HasErrors(diags) {
 			printBare(errW, diags, false)
 			return ExitDiagnostics
@@ -327,10 +364,9 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		return ExitEnvironment
 	}
 
-	paths, err := cfg.ExpandGlobs(cfg.Queries)
-	if err != nil {
-		fmt.Fprintf(errW, "sqletch: %v\n", err)
-		return ExitEnvironment
+	paths, code, ok := queryFiles(cfg, errW)
+	if !ok {
+		return code
 	}
 	want := map[string]bool{}
 	for _, n := range queryNames {
@@ -345,7 +381,7 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
 			return ExitEnvironment
 		}
-		file, diags := scanner.ScanFile(p, src)
+		file, diags := scanSource(scanner, p, src)
 		if diagnostics.HasErrors(diags) {
 			printBare(errW, diags, false)
 			return ExitDiagnostics
@@ -398,13 +434,18 @@ func Fmt(configPath string, check bool, out, errW io.Writer) int {
 		printBare(errW, diags, false)
 		return ExitDiagnostics
 	}
-	paths, err := cfg.ExpandGlobs(cfg.Queries)
-	if err != nil {
-		fmt.Fprintf(errW, "sqletch: %v\n", err)
-		return ExitEnvironment
+	paths, code, ok := queryFiles(cfg, errW)
+	if !ok {
+		return code
 	}
 	changed := 0
 	for _, p := range paths {
+		// A .go template file is Go source that happens to carry
+		// `//sqletch:query` consts (design 13); the template formatter
+		// canonicalizes SQL and has no business rewriting it.
+		if gosrc.IsGoSource(p) {
+			continue
+		}
 		src, err := os.ReadFile(p)
 		if err != nil {
 			fmt.Fprintf(errW, "sqletch: %v\n", err)

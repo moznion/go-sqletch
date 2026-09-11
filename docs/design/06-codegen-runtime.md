@@ -8,7 +8,8 @@ Prerequisites: P1–P5 (typed, rule-checked queries).
 
 ## 1. Generated package layout
 
-Per config output target (one Go package):
+Per **resolved target** (one Go package; a config may declare several,
+and one target may fan out over captured directories — design 19):
 
 ```
 gen/

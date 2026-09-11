@@ -1625,11 +1625,17 @@ version mismatch, unreadable files). The split is deliberate for CI.
 
 Configuration (`sqletch.yaml`): `dialect`, `server_version` (pinned;
 part of the cache key), schema inputs (ordered `.sql` files/globs),
-query file globs, output package/path, dev database strategy
-(auto-managed ephemeral instance or user-supplied DSN), cache path
-(committed to the repository), filter-tree caps, per-query static
-expansion, and per-column nullability overrides. Unknown keys are
-rejected. Parameter and result types on Tier 2 dialects come from
+**generation targets** (one or more pairs of query-file patterns and
+an output package/path; a pattern may capture part of a matched path
+and substitute it into the output, so one entry generates one package
+per matched directory), dev database strategy (auto-managed ephemeral
+instance or user-supplied DSN), cache path (committed to the
+repository), filter-tree caps, per-query static expansion, and
+per-column nullability overrides. Everything but the targets is global
+to the run: however many packages a config generates, there is one
+schema fingerprint, one committed cache, one dev database, and one
+policy set — a query name is unique within its target, everything else
+is unique within the config. Unknown keys are rejected. Parameter and result types on Tier 2 dialects come from
 template annotations, not configuration.
 
 ------------------------------------------------------------------------

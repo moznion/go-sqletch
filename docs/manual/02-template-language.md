@@ -173,11 +173,13 @@ WHERE TRUE
 `
 ```
 
-List the Go files in `queries:` alongside (or instead of) `.sql`
-globs — the input form is chosen by extension:
+List the Go files in a target's `queries:` alongside (or instead of)
+`.sql` patterns — the input form is chosen by extension:
 
 ```yaml
-queries: [queries/*.sql, internal/repo/*.go]
+targets:
+  - queries: [queries/*.sql, internal/repo/*.go]
+    output: {package: gen, path: gen}
 ```
 
 Nothing else changes. The const's contents are a template file: same

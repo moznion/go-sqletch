@@ -38,10 +38,11 @@ database:
   oracle: native
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 `), 0o644); err != nil {
 		tb.Fatal(err)
 	}

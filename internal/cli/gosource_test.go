@@ -17,10 +17,11 @@ dialect: postgres
 server_version: "16"
 schema:
   files: [db/schema.sql]
-queries: [repo/*.go]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [repo/*.go]
+    output:
+      package: gen
+      path: gen
 `,
 		"repo/users.go": strings.ReplaceAll(gosrc, "~", "`"),
 	}
@@ -194,10 +195,11 @@ dialect: postgres
 server_version: "16"
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql, repo/*.go]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql, repo/*.go]
+    output:
+      package: gen
+      path: gen
 `
 	files["queries/other.sql"] = `-- name: FindU :many
 SELECT u.id FROM u;

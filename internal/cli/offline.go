@@ -47,6 +47,45 @@ type OfflineChecker struct {
 	// schemaReads counts full schema-file reads (test seam for the
 	// memo: an unchanged Check must not read schema files again).
 	schemaReads int
+
+	// tgtMemo caches the target resolution across Checks. Resolving
+	// walks the filesystem — with a `**` pattern, a whole subtree — and
+	// a keystroke must not pay for that. The memo is validated by the
+	// stat signature of every directory the walk CONSULTED plus the
+	// config file: a directory's mtime moves when an entry is added or
+	// removed, so a new (or deleted) template file invalidates it
+	// without re-walking. targetWalks counts real resolutions (test
+	// seam, like schemaReads).
+	tgtMemo     *targetMemo
+	targetWalks int
+}
+
+type targetMemo struct {
+	dirs   []schemaStat // reused shape: path + stat signature
+	cfgSig statSig
+	res    config.Resolution
+	diags  []diagnostics.Diagnostic
+}
+
+// resolveTargets returns the workspace's target resolution, reusing
+// the previous one while every directory it depended on is unchanged.
+func (c *OfflineChecker) resolveTargets() (config.Resolution, []diagnostics.Diagnostic) {
+	cfgSig := statOf(c.cfg.Path)
+	if m := c.tgtMemo; m != nil && m.cfgSig == cfgSig && sameSchemaStat(m.dirs, statSchema(dirPaths(m.dirs))) {
+		return m.res, m.diags
+	}
+	c.targetWalks++
+	res, diags := c.cfg.ResolveTargets()
+	c.tgtMemo = &targetMemo{dirs: statSchema(res.Dirs), cfgSig: cfgSig, res: res, diags: diags}
+	return res, diags
+}
+
+func dirPaths(ss []schemaStat) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.path
+	}
+	return out
 }
 
 // statSig is a file's cheap change signature: size + mod time, or
@@ -213,9 +252,15 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	for _, p := range overlayPaths {
 		add(p)
 	}
-	if globbed, err := c.cfg.ExpandGlobs(c.cfg.Queries); err == nil {
-		for _, p := range globbed {
-			add(absClean(p))
+	resolution, targetDiags := c.resolveTargets()
+	// Which target owns a file decides the SCOPE of duplicate-name
+	// detection below: two generated packages may each define GetUser.
+	fileTarget := map[string]string{}
+	for _, t := range resolution.Targets {
+		for _, f := range t.Files {
+			p := absClean(f)
+			fileTarget[p] = t.Path
+			add(p)
 		}
 	}
 	sort.Strings(paths)
@@ -258,20 +303,37 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 		res.Diags[cfgKey] = append(res.Diags[cfgKey], c.polDiags...)
 	}
 
+	// Resolution diagnostics (a malformed target, an escaping pattern,
+	// a pattern matching nothing) belong to the config file, and are
+	// republished on every snapshot like the policy ones.
+	if len(targetDiags) > 0 {
+		cfgKey := absClean(c.cfg.Path)
+		res.Diags[cfgKey] = append(res.Diags[cfgKey], targetDiags...)
+	}
+
 	// Workspace phase: duplicate query names, first definition in
 	// sorted-path order wins — the same collation the pipeline gets
-	// from ExpandGlobs, so CLI and LSP flag the same file.
-	names := map[string]string{}
+	// from the resolution, so CLI and LSP flag the same file. The scope
+	// is the TARGET, not the workspace: two generated packages may each
+	// define GetUser. A buffer that belongs to no target is its own
+	// scope (it generates nothing, but its queries are still checked).
+	names := map[string]map[string]string{}
 	dup := map[*template.QueryTemplate]bool{}
 	for _, p := range paths {
+		scope := fileTarget[p]
+		byName := names[scope]
+		if byName == nil {
+			byName = map[string]string{}
+			names[scope] = byName
+		}
 		for _, q := range res.Files[p].Queries {
-			if prev, isDup := names[q.Name]; isDup {
+			if prev, isDup := byName[q.Name]; isDup {
 				dup[q] = true
 				res.Diags[p] = append(res.Diags[p], diagnostics.Errorf(diagnostics.CodeDuplicateQueryName,
 					q.HeaderSpan, "query %q already defined in %s", q.Name, prev))
 				continue
 			}
-			names[q.Name] = p
+			byName[q.Name] = p
 		}
 	}
 

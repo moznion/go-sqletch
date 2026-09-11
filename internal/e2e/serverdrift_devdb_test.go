@@ -52,10 +52,11 @@ database:
   dsn: `+dsn+`
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 cache:
   path: .sqletch/cache
 `)

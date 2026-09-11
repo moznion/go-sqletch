@@ -36,9 +36,10 @@ go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=15s
 go test ./internal/codegen  -run '^$' -fuzz=FuzzComposeConformance -fuzztime=15s
 go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=15s
 go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=15s
+go test ./internal/pathpat -run '^$' -fuzz=FuzzPattern -fuzztime=15s
 ```
 
-All four fuzz targets run in CI for 30s. A crasher is written to the
+All five fuzz targets run in CI for 30s. A crasher is written to the
 package's `testdata/fuzz/<target>/`; commit it — that file *is* the
 regression test.
 
@@ -128,7 +129,12 @@ internal/devdb      P4  DSN or testcontainers; DISPOSABLE by contract
 internal/nullability P5 skeleton-only narrowing discipline
 internal/codegen    P6  BuildFrags + Go emission
 runtime/            P6  PUBLIC package: Compose mirrors ast.Render
+internal/pathpat    —   query-file patterns: recursive `**` globs with
+                        capture groups (doc 19); one engine both
+                        enumerates and captures, so the two cannot drift
 internal/config,cli P7  sqletch.yaml + generate/check/explain pipeline;
+                        config.ResolveTargets = the single seam mapping
+                        files -> output packages (pipeline AND LSP);
                         OfflineChecker = the LSP's analysis seam
 internal/lsp        —   language server (doc 10): JSON-RPC framing,
                         LSP subset, UTF-16 positions; stdlib only,
@@ -382,6 +388,40 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - Escape hatch is `--allow-server-drift` (flag, deliberately not a
   config key): warning + adopt. Absent record = adopt silently, so
   pre-existing committed caches keep working.
+
+## Known decisions: multi-target output (doc 19)
+
+- `sqletch.yaml` carries `targets:` — a LIST of (queries, output)
+  pairs. The pre-v0.0.2 top-level `queries:`/`output:` are removed
+  (breaking, v0.x; the legacy keys still decode ONLY to raise a
+  SQLETCH301 carrying the rewrite).
+- Patterns are `internal/pathpat`: `**` is a whole-segment, zero-or-
+  more-segment wildcard (`filepath.Glob` never had one — its `**` was
+  just `*`), and `(`…`)` captures whole segments for `$1`…`$9`
+  substitution into `output.path`/`output.package`. `(` not `{`:
+  `{` opens a YAML flow mapping, so the braced spelling would need
+  quoting. Captures align to segment boundaries by design.
+- **The grouping key is the substituted output, not the config
+  entry**: several patterns landing on one `(package, path)` merge,
+  and a capture fans one entry out into one package per directory.
+- `config.ResolveTargets` is the single resolution seam — pipeline.Run
+  and the LSP's OfflineChecker both call it, the way both already
+  share cli.scanChecks/resolvedChecks. Do not re-glob anywhere else.
+- Scope: a query NAME is unique per TARGET (SQLETCH004), everything
+  else in the config is global to the run — one schema fingerprint,
+  one cache, one dev DB, one policy set for all targets. Splitting
+  packages must never dodge a policy.
+- Zero-match patterns WARN (SQLETCH316); `schema.files` keeps the
+  error (an empty schema fingerprints nothing). `generate` sweeps
+  `*.gen.go` files it did not write from each target directory, never
+  anything else, and never outside the project.
+- Derived output mirrors the target path
+  (`.sqletch/explain/<target>/…`, `.sqletch/expanded/<target>/…`)
+  because a query name alone is no longer unique.
+- The LSP memoizes resolution on the stat signature of every directory
+  the walk consulted (a directory's mtime moves when an entry is
+  added/removed) plus the config file, so a keystroke does not re-walk
+  a `**` subtree.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

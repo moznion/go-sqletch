@@ -22,10 +22,11 @@ database:
   dsn: postgres://x
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
 `
 
 func write(t *testing.T, dir, name, content string) string {
@@ -370,8 +371,15 @@ func TestLoad_Validation(t *testing.T) {
 		{"wrong dialect", strings.Replace(validYAML, "dialect: postgres", "dialect: oracle", 1), "dialect"},
 		{"missing server_version", strings.Replace(validYAML, "server_version: \"16\"\n", "", 1), "server_version"},
 		{"missing schema", strings.Replace(validYAML, "schema:\n  files: [db/schema.sql]\n", "", 1), "schema.files"},
-		{"missing queries", strings.Replace(validYAML, "queries: [queries/*.sql]\n", "", 1), "queries"},
-		{"missing output package", strings.Replace(validYAML, "  package: gen\n", "", 1), "output.package"},
+		{"missing targets", strings.Replace(validYAML, `targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
+`, "", 1), "targets is required"},
+		{"target without queries", strings.Replace(validYAML, "  - queries: [queries/*.sql]\n", "  - queries: []\n", 1), "targets[0].queries is required"},
+		{"missing output package", strings.Replace(validYAML, "      package: gen\n", "", 1), "targets[0].output.package is required"},
+		{"missing output path", strings.Replace(validYAML, "      path: gen\n", "", 1), "targets[0].output.path is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -706,10 +714,11 @@ database:
   dsn: "postgres://x?opt=[a,b,c]"
 schema:
   files: [db/schema.sql]
-queries: [queries/*.sql, "lit[0][1][2]"]
-output:
-  package: gen
-  path: gen
+targets:
+  - queries: [queries/*.sql, "lit[0][1][2]"]
+    output:
+      package: gen
+      path: gen
 overrides:
   - {query: q, column: c, nullable: true}
 `
