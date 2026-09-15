@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/moznion/go-sqletch"
 	gen "github.com/moznion/go-sqletch/examples/mysql/gen"
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -52,7 +53,7 @@ func main() {
 
 	fmt.Println("active users, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: optional.Some("active"),
+		Status: sqletch.Present("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})
@@ -114,7 +115,7 @@ func main() {
 	fmt.Println("PATCH update (nickname only):")
 	n, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: optional.Some("allie"),
+		Nickname: sqletch.Present(optional.Some("allie")),
 	})
 	must(err)
 	fmt.Printf("  %d row(s) updated\n", n)

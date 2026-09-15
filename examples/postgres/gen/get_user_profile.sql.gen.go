@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/moznion/go-optional"
+	"github.com/moznion/go-sqletch"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type GetUserProfileParams struct {
 	ID     int64
-	Status optional.Option[string] // None omits the guarded fragment(s)
+	Status sqletch.Omittable[string] // zero value omits the guarded fragment(s)
 }
 
 type GetUserProfileRow struct {
@@ -31,11 +32,11 @@ var getUserProfileFrags = []runtime.Frag{
 func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error) {
 	var zero GetUserProfileRow
 	var key runtime.ShapeKey
-	if arg.Status.IsSome() {
+	if arg.Status.IsPresent() {
 		key.Guards |= 1 << 0
 	}
 	sqlText, argIdx := q.cache.Get("GetUserProfile", getUserProfileFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status.UnwrapAsPtr()})
+	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status.Ptr()})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/dialect/mysql"
 	"github.com/moznion/go-sqletch/internal/nullability"
 	"github.com/moznion/go-sqletch/internal/policy"
+	"github.com/moznion/go-sqletch/internal/rules"
 	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 	"github.com/moznion/go-sqletch/runtime"
@@ -160,6 +161,9 @@ type compiledQuery struct {
 	paramTypes  map[string]dialect.TypeRef
 	nullable    []bool
 	nullReasons []string // parallel to nullable; explain's "why"
+	// nullableParams are design 20's catalog-derived nullable value
+	// parameters (optional.Option[T], None binds NULL).
+	nullableParams map[string]bool
 }
 
 // Run executes the pipeline. Diagnostics are user mistakes; the error
@@ -353,6 +357,15 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		}
 		res.Diags = append(res.Diags, d...)
 		cq.paramTypes = types
+		// Design 20: parameters writing only nullable columns become
+		// Option[T]. It emits no diagnostics, so it lives beside the P5
+		// result analysis rather than in resolvedChecks (whose only
+		// product the LSP consumes is diagnostics).
+		maxTree, err := frontend.Parse(cq.rs[0].SQL)
+		if err != nil {
+			return nil, fmt.Errorf("internal: maximal rendering re-parse: %w", err)
+		}
+		cq.nullableParams = rules.DeriveNullableParams(profile, cq.q, cq.rs[0], maxTree, cat)
 		overrides := cfg.NullOverridesFor(cq.q.Name)
 		verdicts, err := nullability.AnalyzeAllVerdicts(frontend, cq.rs, cq.descs, cat, overrides)
 		if err != nil {
@@ -442,6 +455,8 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			ParamTypes: cq.paramTypes,
 			Columns:    cq.descs[0].Columns,
 			Nullable:   cq.nullable,
+
+			NullableParams: cq.nullableParams,
 		}
 		if expandedNames[cq.q.Name] {
 			for _, it := range cq.q.Items {
@@ -692,9 +707,16 @@ func writeExplainData(cfg config.Config, resolution config.Resolution, queries [
 		}
 		for _, name := range cq.q.ParamOrder {
 			tr := cq.paramTypes[name]
-			opt := ""
+			var kinds []string
 			if cq.q.Params[name].Optional {
-				opt = " (optional)"
+				kinds = append(kinds, "omittable")
+			}
+			if cq.nullableParams[name] {
+				kinds = append(kinds, "nullable")
+			}
+			opt := ""
+			if len(kinds) > 0 {
+				opt = " (" + strings.Join(kinds, ", ") + ")"
 			}
 			d.Params = append(d.Params, fmt.Sprintf("%s: %s%s", name, tr.Name, opt))
 		}

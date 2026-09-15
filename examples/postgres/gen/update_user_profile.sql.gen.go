@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/moznion/go-optional"
+	"github.com/moznion/go-sqletch"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type UpdateUserProfileParams struct {
-	Email    optional.Option[string] // None omits the guarded fragment(s)
-	Nickname optional.Option[string] // None omits the guarded fragment(s)
+	Email    sqletch.Omittable[string]                  // zero value omits the guarded fragment(s)
+	Nickname sqletch.Omittable[optional.Option[string]] // zero value omits the guarded fragment(s); None binds NULL
 	ID       int64
 }
 
@@ -34,14 +35,14 @@ var updateUserProfileFrags = []runtime.Frag{
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error) {
 	var zero UpdateUserProfileRow
 	var key runtime.ShapeKey
-	if arg.Email.IsSome() {
+	if arg.Email.IsPresent() {
 		key.Guards |= 1 << 0
 	}
-	if arg.Nickname.IsSome() {
+	if arg.Nickname.IsPresent() {
 		key.Guards |= 1 << 1
 	}
 	sqlText, argIdx := q.cache.Get("UpdateUserProfile", updateUserProfileFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.Email.UnwrapAsPtr(), arg.Nickname.UnwrapAsPtr(), arg.ID})
+	args := runtime.BuildArgs(argIdx, []any{arg.Email.Ptr(), arg.Nickname.OrZero().UnwrapAsPtr(), arg.ID})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {
