@@ -233,6 +233,27 @@ type Tree interface {
 	// woven WHERE that scopes the conflict, so refusal is the sound
 	// minimum.
 	HasConflictUpdate() bool
+	// ValueTargets reports every direct value position (design 20 §3.1)
+	// of the statement: a placeholder that is the whole value of an
+	// INSERT VALUES item paired with an explicit column list, or of a
+	// single-column UPDATE SET item — looking through explicit casts and
+	// parentheses, never through any other expression. Conflict arms,
+	// INSERT … SELECT/SET, tuple and subfield assignments, and every
+	// other clause are not listed. Facades under-report rather than
+	// over-report: an unlisted position keeps its parameter a plain
+	// value, while a wrongly listed one could make it nullable.
+	ValueTargets() []ValueTarget
+}
+
+// ValueTarget is one direct value position: the placeholder at Loc (a
+// byte offset in the parsed SQL) is the entire value written into
+// Column of the statement's target relation.
+type ValueTarget struct {
+	Column string
+	// Qualifier is the table/alias qualifier written on the target
+	// column (MySQL `SET u.nickname = ?`), "" when unqualified.
+	Qualifier string
+	Loc       int
 }
 
 // ParseError reports a dialect parse failure at a byte offset into the
