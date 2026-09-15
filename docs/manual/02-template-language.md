@@ -125,7 +125,7 @@ You never declare this — it follows from where the parameter binds:
 | Where the parameter binds | Generated field |
 |---------------------------|-----------------|
 | anywhere outside a guard | **required**, plain type (`Limit int64`) |
-| only inside fragments guarded by *itself* | **optional**, Option (`Status optional.Option[string]`) — `None` omits the fragment |
+| only inside fragments guarded by *itself* | **optional**, Omittable (`Status sqletch.Omittable[string]`) — the zero value omits the fragment |
 | only inside fragments guarded by *other* parameters | required; the value is simply unused when those fragments are off |
 | only inside `@choose` cases / `@order-by` keys | required; unused when that case/key is not selected |
 | only in a `@when` condition (never in SQL) | required, typed by the literal |
@@ -138,8 +138,34 @@ Two consequences worth internalising:
   fragments it guards, otherwise its Go type is uninferable →
   `SQLETCH111`. Pure control parameters are `@when`'s job.
 
-`nil` means *"omit this fragment"*, never *"match SQL NULL"*. To filter
-for `IS NULL`, use [`@when`](#5-when--value-conditioned-fragments).
+An omitted `Omittable` means *"omit this fragment"*, never *"match SQL
+NULL"*. To filter for `IS NULL`, use
+[`@when`](#5-when--value-conditioned-fragments). To *write* `NULL`, see
+the next section.
+
+### Nullable value parameters
+
+When **every** place a parameter binds is the whole value written into
+a nullable column — an `INSERT … VALUES` item with an explicit column
+list, or a single-column `UPDATE … SET` item, optionally wrapped in
+casts or parentheses — its type becomes `optional.Option[T]` and
+`None` binds SQL `NULL`. This is read from the catalog; there is
+nothing to annotate.
+
+| Template (`bio` nullable, `email` NOT NULL) | Generated field |
+|---|---|
+| `SET bio = :bio` | `Bio optional.Option[string]` — `None` writes NULL |
+| `SET bio = :bio::text` | same (casts are looked through) |
+| `SET bio = lower(:bio)` | `Bio string` — an expression, not a direct value |
+| `@if-present(bio)` `, bio = :bio` `@endif` | `Bio sqletch.Omittable[optional.Option[string]]` — omitted leaves the column alone, `Present(None)` writes NULL |
+| `SET email = :email` | `Email string` |
+
+A parameter that also binds anywhere else (a `WHERE` predicate, an
+upsert's `DO UPDATE SET` arm, an expression) stays a plain value, and
+writes into a view never derive (a view's catalog nullability does not
+carry its base table's constraint). For upserts, reference the
+proposed row (`DO UPDATE SET bio = EXCLUDED.bio`; MySQL `new.bio`) so
+the parameter binds only in `VALUES`.
 
 ### Parameter types
 
@@ -240,7 +266,7 @@ WHERE u.id = :id
 ```go
 type GetUserProfileParams struct {
     ID     int64
-    Status optional.Option[string] // None omits the guarded fragment(s)
+    Status sqletch.Omittable[string] // zero value omits the guarded fragment(s)
 }
 
 // without the filter
@@ -249,7 +275,7 @@ row, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 42})
 // with the filter
 row, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{
     ID:     42,
-    Status: optional.Some("active"),
+    Status: sqletch.Present("active"),
 })
 ```
 
@@ -264,7 +290,7 @@ WHERE u.id = $1
 ;
 ```
 
-**Composed SQL** — `Status: optional.Some("active")` (shape `g=1`)
+**Composed SQL** — `Status: sqletch.Present("active")` (shape `g=1`)
 
 ```sql
 SELECT u.id, u.email, u.nickname, u.org_id
@@ -321,8 +347,8 @@ LIMIT :limit;
 
 ```go
 type SearchUsersParams struct {
-    OrganizationID optional.Option[int64]  // None omits the guarded fragment(s)
-    Status         optional.Option[string] // None omits the guarded fragment(s)
+    OrganizationID sqletch.Omittable[int64]  // zero value omits the guarded fragment(s)
+    Status         sqletch.Omittable[string] // zero value omits the guarded fragment(s)
     Limit          int64
 }
 ```
@@ -386,7 +412,7 @@ RETURNING id, email, nickname, updated_at;
 ```go
 row, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
     ID:    userID,
-    Email: optional.Some("new@example.com"), // Nickname stays untouched
+    Email: sqletch.Present("new@example.com"), // Nickname stays untouched
 })
 ```
 
@@ -466,6 +492,13 @@ Caveat: a `NOT NULL` column without a default that is omitted fails at
 *execution* time — prepare-level verification cannot see per-shape
 constraint outcomes. The compiler warns about this case
 (`SQLETCH212`).
+
+`nickname` is nullable, so `Nickname` is
+`sqletch.Omittable[optional.Option[string]]`: the zero value omits the
+pair (the column takes its `DEFAULT`), `sqletch.Present(optional.None[string]())`
+inserts `NULL` explicitly — even over a non-`NULL` default — and
+`sqletch.Present(optional.Some("neo"))` inserts the value. See
+[nullable value parameters](#nullable-value-parameters).
 
 ### 4e. Multiple guards, and why they don't nest
 
@@ -547,7 +580,7 @@ LIMIT $1;
 ```
 
 This is also the idiomatic way to express *"filter where the column IS
-NULL"*, which presence Options cannot say:
+NULL"*, which presence (`Omittable`) cannot say:
 
 ```sql
 @when(status_mode = 'null')

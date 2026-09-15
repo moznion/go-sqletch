@@ -40,6 +40,12 @@ CREATE TABLE audit_logs (
     actor_id  INTEGER,
     action    TEXT NOT NULL
 );
+CREATE TABLE user_notes (
+    id      INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    note    TEXT DEFAULT 'n/a',
+    tag     TEXT
+);
 `
 
 // sqliteCorpus mirrors the MySQL corpus in SQLite dialect: every bind
@@ -127,6 +133,30 @@ INSERT INTO users (
   , :nickname
 @endif
 );
+`,
+	// Design 20: see the PostgreSQL corpus entry of the same name.
+	"create_note": `-- name: CreateNote :execrows
+-- @param user_id: integer
+-- @param tag: text
+-- @param note: text
+INSERT INTO user_notes (
+    user_id
+  , tag
+@if-present(note)
+  , note
+@endif
+) VALUES (
+    :user_id
+  , :tag
+@if-present(note)
+  , :note
+@endif
+);
+`,
+	"set_note_tag": `-- name: SetNoteTag :execrows
+-- @param tag: text
+-- @param user_id: integer
+UPDATE user_notes SET tag = CAST(:tag AS TEXT) WHERE user_id = :user_id;
 `,
 	"when_and_having": `-- name: TenantActivity :many
 -- @param action: text

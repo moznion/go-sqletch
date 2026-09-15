@@ -40,7 +40,7 @@ func TestMySQLCLIAndGeneratedModule(t *testing.T) {
 
 	dir := t.TempDir()
 	var queriesSrc strings.Builder
-	for _, name := range []string{"search_users", "in_list", "update_user_profile", "create_user", "when_and_having", "order_by_users", "filter_tree"} {
+	for _, name := range []string{"search_users", "in_list", "update_user_profile", "create_user", "create_note", "set_note_tag", "when_and_having", "order_by_users", "filter_tree"} {
 		queriesSrc.WriteString(mysqlCorpus[name])
 		queriesSrc.WriteString("\n")
 	}
@@ -185,6 +185,7 @@ import (
 
 	"github.com/moznion/go-optional"
 
+	"github.com/moznion/go-sqletch"
 	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
 	gen "sqletchgen/gen"
@@ -257,7 +258,7 @@ func main() {
 	expect(len(all) == 3, "all users")
 
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: optional.Some("active"),
+		Status: sqletch.Present("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  100,
 	})
@@ -265,7 +266,7 @@ func main() {
 	expect(len(active) == 2 && active[0].Email == "alice@example.com", "active users sorted by email")
 
 	org, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		OrganizationID: optional.Some(int64(77)),
+		OrganizationID: sqletch.Present(int64(77)),
 		Limit:          100,
 	})
 	die(err)
@@ -296,7 +297,7 @@ func main() {
 	inGuarded, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
 		TenantID: 1,
 		Statuses: []string{"active", "banned"},
-		MinID:    optional.Some(int64(2)),
+		MinID:    sqletch.Present(int64(2)),
 		Limit:    100,
 	})
 	die(err)
@@ -316,7 +317,7 @@ func main() {
 	// PATCH semantics through :execrows; verify via a direct query.
 	n, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: optional.Some("allie"),
+		Nickname: sqletch.Present(optional.Some("allie")),
 	})
 	die(err)
 	expect(n == 1, "one row patched")
@@ -339,6 +340,43 @@ func main() {
 	die(db.QueryRowContext(ctx, "SELECT nickname FROM users WHERE email = 'dave@example.com'").Scan(&nick))
 	expect(nick == nil, "omitted optional column defaults to NULL")
 
+	// Design 20: Present(None) clears a nullable column through a PATCH.
+	n, err = q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
+		ID:       1,
+		Nickname: sqletch.Present(optional.None[string]()),
+	})
+	die(err)
+	expect(n == 1, "clearing patch")
+	var cleared *string
+	die(db.QueryRowContext(ctx, "SELECT nickname FROM users WHERE id = 1").Scan(&cleared))
+	expect(cleared == nil, "Present(None) clears nickname to NULL")
+
+	// Unguarded nullable value: None binds NULL. Guarded nullable pair:
+	// omitted takes the non-NULL DEFAULT, Present(None) writes NULL.
+	_, err = q.CreateNote(ctx, gen.CreateNoteParams{UserID: 101})
+	die(err)
+	_, err = q.CreateNote(ctx, gen.CreateNoteParams{UserID: 102, Tag: optional.Some("日本語"), Note: sqletch.Present(optional.None[string]())})
+	die(err)
+	_, err = q.CreateNote(ctx, gen.CreateNoteParams{UserID: 103, Note: sqletch.Present(optional.Some("hi"))})
+	die(err)
+	var note, tag *string
+	die(db.QueryRowContext(ctx, "SELECT note, tag FROM user_notes WHERE user_id = 101").Scan(&note, &tag))
+	expect(note != nil && *note == "n/a" && tag == nil, "omitted note takes its DEFAULT; None tag is NULL")
+	die(db.QueryRowContext(ctx, "SELECT note, tag FROM user_notes WHERE user_id = 102").Scan(&note, &tag))
+	expect(note == nil && tag != nil && *tag == "日本語", "Present(None) overrides the DEFAULT; Some tag stored")
+	die(db.QueryRowContext(ctx, "SELECT note, tag FROM user_notes WHERE user_id = 103").Scan(&note, &tag))
+	expect(note != nil && *note == "hi" && tag == nil, "Present(Some) note")
+
+	// Cast-wrapped nullable UPDATE value (design 20 Q4).
+	_, err = q.SetNoteTag(ctx, gen.SetNoteTagParams{UserID: 102, Tag: optional.None[string]()})
+	die(err)
+	die(db.QueryRowContext(ctx, "SELECT tag FROM user_notes WHERE user_id = 102").Scan(&tag))
+	expect(tag == nil, "cast-wrapped None clears the tag")
+	_, err = q.SetNoteTag(ctx, gen.SetNoteTagParams{UserID: 102, Tag: optional.Some("x")})
+	die(err)
+	die(db.QueryRowContext(ctx, "SELECT tag FROM user_notes WHERE user_id = 102").Scan(&tag))
+	expect(tag != nil && *tag == "x", "cast-wrapped Some sets the tag")
+
 	// @when value guard + HAVING conjunct.
 	act, err := q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true})
 	die(err)
@@ -346,7 +384,7 @@ func main() {
 	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: false})
 	die(err)
 	expect(len(act) == 1 && act[0].Actions == 2, "@when guard drops the NULL-actor row")
-	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: optional.Some(int64(99))})
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: sqletch.Present(int64(99))})
 	die(err)
 	expect(len(act) == 0, "HAVING conjunct filters the group out")
 

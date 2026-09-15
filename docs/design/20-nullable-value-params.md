@@ -1,7 +1,6 @@
 # sqletch Design — 20: Nullable Value Parameters (NULL vs Omission)
 
-Status: **accepted** (2026-09-15; all doc-20 questions settled, not yet
-implemented). Amends design 17 §1 surface 1 and
+Status: **implemented** (2026-09-15). Amends design 17 §1 surface 1 and
 the spec's "@if-present", R9, Use Case 2, Generated API Conventions,
 and Design Boundary sections. Breaking change to generated code (v0.x;
 `docs/manual/11-compatibility.md` withholds the promise until v1.0.0).
@@ -142,11 +141,14 @@ No catalog change is needed — every dialect already records
 
 ### 3.4 Placement in the pipeline
 
-A new catalog-dependent pass `rules.DeriveNullableParams(q, rs[0],
-tree, cat) map[string]bool` runs inside `cli.resolvedChecks`, so
-`pipeline.Run` and the LSP's `OfflineChecker` share it (the
-"extend it, don't fork it" rule). Its result reaches codegen as
-`QueryInput.NullableParams` and `explain` as a param annotation.
+A new catalog-dependent pass `rules.DeriveNullableParams(profile, q,
+rs[0], tree, cat) map[string]bool` runs in `pipeline.Run` beside the P5
+result-nullability analysis. It emits no diagnostics, so it is
+deliberately NOT part of `cli.resolvedChecks`: that pass is shared with
+the LSP for its diagnostics, which this derivation cannot contribute
+to (implementation decision, reflected here). Its result reaches
+codegen as `QueryInput.NullableParams` and `explain` as a
+`(nullable)` param annotation (guards now read `(omittable)`).
 
 The dialect facade gains one method:
 
@@ -165,8 +167,11 @@ Offsets map to template parameter occurrences through the rendering's
 their parameter). A parameter is nullable iff **every** occurrence
 maps to a listed target whose column is nullable.
 
-Implemented for all four frontends: PostgreSQL (pg_query), MySQL
-(TiDB parser, server and native oracle), SQLite (rqlite/sql).
+Implemented for all three frontends: PostgreSQL (pg_query), MySQL
+(TiDB parser — one facade serves both the server and native oracle
+backends), SQLite (rqlite/sql). TiDB's parser does not set
+`UpdateStmt.MultipleTable` (its planner does), so the MySQL facade
+counts the UPDATE's table references instead.
 
 ## 4. Generated API
 
@@ -275,9 +280,11 @@ class.
   `SET`, `INSERT … SET`, upsert arms, `INSERT OR REPLACE`,
   parenthesized placeholders, single and nested casts (`:x::text::e`,
   `CAST(CAST(? AS CHAR) AS JSON)`, `BINARY ?`), and cast look-alikes
-  that must NOT count (`CONVERT(? USING …)`, `COALESCE(?, …)`); a node-kind diff against each parser's
-  AST (audit-13 lesson) so a new statement form cannot be silently
-  over-reported.
+  that must NOT count (`CONVERT(? USING …)`, `COALESCE(?, …)`). The
+  facades are whitelists — a fixed set of node kinds counts and
+  everything else is not a value position — so a new AST node kind can
+  only under-report; unlike the audit-13 walkers, no node-kind diff is
+  needed.
 - **codegen**: golden emission for all four §4 rows and the presence
   check; conformance test untouched.
 - **sqletch (root package)**: `Omittable` zero value, `Present`, `Ptr`, `OrZero`.

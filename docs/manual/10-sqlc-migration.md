@@ -61,7 +61,9 @@ sees the `OR IS NULL` de-optimization.
   fit, write two queries and pick in Go.
 - **Nullable columns are
   [go-optional](https://github.com/moznion/go-optional) `Option[T]`
-  fields** (no pointers, no `sql.Null*` / pgtype wrappers).
+  fields** (no pointers, no `sql.Null*` / pgtype wrappers), and so are
+  parameters written into nullable columns (`None` binds NULL).
+  Optional (`@if-present`) parameters are `sqletch.Omittable[T]`.
   Nullability comes from catalog analysis with conservative treatment
   of optional joins; use `overrides` for application-level
   invariants.

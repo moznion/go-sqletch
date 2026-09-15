@@ -72,7 +72,7 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 	// Full pipeline for the corpus + the :one/:maybe-one nullable-
 	// columns queries.
 	var inputs []codegen.QueryInput
-	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], corpus["in_list"], getUserProfile, findUserByEmail} {
+	for _, src := range []string{corpus["search_users"], corpus["list_audit_logs"], corpus["update_user_profile"], corpus["create_user"], corpus["signups_by_bucket"], corpus["when_and_having"], corpus["order_by_users"], corpus["filter_tree"], corpus["in_list"], corpus["create_note"], corpus["set_note_tag"], getUserProfile, findUserByEmail} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -104,12 +104,18 @@ func TestGeneratedModuleEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		maxTree, err := postgres.Frontend{}.Parse(rs[0].SQL)
+		if err != nil {
+			t.Fatal(err)
+		}
 		inputs = append(inputs, codegen.QueryInput{
 			Q:          q,
 			Frags:      codegen.BuildFrags(postgres.Profile{}, q),
 			ParamTypes: typeMap,
 			Columns:    descs[0].Columns,
 			Nullable:   nullable,
+
+			NullableParams: rules.DeriveNullableParams(postgres.Profile{}, q, rs[0], maxTree, cat),
 		})
 	}
 
@@ -194,6 +200,7 @@ import (
 
 	"github.com/moznion/go-optional"
 
+	"github.com/moznion/go-sqletch"
 	sqletchruntime "github.com/moznion/go-sqletch/runtime"
 
 	gen "sqletchgen/gen"
@@ -267,7 +274,7 @@ func main() {
 	expect(len(all) == 3, "all users")
 
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: optional.Some("active"),
+		Status: sqletch.Present("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  100,
 	})
@@ -275,7 +282,7 @@ func main() {
 	expect(len(active) == 2 && active[0].Email == "alice@example.com", "active users sorted by email")
 
 	org, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		OrganizationID: optional.Some(int64(77)),
+		OrganizationID: sqletch.Present(int64(77)),
 		Limit:          100,
 	})
 	die(err)
@@ -306,7 +313,7 @@ func main() {
 	// PATCH semantics: update only the provided field; others untouched.
 	upd, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		Nickname: optional.Some("allie"),
+		Nickname: sqletch.Present(optional.Some("allie")),
 	})
 	die(err)
 	expect(upd.Nickname.TakeOr("") == "allie", "nickname updated")
@@ -315,8 +322,8 @@ func main() {
 
 	upd2, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
 		ID:       1,
-		NewEmail: optional.Some("alice2@example.com"),
-		Bio:      optional.Some("hello"),
+		NewEmail: sqletch.Present("alice2@example.com"),
+		Bio:      sqletch.Present(optional.Some("hello")),
 	})
 	die(err)
 	expect(upd2.Email == "alice2@example.com", "email updated")
@@ -341,11 +348,41 @@ func main() {
 		Email:    "erin@example.com",
 		Status:   "active",
 		TenantID: 1,
-		Nickname: optional.Some("er"),
+		Nickname: sqletch.Present(optional.Some("er")),
 	})
 	die(err)
 	expect(created2.Nickname.TakeOr("") == "er" && created2.Bio.IsNone(),
 		"provided pair inserts, unprovided stays NULL")
+
+	// Design 20: Present(None) clears a nullable column through a PATCH
+	// instead of only leaving it untouched.
+	upd4, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
+		ID:  1,
+		Bio: sqletch.Present(optional.None[string]()),
+	})
+	die(err)
+	expect(upd4.Bio.IsNone(), "Present(None) clears bio to NULL")
+	expect(upd4.Nickname.TakeOr("") == "allie", "omitted nickname untouched by the clearing patch")
+
+	// Unguarded nullable value: None binds NULL. Guarded nullable pair:
+	// omitted takes the non-NULL DEFAULT, Present(None) writes NULL.
+	n1, err := q.CreateNote(ctx, gen.CreateNoteParams{UserID: 101})
+	die(err)
+	expect(n1.Tag.IsNone() && n1.Note.TakeOr("") == "n/a", "None tag is NULL; omitted note takes its DEFAULT")
+	n2, err := q.CreateNote(ctx, gen.CreateNoteParams{UserID: 102, Tag: optional.Some("日本語"), Note: sqletch.Present(optional.None[string]())})
+	die(err)
+	expect(n2.Tag.TakeOr("") == "日本語" && n2.Note.IsNone(), "Some tag stored; Present(None) overrides the DEFAULT")
+	n3, err := q.CreateNote(ctx, gen.CreateNoteParams{UserID: 103, Note: sqletch.Present(optional.Some("hi"))})
+	die(err)
+	expect(n3.Note.TakeOr("") == "hi" && n3.Tag.IsNone(), "Present(Some) note")
+
+	// Cast-wrapped nullable UPDATE value (design 20 Q4).
+	t1, err := q.SetNoteTag(ctx, gen.SetNoteTagParams{UserID: 102, Tag: optional.None[string]()})
+	die(err)
+	expect(t1.Tag.IsNone(), "cast-wrapped None clears the tag")
+	t2, err := q.SetNoteTag(ctx, gen.SetNoteTagParams{UserID: 102, Tag: optional.Some("x")})
+	die(err)
+	expect(t2.Tag.TakeOr("") == "x", "cast-wrapped Some sets the tag")
 
 	// @choose in a projection slot: the aggregation expression swaps
 	// per case; a required enum's zero value errors before the DB.
@@ -370,7 +407,7 @@ func main() {
 	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: false})
 	die(err)
 	expect(len(act) == 1 && act[0].Actions == 2, "@when guard drops the NULL-actor row")
-	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: optional.Some(int64(99))})
+	act, err = q.TenantActivity(ctx, gen.TenantActivityParams{IncludeCron: true, MinActions: sqletch.Present(int64(99))})
 	die(err)
 	expect(len(act) == 0, "HAVING conjunct filters the group out")
 
@@ -444,7 +481,7 @@ func main() {
 	inGuarded, err := q.UsersInStatuses(ctx, gen.UsersInStatusesParams{
 		TenantID: 1,
 		Statuses: []string{"active", "banned"},
-		MinID:    optional.Some(int64(3)),
+		MinID:    sqletch.Present(int64(3)),
 		Limit:    100,
 	})
 	die(err)
@@ -456,7 +493,7 @@ func main() {
 	expect(len(page1) == 2, "first page")
 	page2, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{
 		TenantID: 1,
-		AfterID:  optional.Some(page1[len(page1)-1].ID),
+		AfterID:  sqletch.Present(page1[len(page1)-1].ID),
 		Limit:    2,
 	})
 	die(err)
