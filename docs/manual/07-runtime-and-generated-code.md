@@ -20,10 +20,13 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
   sqlc code share connections and transactions.
 - `Querier` is the all-queries interface for mocking.
 - Params structs: required parameters are plain fields; `@if-present`
-  parameters are [go-optional](https://github.com/moznion/go-optional)
-  `Option[T]` fields (`optional.Some(v)` provides; the zero value
-  `None` omits); `@choose` is an enum; `@order-by` a key-constant
-  slice; `@in` a slice; `@filter-tree` a `*runtime.Tree`.
+  parameters are `sqletch.Omittable[T]` fields (`sqletch.Present(v)`
+  provides; the zero value omits); parameters written only into
+  nullable columns are
+  [go-optional](https://github.com/moznion/go-optional) `Option[T]`
+  (`None` binds NULL; guarded ones nest as `Omittable[Option[T]]`);
+  `@choose` is an enum; `@order-by` a key-constant slice; `@in` a
+  slice; `@filter-tree` a `*runtime.Tree`.
 - Row structs: one field per result column; nullable columns are
   `optional.Option[T]` fields (see nullability below). The scan path
   still hands the driver plain `*T` destinations and converts with

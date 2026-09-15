@@ -42,6 +42,12 @@ CREATE TABLE audit_logs (
     action     VARCHAR(64) NOT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 );
+CREATE TABLE user_notes (
+    id      BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    note    VARCHAR(64) DEFAULT 'n/a',
+    tag     VARCHAR(64)
+);
 `
 
 // mysqlCorpus mirrors the PostgreSQL corpus in MySQL dialect: every
@@ -131,6 +137,30 @@ INSERT INTO users (
   , :nickname
 @endif
 );
+`,
+	// Design 20: see the PostgreSQL corpus entry of the same name.
+	"create_note": `-- name: CreateNote :execrows
+-- @param user_id: bigint
+-- @param tag: varchar(64)
+-- @param note: varchar(64)
+INSERT INTO user_notes (
+    user_id
+  , tag
+@if-present(note)
+  , note
+@endif
+) VALUES (
+    :user_id
+  , :tag
+@if-present(note)
+  , :note
+@endif
+);
+`,
+	"set_note_tag": `-- name: SetNoteTag :execrows
+-- @param tag: varchar(64)
+-- @param user_id: bigint
+UPDATE user_notes SET tag = CAST(:tag AS CHAR(64)) WHERE user_id = :user_id;
 `,
 	"when_and_having": `-- name: TenantActivity :many
 -- @param action: varchar(64)

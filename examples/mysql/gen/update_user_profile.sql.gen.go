@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/moznion/go-optional"
+	"github.com/moznion/go-sqletch"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type UpdateUserProfileParams struct {
-	NewEmail optional.Option[string] // None omits the guarded fragment(s)
-	Nickname optional.Option[string] // None omits the guarded fragment(s)
+	NewEmail sqletch.Omittable[string]                  // zero value omits the guarded fragment(s)
+	Nickname sqletch.Omittable[optional.Option[string]] // zero value omits the guarded fragment(s); None binds NULL
 	ID       int64
 }
 
@@ -26,10 +27,10 @@ var updateUserProfileFrags = []runtime.Frag{
 
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (int64, error) {
 	var key runtime.ShapeKey
-	if arg.NewEmail.IsSome() {
+	if arg.NewEmail.IsPresent() {
 		key.Guards |= 1 << 0
 	}
-	if arg.Nickname.IsSome() {
+	if arg.Nickname.IsPresent() {
 		key.Guards |= 1 << 1
 	}
 	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UpdateUserProfile", updateUserProfileFrags, key)
@@ -37,7 +38,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		q.observeReject(ctx, "UpdateUserProfile", err)
 		return 0, err
 	}
-	args := runtime.ResolveArgs(binds, []any{arg.NewEmail.UnwrapAsPtr(), arg.Nickname.UnwrapAsPtr(), arg.ID}, nil)
+	args := runtime.ResolveArgs(binds, []any{arg.NewEmail.Ptr(), arg.Nickname.OrZero().UnwrapAsPtr(), arg.ID}, nil)
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {

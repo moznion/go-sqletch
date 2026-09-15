@@ -4,6 +4,12 @@ Status: implemented (2026-08). Delta over designs 05/06; spec sections
 "Query annotations", "@if-present", R9, and "Generated API
 Conventions" updated in the same change.
 
+**Amended by design 20 (2026-09-15):** surface 1 moved to
+`sqletch.Omittable[T]` (presence check `IsPresent()`, bind `Ptr()`);
+`Option[T]` now means SQL `NULL` only — surfaces 2 and 3 plus
+catalog-derived nullable value parameters. "Absence is uniformly
+`Option[T]`" below is historical.
+
 ## 1. Decision
 
 Generated code represents **absence** uniformly with

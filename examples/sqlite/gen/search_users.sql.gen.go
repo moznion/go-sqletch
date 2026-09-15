@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/moznion/go-optional"
+	"github.com/moznion/go-sqletch"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
@@ -19,8 +20,8 @@ const (
 )
 
 type SearchUsersParams struct {
-	Status      optional.Option[string] // None omits the guarded fragment(s)
-	EmailPrefix optional.Option[string] // None omits the guarded fragment(s)
+	Status      sqletch.Omittable[string] // zero value omits the guarded fragment(s)
+	EmailPrefix sqletch.Omittable[string] // zero value omits the guarded fragment(s)
 	Limit       int64
 	Sort        SearchUsersSort // zero value selects @default
 }
@@ -47,10 +48,10 @@ var searchUsersFrags = []runtime.Frag{
 
 func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error) {
 	var key runtime.ShapeKey
-	if arg.Status.IsSome() {
+	if arg.Status.IsPresent() {
 		key.Guards |= 1 << 0
 	}
-	if arg.EmailPrefix.IsSome() {
+	if arg.EmailPrefix.IsPresent() {
 		key.Guards |= 1 << 1
 	}
 	ord0, err := runtime.ChooseOrdinal(int(arg.Sort), 1, true)
@@ -64,7 +65,7 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 		q.observeReject(ctx, "SearchUsers", err)
 		return nil, err
 	}
-	args := runtime.ResolveArgs(binds, []any{arg.Status.UnwrapAsPtr(), arg.EmailPrefix.UnwrapAsPtr(), arg.Limit}, nil)
+	args := runtime.ResolveArgs(binds, []any{arg.Status.Ptr(), arg.EmailPrefix.Ptr(), arg.Limit}, nil)
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {

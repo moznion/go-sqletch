@@ -32,9 +32,13 @@ type Table struct {
 	// null-extending) body need not preserve — so a base table appearing
 	// directly in FROM must not be allowed to vouch for a column that
 	// actually flows through a view. The nullability analyzer treats any
-	// view in play as a wholesale narrowing kill-switch. PostgreSQL and
-	// MySQL report the view's own identity (never the base table) and so
-	// never set this; omitempty keeps their catalogs byte-identical.
+	// view in play as a wholesale narrowing kill-switch. The PostgreSQL
+	// (relkind v/m) and MySQL server (table_type VIEW) snapshots record it
+	// too (their view-provenance fix), and design 20 relies on it on
+	// every dialect: a view's column NOT NULL does not carry its base
+	// column's constraint, so a write into a view never derives a
+	// nullable parameter. The native MySQL catalog refuses CREATE VIEW.
+	// omitempty keeps view-free catalogs byte-identical.
 	IsView bool     `json:"is_view,omitempty"`
 	Cols   []Column `json:"cols"`
 }

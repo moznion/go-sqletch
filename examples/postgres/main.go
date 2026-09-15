@@ -11,10 +11,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/moznion/go-optional"
-
 	"github.com/jackc/pgx/v5"
 
+	"github.com/moznion/go-sqletch"
 	gen "github.com/moznion/go-sqletch/examples/postgres/gen"
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -33,7 +32,7 @@ func main() {
 	})
 
 	users, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: optional.Some("active"),
+		Status: sqletch.Present("active"),
 		Sort:   gen.SearchUsersSortCreatedAtDesc,
 		Limit:  20,
 	})

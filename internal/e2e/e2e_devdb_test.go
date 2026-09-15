@@ -50,6 +50,12 @@ CREATE TABLE audit_logs (
     action     text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE user_notes (
+    id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id bigint NOT NULL,
+    note    text DEFAULT 'n/a',
+    tag     text
+);
 `
 
 // corpus: the design-doc use cases, exercised end to end.
@@ -146,6 +152,30 @@ INSERT INTO users (
 @endif
 )
 RETURNING id, email, nickname, bio;
+`,
+	// Design 20: tag is an unguarded nullable value (Option, None binds
+	// NULL); note is a guarded nullable pair over a non-NULL DEFAULT
+	// (Omittable[Option]: omitted -> DEFAULT, Present(None) -> NULL).
+	"create_note": `-- name: CreateNote :one
+INSERT INTO user_notes (
+    user_id
+  , tag
+@if-present(note)
+  , note
+@endif
+) VALUES (
+    :user_id
+  , :tag
+@if-present(note)
+  , :note
+@endif
+)
+RETURNING id, note, tag;
+`,
+	// Design 20 Q4: a cast-wrapped placeholder is still a direct value.
+	"set_note_tag": `-- name: SetNoteTag :one
+UPDATE user_notes SET tag = :tag::text WHERE user_id = :user_id
+RETURNING id, note, tag;
 `,
 	"signups_by_bucket": `-- name: SignupsByBucket :many
 SELECT

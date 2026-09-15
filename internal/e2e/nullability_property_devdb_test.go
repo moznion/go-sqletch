@@ -56,6 +56,9 @@ var propertyParamValues = map[string]any{
 	"scope_prefix":    "a",
 	"vol_min_users":   int64(0),
 	"vol_max_id":      int64(0),
+	"user_id":         int64(1),
+	"tag":             "tag",
+	"note":            "note",
 }
 
 // paramArgs resolves a shape rendering's positional binds by name.
@@ -101,6 +104,8 @@ INSERT INTO users (email, status, tenant_id, org_id, nickname, bio) VALUES
 INSERT INTO organization_users (user_id, organization_id) VALUES (1, 1), (2, 1);
 INSERT INTO audit_logs (tenant_id, actor_id, action) VALUES
   (1, 1, 'login'), (1, NULL, 'cron'), (1, 2, 'login'), (2, NULL, 'x');
+INSERT INTO user_notes (user_id, note, tag) VALUES
+  (1, NULL, NULL), (1, 'n', '日本語'), (2, DEFAULT, NULL);
 `
 
 func TestPropertyVerdictSoundness(t *testing.T) {

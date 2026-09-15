@@ -71,14 +71,17 @@ database, then generates:
 
 ```go
 users, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: optional.Some("active"), // None omits the fragment
+    Status: sqletch.Present("active"), // the zero value omits the fragment
     Limit:  50,
 })
 ```
 
-Optional parameters are
-[go-optional](https://github.com/moznion/go-optional) `Option[T]`
-values; `None` (the zero value) removes their fragments. The
+Optional parameters are `sqletch.Omittable[T]` values
+(`github.com/moznion/go-sqletch`); the zero value removes their
+fragments. SQL `NULL` is spelled with
+[go-optional](https://github.com/moznion/go-optional)'s `Option[T]` —
+nullable result columns, and parameters written into nullable
+columns. The
 SQL sent for each combination is byte-for-byte one of the shapes that
 were verified at compile time — values only ever travel as bind
 parameters.

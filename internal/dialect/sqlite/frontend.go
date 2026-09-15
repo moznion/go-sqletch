@@ -319,6 +319,59 @@ func (t *tree) HasConflictUpdate() bool {
 	return ins.UpsertClause != nil && ins.UpsertClause.DoUpdate.IsValid()
 }
 
+// ValueTargets reports design 20's direct value positions: VALUES items
+// paired with an explicit column list, and single-column UPDATE SET
+// items. The upsert arm and RETURNING are never walked; a parenthesized
+// column-list assignment (`SET (a) = (?)`) is a row-value form and is
+// skipped.
+func (t *tree) ValueTargets() []dialect.ValueTarget {
+	var out []dialect.ValueTarget
+	switch s := t.first().(type) {
+	case *rsql.InsertStatement:
+		if s.Select != nil || s.DefaultValues.IsValid() || len(s.Columns) == 0 {
+			return nil
+		}
+		for _, row := range s.ValueLists {
+			if row == nil || len(row.Exprs) != len(s.Columns) {
+				continue
+			}
+			for i, e := range row.Exprs {
+				if off, ok := bindOffset(e); ok {
+					out = append(out, dialect.ValueTarget{Column: s.Columns[i].Name, Loc: t.b(off)})
+				}
+			}
+		}
+	case *rsql.UpdateStatement:
+		for _, a := range s.Assignments {
+			if a == nil || a.Lparen.IsValid() || len(a.Columns) != 1 {
+				continue
+			}
+			if off, ok := bindOffset(a.Expr); ok {
+				out = append(out, dialect.ValueTarget{Column: a.Columns[0].Name, Loc: t.b(off)})
+			}
+		}
+	}
+	return out
+}
+
+// bindOffset returns the rune offset of the bind parameter that e is,
+// looking through parentheses and CAST only: a cast of NULL is NULL, so
+// the wrapper does not change what a NULL bind writes.
+func bindOffset(e rsql.Expr) (int, bool) {
+	for {
+		switch v := e.(type) {
+		case *rsql.BindExpr:
+			return v.NamePos.Offset, true
+		case *rsql.ParenExpr:
+			e = v.X
+		case *rsql.CastExpr:
+			e = v.X
+		default:
+			return 0, false
+		}
+	}
+}
+
 func (t *tree) sel() *rsql.SelectStatement {
 	s, _ := t.first().(*rsql.SelectStatement)
 	return s

@@ -351,12 +351,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 ## Known decisions: go-optional adoption (doc 17)
 
-- Generated code represents absence with moznion/go-optional's
-  `Option[T]` — optional params (`None` omits; presence = `IsSome()`,
-  bind = `UnwrapAsPtr()`), nullable result columns, and the
-  `:maybe-one` annotation (`(None, nil)` on the driver's no-rows
-  error). NO pointer fallback, no config knob (owner decision
-  2026-08-09); the generated `Ptr` helper is gone.
+- Generated code represents SQL NULL with moznion/go-optional's
+  `Option[T]` — nullable result columns, the `:maybe-one` annotation
+  (`(None, nil)` on the driver's no-rows error), and doc-20 nullable
+  value params. Presence guards moved OFF Option to
+  `sqletch.Omittable[T]` in doc 20 (see below). NO pointer fallback, no
+  config knob (owner decision 2026-08-09); the generated `Ptr` helper
+  is gone.
 - **The driver boundary is deliberately unchanged**: bind `*T` via
   UnwrapAsPtr, scan via `*T` temporaries + `FromNillable`. Do not
   switch the generated scan path to Option's `sql.Scanner` — pgx
@@ -366,6 +367,32 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - config's `Override.Nullable` stays `*bool`: yaml.v3 decodes only
   via `yaml.Unmarshaler`, and go-optional should not take a yaml.v3
   dependency for one field.
+
+## Known decisions: nullable value params (doc 20)
+
+- One Go type per meaning (owner decision 2026-09-15, "split 2"):
+  `optional.Option[T]` = SQL NULL everywhere; `@if-present` params are
+  `sqletch.Omittable[T]` from the NEW module-root package
+  (`omittable.go`; presence `IsPresent()`, bind `Ptr()`); guarded +
+  nullable nests as `Omittable[Option[T]]` (bind
+  `OrZero().UnwrapAsPtr()`) = PATCH tri-state. Every bind is still a
+  `*T`. The root package must not import go-optional or
+  `encoding/json` (no JSON methods, owner decision); moving
+  `runtime.Tree`/`Err*` there is a separate, unscheduled design.
+- Nullability of a param is DERIVED, never annotated:
+  `rules.DeriveNullableParams` requires EVERY bind occurrence to be a
+  `Tree.ValueTargets` position (bare or cast/paren-wrapped INSERT
+  VALUES item with explicit column list, or single-column UPDATE SET)
+  of a nullable column of a base table. Views, conflict arms,
+  INSERT…SELECT/SET, tuple/subfield SET, MySQL multi-table UPDATE,
+  policy/@when/@in/@filter-tree params, and occurrences absent from
+  the maximal rendering all keep `T`. Occurrences map through
+  `Rendering.Map.ToTemplate` (placeholders are synth segments anchored
+  at their `:name`), never through ParamsSeq ordinals.
+- Failure direction: wrongly-nullable surfaces only as a loud
+  constraint error on `None`; facades are whitelists and must
+  under-report. The derivation runs beside P5 in `pipeline.Run`, NOT in
+  `cli.resolvedChecks` (it emits no diagnostics).
 
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 

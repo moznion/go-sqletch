@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/moznion/go-optional"
+	"github.com/moznion/go-sqletch"
 	"github.com/moznion/go-sqletch/runtime"
 )
 
 type ListAuditLogsParams struct {
 	TenantID int64
-	AfterID  optional.Option[int64] // None omits the guarded fragment(s)
+	AfterID  sqletch.Omittable[int64] // zero value omits the guarded fragment(s)
 	Limit    int64
 }
 
@@ -31,11 +32,11 @@ var listAuditLogsFrags = []runtime.Frag{
 
 func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
 	var key runtime.ShapeKey
-	if arg.AfterID.IsSome() {
+	if arg.AfterID.IsPresent() {
 		key.Guards |= 1 << 0
 	}
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.UnwrapAsPtr(), arg.Limit})
+	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Limit})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {

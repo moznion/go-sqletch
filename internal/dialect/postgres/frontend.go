@@ -300,6 +300,82 @@ func (t *tree) HasConflictUpdate() bool {
 	return ins.OnConflictClause.Action == pgquery.OnConflictAction_ONCONFLICT_UPDATE
 }
 
+// ValueTargets reports design 20's direct value positions: VALUES items
+// paired with an explicit column list, and single-column UPDATE SET
+// items. The ON CONFLICT arm, RETURNING, and WITH bodies are never
+// walked.
+func (t *tree) ValueTargets() []dialect.ValueTarget {
+	n := t.stmt()
+	if n == nil {
+		return nil
+	}
+	var out []dialect.ValueTarget
+	switch {
+	case n.GetInsertStmt() != nil:
+		ins := n.GetInsertStmt()
+		if len(ins.Cols) == 0 || ins.SelectStmt == nil {
+			return nil
+		}
+		sel := ins.SelectStmt.GetSelectStmt()
+		if sel == nil || sel.Op != pgquery.SetOperation_SETOP_NONE {
+			return nil
+		}
+		cols := make([]string, len(ins.Cols))
+		for i, c := range ins.Cols {
+			// A subfield or array-element target (`comp.f`, `arr[1]`)
+			// writes part of a column, not the column itself.
+			if rt := c.GetResTarget(); rt != nil && len(rt.Indirection) == 0 {
+				cols[i] = rt.Name
+			}
+		}
+		for _, row := range sel.ValuesLists {
+			items := row.GetList().GetItems()
+			if len(items) != len(cols) {
+				continue
+			}
+			for i, item := range items {
+				if cols[i] == "" {
+					continue
+				}
+				if loc, ok := placeholderLoc(item); ok {
+					out = append(out, dialect.ValueTarget{Column: cols[i], Loc: loc})
+				}
+			}
+		}
+	case n.GetUpdateStmt() != nil:
+		for _, item := range n.GetUpdateStmt().TargetList {
+			// A tuple assignment's items carry a MultiAssignRef value,
+			// which placeholderLoc rejects.
+			rt := item.GetResTarget()
+			if rt == nil || len(rt.Indirection) != 0 {
+				continue
+			}
+			if loc, ok := placeholderLoc(rt.Val); ok {
+				out = append(out, dialect.ValueTarget{Column: rt.Name, Loc: loc})
+			}
+		}
+	}
+	return out
+}
+
+// placeholderLoc returns the location of the parameter placeholder that
+// node is, looking through explicit casts only (pg_query already drops
+// grouping parentheses): a cast of NULL is NULL, so the wrapper does not
+// change what a NULL bind writes.
+func placeholderLoc(node *pgquery.Node) (int, bool) {
+	for node != nil {
+		switch {
+		case node.GetParamRef() != nil:
+			return int(node.GetParamRef().Location), true
+		case node.GetTypeCast() != nil:
+			node = node.GetTypeCast().Arg
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
 func relFromRangeVar(rv *pgquery.RangeVar, join dialect.JoinType, nullable bool) dialect.RelRef {
 	alias := ""
 	if rv.Alias != nil {

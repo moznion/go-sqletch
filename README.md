@@ -76,7 +76,7 @@ LIMIT :limit;
 
 ```go
 rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: optional.Some("active"),         // None omits the predicate
+    Status: sqletch.Present("active"),       // the zero value omits the predicate
     Sort:   gen.SearchUsersSortCreatedAtDesc,
     Limit:  50,
 })
@@ -246,7 +246,9 @@ identifier resolution, parameter and result types, constant result
 shape, and (conservatively) nullability — nullable columns become
 [go-optional](https://github.com/moznion/go-optional) `Option[T]`
 fields, and the analysis never claims non-null unless it holds
-in *all* shapes. Planner-only failures (e.g. `FOR UPDATE` with an
+in *all* shapes. Parameters written into nullable columns are
+`Option[T]` too (`None` writes NULL), distinct from the
+`sqletch.Omittable[T]` of optional fragments. Planner-only failures (e.g. `FOR UPDATE` with an
 optional `LEFT JOIN`) are rejected statically where known and covered
 by `check --exhaustive` otherwise.
 

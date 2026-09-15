@@ -12,10 +12,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/moznion/go-optional"
-
 	_ "github.com/ncruces/go-sqlite3/driver"
 
+	"github.com/moznion/go-sqletch"
 	gen "github.com/moznion/go-sqletch/examples/sqlite/gen"
 	"github.com/moznion/go-sqletch/runtime"
 )
@@ -60,7 +59,7 @@ func main() {
 
 	fmt.Println("active, sorted by email:")
 	active, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-		Status: optional.Some("active"),
+		Status: sqletch.Present("active"),
 		Sort:   gen.SearchUsersSortEmailAsc,
 		Limit:  10,
 	})

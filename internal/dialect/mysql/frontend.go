@@ -13,8 +13,9 @@ import (
 	// The parser requires a value-expression driver; the test_driver is
 	// the standalone one (the same choice sqlc makes). sqletch only
 	// parses — it never evaluates expressions — so the driver's
-	// restricted type support is irrelevant.
-	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
+	// restricted type support is irrelevant. Its ParamMarkerExpr is the
+	// concrete placeholder node ValueTargets matches.
+	driver "github.com/pingcap/tidb/pkg/parser/test_driver"
 
 	"github.com/moznion/go-sqletch/internal/dialect"
 )
@@ -273,6 +274,80 @@ func (t *tree) HasConflictUpdate() bool {
 	// ON DUPLICATE KEY UPDATE populates OnDuplicate (a list of
 	// assignments); it modifies rows on a unique-key collision.
 	return len(ins.OnDuplicate) > 0
+}
+
+// ValueTargets reports design 20's direct value positions: VALUES items
+// paired with an explicit column list (INSERT/REPLACE), and SET items of
+// a single-table UPDATE. ON DUPLICATE KEY UPDATE and INSERT … SET are
+// never walked; a multi-table UPDATE reports nothing, because an
+// assignment there may write any joined table. The parser does not set
+// UpdateStmt.MultipleTable (the planner does), so the table references
+// are counted instead.
+func (t *tree) ValueTargets() []dialect.ValueTarget {
+	var out []dialect.ValueTarget
+	switch s := t.first().(type) {
+	case *ast.InsertStmt:
+		if s.Setlist || s.Select != nil || len(s.Columns) == 0 {
+			return nil
+		}
+		for _, row := range s.Lists {
+			if len(row) != len(s.Columns) {
+				continue
+			}
+			for i, e := range row {
+				if vt, ok := valueTarget(s.Columns[i], e); ok {
+					out = append(out, vt)
+				}
+			}
+		}
+	case *ast.UpdateStmt:
+		if s.TableRefs == nil {
+			return nil
+		}
+		var rels []dialect.RelRef
+		collectJoin(s.TableRefs.TableRefs, dialect.JoinBase, false, &rels)
+		if s.MultipleTable || len(rels) != 1 {
+			return nil
+		}
+		for _, a := range s.List {
+			if vt, ok := valueTarget(a.Column, a.Expr); ok {
+				out = append(out, vt)
+			}
+		}
+	}
+	return out
+}
+
+func valueTarget(col *ast.ColumnName, e ast.ExprNode) (dialect.ValueTarget, bool) {
+	// A schema-qualified target cannot be matched against the statement's
+	// relation by name alone; under-report it.
+	if col == nil || col.Schema.O != "" {
+		return dialect.ValueTarget{}, false
+	}
+	loc, ok := placeholderLoc(e)
+	if !ok {
+		return dialect.ValueTarget{}, false
+	}
+	return dialect.ValueTarget{Column: col.Name.O, Qualifier: col.Table.O, Loc: loc}, true
+}
+
+// placeholderLoc returns the byte offset of the placeholder that e is,
+// looking through parentheses and FuncCastExpr (CAST, CONVERT(…, T),
+// BINARY) only: a cast of NULL is NULL, so the wrapper does not change
+// what a NULL bind writes.
+func placeholderLoc(e ast.ExprNode) (int, bool) {
+	for {
+		switch v := e.(type) {
+		case *driver.ParamMarkerExpr:
+			return v.Offset, true
+		case *ast.ParenthesesExpr:
+			e = v.Expr
+		case *ast.FuncCastExpr:
+			e = v.Expr
+		default:
+			return 0, false
+		}
+	}
 }
 
 func (t *tree) sel() *ast.SelectStmt {

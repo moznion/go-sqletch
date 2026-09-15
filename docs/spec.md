@@ -393,8 +393,9 @@ result), `:execrows` (affected count).
 ### `@if-present(param, …)` … `@endif`
 
 Includes the enclosed fragment iff **all** listed parameters are
-provided at runtime. Presence is expressed in Go by `Some` values of
-`optional.Option[T]` fields (see Generated API Conventions).
+provided at runtime. Presence is expressed in Go by
+`sqletch.Omittable[T]` fields: the zero value omits, `sqletch.Present(v)`
+provides (see Generated API Conventions).
 
 Allowed slots:
 
@@ -411,9 +412,10 @@ Multiple blocks may share the same guard parameters; they switch on and
 off together. Guards do not nest — a fragment needing two conditions
 uses a multi-parameter guard: `@if-present(a, b)`.
 
-Note: presence Options mean `None` = "omit the fragment". They cannot
-express "filter where the column IS NULL" (SQL `NULL` as a *value* of
-an optional filter). That case is `@when`'s job. See Design Boundary.
+Note: presence means "omit the fragment", never SQL `NULL`. Writing
+`NULL` into a nullable column is a *value* — a nullable parameter
+(`optional.Option[T]`, see R9) — and "filter where the column IS NULL"
+is `@when`'s job. See Design Boundary.
 
 ### `@choose(param)` / `@case(value)` / `@default` / `@end`
 
@@ -707,7 +709,18 @@ name is a compile diagnostic.
 -   **R9 — Parameter discipline.**
     -   A parameter is **optional** iff every one of its bind
         appearances lies in fragments whose guard sets include it; it
-        becomes an `optional.Option[T]` field (`None` = absent).
+        becomes a `sqletch.Omittable[T]` field (zero value = absent).
+    -   Orthogonally, a parameter is **nullable** iff every one of its
+        bind appearances is a *direct value position* of a nullable
+        base-table column: the whole value (looking through explicit
+        casts and parentheses) of an `INSERT … VALUES` item paired with
+        an explicit column list, or of a single-column `UPDATE … SET`
+        item. Its value type `T` becomes `optional.Option[T]` (`None`
+        binds SQL `NULL`); a nullable optional parameter is
+        `sqletch.Omittable[optional.Option[T]]`. Nullability is derived
+        from the catalog, never annotated; any other appearance (a
+        predicate, an upsert arm, an expression) or a view target keeps
+        the plain type (design 20).
     -   A parameter with any unguarded appearance is **required** (a
         plain value field). Listing a required parameter as an
         `@if-present` guard is a compile error (the guard would be
@@ -903,7 +916,7 @@ Call site (`optional` is `github.com/moznion/go-optional`):
 
 ``` go
 rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{
-    Status: optional.Some("active"),
+    Status: sqletch.Present("active"),
     Sort:   gen.SearchUsersSortCreatedAtDesc,
     Limit:  50,
 })
@@ -941,7 +954,14 @@ RETURNING id, email, nickname, bio, updated_at;
 ``` go
 row, err := q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
     ID:    userID,
-    Email: optional.Some("new@example.com"), // nickname and bio remain untouched
+    Email: sqletch.Present("new@example.com"), // nickname and bio remain untouched
+})
+
+// nickname and bio are nullable columns, so their fields are
+// Omittable[Option[string]]: Present(None) clears one to NULL.
+row, err = q.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{
+    ID:  userID,
+    Bio: sqletch.Present(optional.None[string]()),
 })
 ```
 
@@ -973,6 +993,13 @@ execution time, not compile time — prepare-level verification cannot
 see per-shape constraint outcomes. The compiler warns when an optional
 insert column is `NOT NULL` without a default.
 
+Omitting a pair and writing `NULL` are different requests. An
+*unguarded* value written into a nullable column is `optional.Option[T]`
+and `None` inserts `NULL` explicitly, even over a non-`NULL` `DEFAULT`;
+a guarded nullable pair is `sqletch.Omittable[optional.Option[T]]`,
+where the zero value applies the `DEFAULT` and `Present(None)` writes
+`NULL`.
+
 ## Use Case 3: Cursor Pagination
 
 The first page and subsequent pages differ only by one predicate.
@@ -1003,7 +1030,7 @@ page1, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: t, Limit: 100
 // next page
 page2, _ := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{
     TenantID: t,
-    AfterID:  optional.Some(page1[len(page1)-1].ID),
+    AfterID:  sqletch.Present(page1[len(page1)-1].ID),
     Limit:    100,
 })
 ```
@@ -1353,12 +1380,15 @@ codebase and one transaction:
     exposing the composed SQL text for logging and tracing — "what SQL
     did this call actually run" is observable at runtime, not only via
     `sqletch explain`.
--   Absence is uniformly `github.com/moznion/go-optional`'s
-    `Option[T]`: optional (presence) parameters, nullable result
-    columns, and the `:maybe-one` result all use it — never bare
-    pointers. The generated code depends on go-optional; the scan path
-    still hands the driver plain `*T` destinations and converts with
-    `optional.FromNillable`, so driver behavior is unchanged.
+-   Absence has one type per meaning (design 20), never bare pointers.
+    SQL `NULL` is `github.com/moznion/go-optional`'s `Option[T]`:
+    nullable result columns, the `:maybe-one` result, and nullable
+    (catalog-derived) value parameters. Omission of guarded fragments
+    is `sqletch.Omittable[T]` from the module-root package
+    `github.com/moznion/go-sqletch`; a guarded nullable parameter nests
+    the two. The scan path still hands the driver plain `*T`
+    destinations and converts with `optional.FromNillable`, and every
+    bind is a `*T` (nil for `NULL`), so driver behavior is unchanged.
 -   Designed to run under `//go:generate sqletch generate`.
 
 ------------------------------------------------------------------------
@@ -1523,9 +1553,11 @@ database/sql, a builder) alongside sqletch in the same repository:
     two queries. Constant result shape is what makes one typed row
     struct per query possible; two shapes are two queries. The split
     also keeps each query independently plannable and auditable.
--   **NULL-as-value filters** — presence Options reserve `None` for
-    "absent"; "filter where column IS NULL" is expressed with `@when`,
-    not by overloading the Option.
+-   **NULL-as-value filters** — presence (`sqletch.Omittable`) means
+    "absent", and a nullable parameter's `None` writes `NULL` only in
+    direct value positions of `INSERT`/`UPDATE`; "filter where column
+    IS NULL" is expressed with `@when`, not by overloading either
+    type.
 -   **Caller-supplied SQL fragments** — a use-case layer passing WHERE
     snippets as strings into a repository is rejected on principle:
     runtime SQL text is unverifiable. The supported form is a typed

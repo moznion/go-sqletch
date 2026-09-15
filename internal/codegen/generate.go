@@ -24,6 +24,11 @@ const runtimeImport = "github.com/moznion/go-sqletch/runtime"
 // nullable result columns, and :maybe-one results alike.
 const optionalImport = "github.com/moznion/go-optional"
 
+// sqletchImport is the module-root package holding Omittable[T], the
+// presence-guard type (design 20): omission is a query-shape concept,
+// distinct from the SQL NULL that optional.Option[T] spells.
+const sqletchImport = "github.com/moznion/go-sqletch"
+
 const pgxImport = "github.com/jackc/pgx/v5"
 
 // QueryInput is everything codegen needs for one query, produced by
@@ -34,6 +39,10 @@ type QueryInput struct {
 	ParamTypes map[string]dialect.TypeRef // pinned types (premise P1)
 	Columns    []dialect.ColumnDesc       // maximal Describe result
 	Nullable   []bool                     // per column (P5)
+	// NullableParams holds the parameters rules.DeriveNullableParams
+	// found writing only nullable columns (design 20 §3): their values
+	// become optional.Option[T], None binding SQL NULL.
+	NullableParams map[string]bool
 	// ExpandedShapes, when non-nil, switches the query to strict static
 	// expansion: keys are canonical shape-key strings, precomputed by
 	// the pipeline via runtime.Compose. The function dispatches by
@@ -292,10 +301,19 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 				typ = "[]" + typ
 				comment = " // @in list; empty matches nothing"
 			}
-			if p.Optional {
+			if g.nullableParam(name) {
 				typ = "optional.Option[" + typ + "]"
-				comment = " // None omits the guarded fragment(s)"
+				comment = " // None binds NULL"
 				g.addImport(optionalImport)
+			}
+			if p.Optional {
+				typ = "sqletch.Omittable[" + typ + "]"
+				if comment == " // None binds NULL" {
+					comment = " // zero value omits the guarded fragment(s); None binds NULL"
+				} else {
+					comment = " // zero value omits the guarded fragment(s)"
+				}
+				g.addImport(sqletchImport)
 			}
 		default:
 			// A parameter the oracle never saw: legal only as a pure
@@ -698,6 +716,7 @@ var queriesMethodNames = map[string]bool{
 var importPkgIdents = map[string]bool{
 	"context": true, "runtime": true, "fmt": true, "time": true,
 	"optional": true, "errors": true, "sql": true, "pgx": true,
+	"sqletch": true,
 }
 
 // argIdent names a required argument. A required argument shares the
@@ -819,6 +838,21 @@ func (g *queryGen) writeShapesVar(w *strings.Builder) {
 		fmt.Fprint(w, "}},\n")
 	}
 	fmt.Fprint(w, "}\n\n")
+}
+
+// nullableParam reports a design-20 nullable value parameter. An @in
+// list is a slice, never a single nullable value, so it is excluded even
+// if a caller passes it in NullableParams.
+func (g *queryGen) nullableParam(name string) bool {
+	if !g.in.NullableParams[name] {
+		return false
+	}
+	for _, it := range g.in.Q.Items {
+		if in, ok := it.(*template.InExpr); ok && in.Param == name {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *queryGen) addImport(imp string) {
@@ -984,7 +1018,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 				GoName(atom.Param), op, goLiteral(atom), i)
 			continue
 		}
-		fmt.Fprintf(w, "\tif arg.%s.IsSome() {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
+		fmt.Fprintf(w, "\tif arg.%s.IsPresent() {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
 	}
 	if len(chooses) > 0 {
 		g.imports["fmt"] = true
@@ -1035,10 +1069,17 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			vals = append(vals, "nil /* predicate arg */")
 		case argExpr[name] != "":
 			vals = append(vals, argExpr[name])
+		case q.Params[name].Optional && g.nullableParam(name):
+			// Omittable[Option[T]]: the composed plan selects this slot
+			// only in shapes whose guard is on; inside, None binds NULL.
+			vals = append(vals, "arg."+GoName(name)+".OrZero().UnwrapAsPtr()")
 		case q.Params[name].Optional:
 			// The composed plan selects this slot only in shapes whose
-			// guard is on (Some), and UnwrapAsPtr keeps the value the
-			// driver sees identical to the pre-Option pointer bind.
+			// guard is on, and Ptr keeps the value the driver sees the
+			// same *T every guarded bind has always been (design 17 §2).
+			vals = append(vals, "arg."+GoName(name)+".Ptr()")
+		case g.nullableParam(name):
+			// A nil *T binds SQL NULL (design 20).
 			vals = append(vals, "arg."+GoName(name)+".UnwrapAsPtr()")
 		default:
 			vals = append(vals, "arg."+GoName(name))
