@@ -59,6 +59,7 @@ codes).
 | SQLETCH124 | A query touches a policy-designated table without the policy's scoping conjunct present in every reachable shape (in WHERE, or in the relation's own `ON` clause for a null-extended outer-join occurrence), and carries no opt-out. A hand-written copy inside `@if-present` does not count — it vanishes in guard-off shapes. |
 | SQLETCH125 | A policy applies to this query but cannot be woven: the designated table sits in a position sqletch cannot scope (inside a subquery/CTE, joined with `USING`/`NATURAL` on a null-extended side, introduced by a guarded join), its bound name is not a bare identifier, or the query declares a conflicting type for the policy parameter. Opt out explicitly (`-- @policy-optout`) or restructure. |
 | SQLETCH126 | A `-- @policy-optout` names a policy that does not exist, or one that does not apply to this query. Renaming a policy can never silently disarm its opt-outs. |
+| SQLETCH127 | A policy declared with `require_annotation: true` applies to this query, but the query carries neither `-- @policy-apply` nor `-- @policy-optout` for it. Scoping is never in doubt — the conjunct is woven either way — but the key demands the template say so. |
 
 ## SQLETCH2xx — type oracle
 

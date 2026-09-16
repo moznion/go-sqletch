@@ -114,7 +114,21 @@ Therefore:
   parse as one complete node in its slot, that is a normal R1
   diagnostic (with the span question of §6.4).
 - Static expansion, the committed cache, and `explain --enumerate` need
-  no awareness of policies.
+  no policy-specific *code* — but only because they read a template
+  that has already been through the arrow. "No awareness" is not "may
+  skip the weave": a phase that re-scans the source and renders it
+  itself sits *before* the arrow, whatever its position in the file,
+  and emits the unscoped form of a query the compiler scopes.
+  `explain --enumerate` and `explain --analyze` are the two commands
+  that enumerate shapes outside `pipeline.Run`, so they reach the
+  woven template through `cli.wovenTemplates` — the seam is theirs the
+  way `cli.scanChecks` is the pipeline's and the LSP's. A defective
+  policy set disables every policy (§D4), so they refuse rather than
+  print what would then be unscoped SQL. (Fixed 2026-09-16; both had
+  rendered the scanned template directly since P7, so `--enumerate`
+  showed and `--analyze` planned SQL that is never executed. The
+  regression tests are `TestExplainEnumerate_WeavesPolicies` and the
+  index-search assertion in `TestSQLitePolicyWeaveCLI`.)
 
 This is the whole reason the feature is cheap in soundness terms, and
 it is why no alternative placement (weaving into the rendered SQL
@@ -797,3 +811,168 @@ bare *or* wrapped in one pair of parentheses. Consequences:
 - Woven output bytes change for every woven query; oracle entries
   re-key by rendered SQL exactly as §7 describes, and the policy
   config still never enters the cache fingerprint.
+
+## 12. Mandatory acknowledgment (`require_annotation`)
+
+**Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy
+explicit; enabling it stayed implicit. This section makes both sides
+explicit, under a per-policy configuration key.
+
+### 12.1 The asymmetry being closed
+
+Today a query that touches a designated table is scoped by writing
+nothing at all, and exempted by writing `-- @policy-optout`. That is
+the right default — §1.1's inversion depends on it — but it means the
+template file is silent about the most security-relevant fact about
+the query. A reviewer reading `audit.sql` cannot tell a scoped query
+from an unscoped one without holding `sqletch.yaml` in the other hand
+and re-deriving the weaver's applicability rule. §1.6 offers `explain`
+as the audit surface; this section brings the same information into
+the artifact review actually looks at, the diff.
+
+```yaml
+policies:
+  - name: tenant_scope
+    tables: [orders, audit_logs]
+    predicate: "{}.tenant_id = :tenant_id"
+    require_annotation: true
+```
+
+With that key set, every query the policy applies to must carry one of
+the two annotations:
+
+```sql
+-- name: CountAuditLogs :one
+-- @policy-apply: tenant_scope
+SELECT count(*) AS total FROM audit_logs;
+
+-- name: AllAuditActions :many
+-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)
+SELECT a.action, count(*) FROM audit_logs AS a GROUP BY a.action;
+```
+
+A query with neither is `SQLETCH127`.
+
+### 12.2 The annotation is an acknowledgment, never a switch
+
+`-- @policy-apply` changes **nothing** about what is woven. Weaving is
+decided by the policy's table set and statement kinds exactly as
+before, whether or not the annotation is present and whether or not
+`require_annotation` is set. The annotation's only effect is to
+satisfy the requirement.
+
+This is load-bearing and deliberately narrow. Making the annotation
+*enable* weaving would invert §1.1: a query added next month would be
+unscoped until someone remembered to annotate it, which is precisely
+the failure mode this feature exists to remove. The requirement is
+therefore expressed as "absence is an error", not as "presence is
+required for scoping" — the query is scoped either way, and the
+compiler refuses to proceed until the author has said so out loud.
+
+Consequence worth stating: `require_annotation` buys review
+legibility, not a soundness property. The soundness argument of §6 is
+unchanged and does not depend on this key.
+
+### 12.3 Scope of the requirement
+
+The requirement fires on exactly the predicate that already decides
+whether an opt-out is legitimate — `analyzeApplicability(...).active`,
+plus the non-maximal overread set (`designatedOverread`). That is not
+a convenience: it is what makes the two annotations exhaustive. If the
+requirement used a wider predicate than SQLETCH126 uses, a query could
+be obliged to annotate and simultaneously forbidden from doing so.
+
+Per policy, not per query: three policies applying to one query need
+three annotations, the same granularity opt-out already has. A policy
+without `require_annotation` never contributes an obligation.
+
+### 12.4 Symmetry with SQLETCH126
+
+`-- @policy-apply` is subject to the same sanity rules as
+`-- @policy-optout`, and shares its code:
+
+- naming an unknown policy is `SQLETCH126`;
+- naming a policy that does not apply to the query is `SQLETCH126`;
+- carrying both `@policy-apply` and `@policy-optout` for one policy is
+  `SQLETCH126` — the query cannot be both acknowledged and exempt, and
+  silently preferring one would make the annotation pair unreviewable.
+
+The reason is the one §6.2 gives for opt-outs: renaming a policy must
+never silently disarm the annotations that mention it. An
+acknowledgment left behind by a rename is exactly as misleading as an
+opt-out left behind by one — it tells a reviewer the query is scoped
+by a policy that no longer exists.
+
+Like `@policy-optout`, the annotation admits an optional trailing
+`(reason)`. It is optional here because an acknowledgment carries no
+exemption: "this query is scoped" needs no justification, while "this
+query is not" does.
+
+### 12.5 Where the check runs
+
+In the weaver (`policy.Weave`, via `cli.scanChecks`), not in
+`policy.Enforce`.
+
+The obligation is a function of the policy set and the statement's
+relation list, both of which the weaver already has in hand at the
+point where it decides applicability — `apply()` computes
+`a.active` and immediately afterwards consults `optOutFor`. No
+catalog is involved, so placing it here means the LSP reports a
+missing annotation on a cold cache, like every other lexical and
+structural diagnostic, instead of only when the committed cache holds
+every rendering of the query.
+
+The SQLETCH126 extensions of §12.4 stay in `Enforce`, beside the
+opt-out sanity checks they generalize: those exist to survive a weaver
+regression, and re-deriving them independently is the whole point.
+
+**Known interaction from that split.** A stale `-- @policy-apply` left
+behind by a rename, on a policy that also sets `require_annotation`,
+surfaces as SQLETCH127 rather than SQLETCH126: the weave-time error
+stops the pipeline before `Enforce` runs. The author is not left
+stuck — 127's hint spells the current policy name — but the fix takes
+two rounds, the second reporting the dead annotation. Accepted rather
+than fixed: validating annotation names in the weaver too would put
+the policy-name table in two passes that must then agree, which is the
+coupling `Enforce` exists to avoid.
+
+### 12.6 The config-dependence carve-out
+
+CLAUDE.md and §4.2 record a rule this section breaks: *template
+validity must not depend on configuration*. R6's anchor check runs on
+the unwoven template precisely so that adding a policy cannot change
+whether a template compiles.
+
+The rule is kept for its reason rather than its letter. R6's hazard is
+a config change **silently making an invalid template valid** — the
+author's anchor obligation quietly discharged by a conjunct they did
+not write, so a template that reads as broken compiles anyway.
+`require_annotation` runs the other way: it makes a valid template
+invalid, loudly, with a diagnostic naming the annotation to add and
+the policy that demands it. That is the same direction as
+`overrides` naming a column the query does not project (SQLETCH312) or
+a `queries:` pattern matching nothing (SQLETCH316) — configuration
+stating a requirement the sources must then meet.
+
+Stated as the narrower invariant that survives: **no configuration
+may make a template compile that would not compile without it.**
+Weaving satisfies it because R6 runs unwoven; `require_annotation`
+satisfies it because it only ever subtracts.
+
+### 12.7 Rollout
+
+The key is a plain `bool` with no warning tier (owner decision
+2026-09-16). Turning it on fails every touching query at once, which
+is the intended shape of the change: the annotations are the work, and
+a warning tier would leave a codebase indefinitely half-annotated
+while reading as compliant. `sqletch explain` already lists, per
+query, which policies apply — that is the worklist, and it is
+available before the key is set.
+
+### 12.8 Cache impact
+
+The annotation is a comment and stays in the skeleton verbatim, like
+every other directive (§11.1), so adding one to a query changes its
+rendered SQL and re-keys that query's oracle entries — the ordinary
+§7 behavior for any template edit. The config key itself never enters
+the fingerprint, consistent with the rest of `policies:`.

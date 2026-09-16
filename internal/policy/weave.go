@@ -357,6 +357,18 @@ func optOutFor(q *template.QueryTemplate, name string) (template.PolicyOptOut, b
 	return template.PolicyOptOut{}, false
 }
 
+// applyFor returns the query's first `-- @policy-apply` naming the
+// policy. It is the affirmative mirror of optOutFor; unlike an
+// opt-out it changes nothing about weaving (design 14 §12.2).
+func applyFor(q *template.QueryTemplate, name string) (template.PolicyApply, bool) {
+	for _, a := range q.PolicyApplies {
+		if a.Policy == name {
+			return a, true
+		}
+	}
+	return template.PolicyApply{}, false
+}
+
 // relTemplateOff maps a relation's rendered location to its template
 // offset; ok is false when the dialect exposes no offset or the
 // location maps into synthesized text.
@@ -384,12 +396,53 @@ func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 // apply runs one policy against the query. It returns the coverage
 // record (nil when the policy does not touch the query), the WHERE
 // conjuncts to insert, the ON-clause needs, and diagnostics.
+//
+// The policy's `require_annotation` obligation (design 14 §12) is
+// checked here, around the weave rather than inside it: an
+// unannotated query is still woven, and SQLETCH127 is reported
+// alongside whatever the weave itself produced. Emitting the
+// diagnostic INSTEAD of the conjunct would make a query that fails
+// the requirement fail UNSCOPED, putting the safe direction at the
+// mercy of every caller honoring the error.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []string, []onNeed, []diagnostics.Diagnostic) {
 	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.upsertUpdate)
 	over := designatedOverread(p, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
 		return nil, nil, nil, nil
 	}
+	wp, conjuncts, needs, diags := w.applyActive(p, a, over)
+	// Appended last so the structural refusal (SQLETCH125) reads
+	// first: restructuring or opting out is the author's next move,
+	// and an opt-out discharges this obligation as a side effect.
+	if d, ok := w.annotationObligation(p); ok {
+		diags = append(diags, d)
+	}
+	return wp, conjuncts, needs, diags
+}
+
+// annotationObligation reports the policy's unmet `require_annotation`
+// demand for this query. The caller has already established that the
+// policy applies — §12.3: the obligation keys on exactly the
+// applicability predicate SQLETCH126 uses, so a query can never be
+// obliged to annotate and simultaneously forbidden from doing so.
+func (w *weaver) annotationObligation(p *Policy) (diagnostics.Diagnostic, bool) {
+	if !p.RequireAnnotation {
+		return diagnostics.Diagnostic{}, false
+	}
+	if _, ok := applyFor(w.q, p.Name); ok {
+		return diagnostics.Diagnostic{}, false
+	}
+	if _, ok := optOutFor(w.q, p.Name); ok {
+		return diagnostics.Diagnostic{}, false
+	}
+	return diagnostics.Errorf(diagnostics.CodePolicyUnannotated, w.q.HeaderSpan,
+		"policy %q applies to this query and is declared `require_annotation: true`, so the query must say so: it is scoped either way, but the template must record which",
+		p.Name).
+		WithHint("add `-- @policy-apply: %s` to acknowledge the scoping, or `-- @policy-optout: %s (reason)` to exempt this query", p.Name, p.Name), true
+}
+
+// applyActive is apply's body for a policy that does touch the query.
+func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenPolicy, []string, []onNeed, []diagnostics.Diagnostic) {
 	// An honored opt-out suppresses weaving and the unweavable
 	// diagnostics alike; an opt-out on a query the policy does not
 	// touch is SQLETCH126, owned by the enforcement pass.

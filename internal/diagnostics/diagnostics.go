@@ -78,22 +78,23 @@ const (
 	CodeNodeIncomplete    Code = "SQLETCH102" // fragment is not one complete node (R1)
 	CodeNotSingleDML      Code = "SQLETCH103" // not exactly one SELECT/UPDATE/INSERT/DELETE
 
-	CodeVacuousGuard     Code = "SQLETCH110" // required param used as guard (R9)
-	CodeGuardNeverBinds  Code = "SQLETCH111" // guard param binds nowhere under itself (R9)
-	CodeChooseParamBinds Code = "SQLETCH112" // @choose control param used as :name (R9)
-	CodeUnanchoredClause Code = "SQLETCH113" // all conjuncts optional, no anchor (R6)
-	CodeAmbiguousRef     Code = "SQLETCH114" // unqualified ref matches several relations
-	CodeScopeViolation   Code = "SQLETCH115" // reference into optional join w/o guard (R3)
-	CodePlannerSensitive Code = "SQLETCH116" // e.g. FOR UPDATE + optional LEFT JOIN
-	CodeStarExpansion    Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
-	CodeUnanchoredSet    Code = "SQLETCH118" // every SET/INSERT-list item optional, no anchor (R6)
-	CodePairedGuards     Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
-	CodeInParamScalarMix Code = "SQLETCH120" // an @in list param also bound as a plain scalar (R9)
-	CodeOrderByDistinct  Code = "SQLETCH122" // @order-by under DISTINCT ON (prefix-sensitive)
-	CodeOrderByNeedsDflt Code = "SQLETCH123" // WITH TIES requires an @order-by @default
-	CodePolicyUnscoped   Code = "SQLETCH124" // designated table without the scoping conjunct in every shape
-	CodePolicyUnweavable Code = "SQLETCH125" // a policy applies but cannot be woven into this query
-	CodePolicyBadOptOut  Code = "SQLETCH126" // @policy-optout names an unknown or inapplicable policy
+	CodeVacuousGuard      Code = "SQLETCH110" // required param used as guard (R9)
+	CodeGuardNeverBinds   Code = "SQLETCH111" // guard param binds nowhere under itself (R9)
+	CodeChooseParamBinds  Code = "SQLETCH112" // @choose control param used as :name (R9)
+	CodeUnanchoredClause  Code = "SQLETCH113" // all conjuncts optional, no anchor (R6)
+	CodeAmbiguousRef      Code = "SQLETCH114" // unqualified ref matches several relations
+	CodeScopeViolation    Code = "SQLETCH115" // reference into optional join w/o guard (R3)
+	CodePlannerSensitive  Code = "SQLETCH116" // e.g. FOR UPDATE + optional LEFT JOIN
+	CodeStarExpansion     Code = "SQLETCH117" // SELECT * would include optional-join columns (R2)
+	CodeUnanchoredSet     Code = "SQLETCH118" // every SET/INSERT-list item optional, no anchor (R6)
+	CodePairedGuards      Code = "SQLETCH119" // INSERT column/value guard pairing broken (R7)
+	CodeInParamScalarMix  Code = "SQLETCH120" // an @in list param also bound as a plain scalar (R9)
+	CodeOrderByDistinct   Code = "SQLETCH122" // @order-by under DISTINCT ON (prefix-sensitive)
+	CodeOrderByNeedsDflt  Code = "SQLETCH123" // WITH TIES requires an @order-by @default
+	CodePolicyUnscoped    Code = "SQLETCH124" // designated table without the scoping conjunct in every shape
+	CodePolicyUnweavable  Code = "SQLETCH125" // a policy applies but cannot be woven into this query
+	CodePolicyBadOptOut   Code = "SQLETCH126" // @policy-optout names an unknown or inapplicable policy
+	CodePolicyUnannotated Code = "SQLETCH127" // require_annotation: the query neither applies nor opts out
 )
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).

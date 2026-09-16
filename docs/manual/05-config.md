@@ -51,6 +51,7 @@ policies:                      # cross-query policies (see the policies chapter)
       name: tenant_id
       type: bigint             # required on MySQL/SQLite
     applies_to: [select, update, delete]   # default: all three
+    require_annotation: false    # default; true demands @policy-apply/@policy-optout
 ```
 
 ## Field notes
@@ -118,6 +119,11 @@ policies:                      # cross-query policies (see the policies chapter)
   [Cross-query policies](12-policies.md). Malformed declarations are
   SQLETCH303. A config using `policies:` is rejected by pre-policy
   sqletch binaries (strict decoding) — the desired failure direction.
+  `require_annotation: true` additionally demands that every query the
+  policy applies to carry `-- @policy-apply` or `-- @policy-optout`
+  (SQLETCH127 otherwise). It never changes what is woven — an
+  unannotated query is scoped and *then* reported — so it buys review
+  legibility, not safety.
 
 ## Targets: one config, many packages
 

@@ -34,6 +34,11 @@ type Policy struct {
 	// Kinds are the statement kinds the policy applies to. Empty =
 	// select, update, delete (every kind a row filter can scope).
 	Kinds []dialect.StmtKind
+	// RequireAnnotation makes an applicable query without a
+	// `-- @policy-apply` or `-- @policy-optout` for this policy a
+	// SQLETCH127 (design 14 §12). It is an acknowledgment
+	// requirement, never a switch: weaving is unaffected either way.
+	RequireAnnotation bool
 }
 
 // appliesTo reports whether the policy covers the statement kind.
