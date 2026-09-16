@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -39,8 +41,21 @@ const FormatVersion = 2
 const (
 	CatalogFile = "catalog.json"
 	EnvFile     = "env.json"
-	oracleDir   = "oracle"
+	// OracleDir holds one file per verified rendering.
+	OracleDir = "oracle"
 )
+
+// legacyRootFile reports whether a cache-root file is one a SUPERSEDED
+// layout wrote, which Sweep removes on sight.
+//
+// It lives next to FormatVersion on purpose: "what did older layouts
+// write" belongs where "what layout am I" is declared, so the next
+// version bump finds it. v1 named the catalog and the env sidecar by
+// fingerprint.
+func legacyRootFile(name string) bool {
+	return (strings.HasPrefix(name, "catalog-") || strings.HasPrefix(name, "env-")) &&
+		strings.HasSuffix(name, ".json")
+}
 
 // OracleRef is an entry's place in the committed tree: the target slug,
 // the query name, and the rendering's shape name (doc 21 §3).
@@ -64,7 +79,7 @@ type OracleRef struct {
 // defence in depth: these strings become filesystem paths, and no
 // spelling of them may climb out of the cache directory.
 func OracleFileName(r OracleRef) string {
-	parts := []string{oracleDir}
+	parts := []string{OracleDir}
 	for _, seg := range strings.Split(r.Target, "/") {
 		parts = append(parts, safeSegment(seg))
 	}
@@ -72,13 +87,13 @@ func OracleFileName(r OracleRef) string {
 	return path.Join(parts...)
 }
 
-// ParseOracleRef is OracleFileName's inverse for a store-relative path,
-// used by anything that discovers entries by walking the tree (the
-// oracle corpus, the generate sweep). It reports false for anything
-// that is not an entry path.
-func ParseOracleRef(rel string) (OracleRef, bool) {
+// parseOracleRef is OracleFileName's inverse for a store-relative
+// path: it is how Walk names what it finds. It reports false for
+// anything that is not an entry path, including the flat
+// `oracle/<hash>.json` files v1 wrote.
+func parseOracleRef(rel string) (OracleRef, bool) {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) < 4 || parts[0] != oracleDir {
+	if len(parts) < 4 || parts[0] != OracleDir {
 		return OracleRef{}, false
 	}
 	last := parts[len(parts)-1]
@@ -107,6 +122,109 @@ func safeSegment(seg string) string {
 		}
 	}
 	return string(b)
+}
+
+// Walk calls fn for every oracle entry in the store, with the ref that
+// names it and its absolute path, in a deterministic order (lexical,
+// parents before children — filepath.WalkDir's).
+//
+// The store owns its own tree: anything that discovers entries rather
+// than addressing one — the oracle corpus, a test — goes through here
+// instead of re-deriving the layout. Files that are not entry paths
+// (a README, an older layout's leftovers) are skipped; an absent tree
+// is not an error.
+func (s *Store) Walk(fn func(ref OracleRef, path string) error) error {
+	return s.walkEntryFiles(nil, func(rel, p string) error {
+		ref, ok := parseOracleRef(rel)
+		if !ok {
+			return nil
+		}
+		return fn(ref, p)
+	})
+}
+
+// Sweep deletes everything in the store that live does not account
+// for: entries whose ref is absent, and the root files superseded
+// layouts wrote. The two singletons are the store's own and are never
+// removed.
+//
+// It touches only files the store itself writes — regular `.json`
+// files under OracleDir, plus legacyRootFile matches at the root — so
+// a `.gitignore`, a README, a sibling tool's data file, and every
+// other subdirectory survive. A planted symlink is left alone rather
+// than followed. That discipline matters because the cache directory
+// is configured: pointed at a directory somebody else also owns, a
+// broader sweep would eat their files.
+//
+// Directories emptied by the sweep are removed, so a renamed target or
+// query leaves no husk.
+func (s *Store) Sweep(live map[OracleRef]bool) error {
+	// The root: superseded layouts' catalog/env files. Not recursive —
+	// a sibling subdirectory in there is not the store's.
+	ents, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing written yet: nothing to sweep
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if e.IsDir() || !e.Type().IsRegular() || !legacyRootFile(e.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, e.Name())); err != nil {
+			return err
+		}
+	}
+
+	var dirs []string
+	err = s.walkEntryFiles(&dirs, func(rel, p string) error {
+		if ref, ok := parseOracleRef(rel); ok && live[ref] {
+			return nil
+		}
+		return os.Remove(p)
+	})
+	if err != nil {
+		return err
+	}
+	// WalkDir yields a parent before its children, so walking dirs
+	// backwards is deepest-first. A directory that still holds
+	// something fails to remove, which is the intended outcome.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		_ = os.Remove(dirs[i])
+	}
+	return nil
+}
+
+// walkEntryFiles visits every regular `.json` file under OracleDir,
+// passing its store-relative slash path and its absolute path. When
+// dirs is non-nil it collects the subdirectories it descended, in
+// visit order (Sweep needs them to remove the ones it empties).
+func (s *Store) walkEntryFiles(dirs *[]string, fn func(rel, path string) error) error {
+	root := filepath.Join(s.dir, OracleDir)
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != root && dirs != nil {
+				*dirs = append(*dirs, p)
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".json") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.dir, p)
+		if err != nil {
+			return err
+		}
+		return fn(filepath.ToSlash(rel), p)
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // Store is the committed, offline-usable cache of oracle results and

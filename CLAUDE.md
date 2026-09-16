@@ -411,10 +411,14 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   not from enumeration position, and `ast.Renderings` disambiguates a
   colliding group by block index. `cli.oracleRef` is the single seam
   pipeline.Run and the LSP share — do not build a path anywhere else.
-- `generate` (and ONLY generate, D3) prunes every `.json` the run
-  neither wrote nor hit, mirroring `removeStaleGenerated`: `.gitignore`
-  and other non-JSON survive, symlinks are left alone, an
-  out-of-project cache dir is refused with SQLETCH306.
+- `generate` (and ONLY generate, D3) prunes every entry the run
+  neither wrote nor hit. The MECHANISM is `cache.Store.Sweep(live)` —
+  the store owns its layout, and `Store.Walk` is the one traversal
+  anything discovering entries uses (corpus included). `cli.pruneCache`
+  adds only the policy: an out-of-project cache dir is refused with
+  SQLETCH306 (via `cli.outsideProject`, shared with
+  `removeStaleGenerated`). Files sqletch does not write — non-JSON,
+  foreign subdirectories, symlinks — are never touched.
 - `cache.FormatVersion` = 2 is the migration (D4): v1 files miss, one
   cold `generate` rewrites and sweeps. A layout change means
   regenerating examples/ AND `internal/corpus/testdata` (captured cases

@@ -60,6 +60,11 @@ type OfflineChecker struct {
 	targetWalks int
 }
 
+// fileOwner is the target a workspace file belongs to, in the two
+// spellings the check needs: Path scopes duplicate-name detection, Slug
+// addresses the committed cache.
+type fileOwner struct{ path, slug string }
+
 type targetMemo struct {
 	dirs   []schemaStat // reused shape: path + stat signature
 	cfgSig statSig
@@ -255,16 +260,17 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	resolution, targetDiags := c.resolveTargets()
 	// Which target owns a file decides the SCOPE of duplicate-name
 	// detection below: two generated packages may each define GetUser.
-	fileTarget := map[string]string{}
-	// fileSlug is the same ownership, spelled the way the committed
-	// cache names entries (doc 21 §3): the LSP must look where the
-	// pipeline writes.
-	fileSlug := map[string]string{}
+	// The owner carries both spellings a file needs: the output path
+	// (the duplicate-name scope) and the slug the committed cache names
+	// entries with (doc 21 §3) — the LSP must look where the pipeline
+	// writes. Slug() is per target, never per file: this runs on every
+	// keystroke.
+	fileTarget := map[string]fileOwner{}
 	for _, t := range resolution.Targets {
+		owner := fileOwner{path: t.Path, slug: t.Slug()}
 		for _, f := range t.Files {
 			p := absClean(f)
-			fileTarget[p] = t.Path
-			fileSlug[p] = t.Slug()
+			fileTarget[p] = owner
 			add(p)
 		}
 	}
@@ -325,7 +331,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	names := map[string]map[string]string{}
 	dup := map[*template.QueryTemplate]bool{}
 	for _, p := range paths {
-		scope := fileTarget[p]
+		scope := fileTarget[p].path
 		byName := names[scope]
 		if byName == nil {
 			byName = map[string]string{}
@@ -365,7 +371,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if wq == nil {
 					wq = q
 				}
-				descs, hit := loadDescs(store, fp, fileSlug[p], q.Name, rs)
+				descs, hit := loadDescs(store, fp, fileTarget[p].slug, q.Name, rs)
 				if !hit {
 					continue
 				}

@@ -157,9 +157,10 @@ type compiledQuery struct {
 	target int                     // index into the run's resolved targets
 	woven  []policy.WovenPolicy    // policy coverage (enforcement, explain)
 	rs     []ast.Rendering
-	// refs name each rendering's committed cache entry, parallel to rs
-	// (docs/design/21-cache-layout.md §3).
-	refs        []cache.OracleRef
+	// slug is the query's target spelled the way the committed cache
+	// names entries (docs/design/21-cache-layout.md §3); with the query
+	// name and a rendering it addresses one entry, via oracleRef.
+	slug        string
 	descs       []dialect.Desc
 	paramTypes  map[string]dialect.TypeRef
 	nullable    []bool
@@ -235,6 +236,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	res.QueryCount = len(queries)
 	pols, polDiags := compilePolicies(drv, cfg)
 	res.Diags = append(res.Diags, polDiags...)
+	slugs := make([]string, len(resolution.Targets)) // per target, not per query
+	for i, t := range resolution.Targets {
+		slugs[i] = t.Slug()
+	}
 	for _, cq := range queries {
 		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes)
 		if err != nil {
@@ -244,11 +249,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		cq.q = wres.Query
 		cq.woven = wres.Woven
 		cq.rs = rs
-		slug := resolution.Targets[cq.target].Slug()
-		cq.refs = make([]cache.OracleRef, len(rs))
-		for i, r := range rs {
-			cq.refs[i] = oracleRef(slug, cq.q.Name, r)
-		}
+		cq.slug = slugs[cq.target]
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
@@ -264,7 +265,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	for _, cq := range queries {
 		cq.descs = make([]dialect.Desc, len(cq.rs))
 		for i, r := range cq.rs {
-			if e, ok := store.LoadOracle(cq.refs[i], fp, r.SQL); ok {
+			if e, ok := store.LoadOracle(oracleRef(cq.slug, cq.q.Name, r), fp, r.SQL); ok {
 				cq.descs[i] = dialect.DescFromEntry(e)
 				res.OracleHits++
 			} else {
@@ -348,7 +349,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 				continue
 			}
 			m.cq.descs[m.ri] = desc
-			if err := store.SaveOracle(m.cq.refs[m.ri], dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
+			if err := store.SaveOracle(oracleRef(m.cq.slug, m.cq.q.Name, r), dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 				return nil, err
 			}
 		}
@@ -534,10 +535,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	}
 	// The committed tree is now exactly the live set: every entry this
 	// run wrote or hit, and nothing else (doc 21 §4).
-	live := map[string]bool{cache.CatalogFile: true, cache.EnvFile: true}
+	live := map[cache.OracleRef]bool{}
 	for _, cq := range queries {
-		for _, ref := range cq.refs {
-			live[cache.OracleFileName(ref)] = true
+		for _, r := range cq.rs {
+			live[oracleRef(cq.slug, cq.q.Name, r)] = true
 		}
 	}
 	pruneDiags, err := pruneCache(cfg, live)
@@ -816,9 +817,7 @@ func nameScopeDiags(cfg config.Config, queryTargets map[string][]string) []diagn
 // something a committed config gets to ask for.
 func removeStaleGenerated(cfg config.Config, t config.ResolvedTarget, written map[string][]byte) ([]diagnostics.Diagnostic, error) {
 	dir := t.Abs(cfg)
-	rel, err := filepath.Rel(cfg.Dir, dir)
-	outside := err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
-	if filepath.IsAbs(t.Path) || outside {
+	if outsideProject(cfg, t.Path) {
 		return []diagnostics.Diagnostic{diagnostics.Warnf(diagnostics.CodePathEscape,
 			diagnostics.Span{File: cfg.Path},
 			"output %q is outside the project directory, so stale generated files there are not removed", t.Path).

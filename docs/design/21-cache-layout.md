@@ -155,6 +155,14 @@ rendering) — including the hits, not just the misses it filled.
 Everything else under the cache directory is garbage from an older
 schema, an older template, a deleted query, or the pre-2 layout.
 
+**The store sweeps its own tree.** `cache.Store.Sweep(live)` takes the
+live set as *refs* and owns every question about the layout — which
+subdirectory holds entries, which root names an older layout wrote,
+which files are the store's to delete. `cli.pruneCache` keeps only what
+is genuinely the CLI's: the project-containment policy below. Nothing
+outside `internal/cache` rebuilds an entry path to discover one;
+`Store.Walk` is the shared traversal (the oracle corpus uses it too).
+
 Rules, mirroring `removeStaleGenerated`:
 
 - Only on `ModeGenerate`, and only when the run produced no error
@@ -162,8 +170,10 @@ Rules, mirroring `removeStaleGenerated`:
   the LSP never delete anything.
 - **Only files sqletch itself writes** — the same discipline
   `removeStaleGenerated` applies to `*.gen.go`. That is `.json` files
-  under `oracle/`, plus `catalog.json`, `env.json` and their v1
-  `catalog-<fp>.json` / `env-<fp>.json` predecessors at the cache root.
+  under `oracle/`, plus the v1 `catalog-<fp>.json` / `env-<fp>.json`
+  predecessors at the cache root (`cache.legacyRootFile`, which sits
+  next to `FormatVersion` so the next bump finds it). `catalog.json`
+  and `env.json` are the store's own and are never swept.
   A `.gitignore`, a README, an unrelated `package.json`, another tool's
   subdirectory: all survive. `cache.path` is config, and a config that
   points the cache at a directory somebody else also owns must not turn

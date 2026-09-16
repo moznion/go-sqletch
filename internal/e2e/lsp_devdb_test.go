@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"context"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/cli"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/devdb"
@@ -133,22 +133,16 @@ cache:
 	// 3. All-or-nothing: with one rendering evicted, the query's
 	//    catalog-dependent pass must be skipped wholesale rather than
 	//    producing half-true answers from partial oracle data.
-	// Entries live at oracle/<target>/<query>/<shape>.json (design 21),
-	// so the fixture's renderings are collected by walking the tree.
+	// The store owns its tree, so the fixture's renderings are collected
+	// through its walk rather than a hand-rolled one (design 21 §3).
 	var entries []string
-	err = filepath.WalkDir(filepath.Join(dir, ".sqletch/cache/oracle"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
+	if err := cache.NewStore(filepath.Join(dir, ".sqletch", "cache")).Walk(
+		func(_ cache.OracleRef, p string) error {
 			entries = append(entries, p)
-		}
-		return nil
-	})
-	if err != nil {
+			return nil
+		}); err != nil {
 		t.Fatal(err)
 	}
-	sort.Strings(entries)
 	if len(entries) < 2 {
 		t.Fatalf("fixture must cache several renderings, got %d", len(entries))
 	}

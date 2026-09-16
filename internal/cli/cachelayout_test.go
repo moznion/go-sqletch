@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
@@ -198,7 +199,7 @@ func TestPruneCache_OutsideProjectIsRefused(t *testing.T) {
 
 	cfg := config.Config{Dir: project, Path: filepath.Join(project, "sqletch.yaml")}
 	cfg.Cache.Path = filepath.Join("..", "elsewhere")
-	diags, err := pruneCache(cfg, map[string]bool{})
+	diags, err := pruneCache(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,53 +211,30 @@ func TestPruneCache_OutsideProjectIsRefused(t *testing.T) {
 	}
 }
 
-// TestPruneCache_NoCacheDirectory: a project that has never generated
-// has nothing to sweep, and that is not an error.
-func TestPruneCache_NoCacheDirectory(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Config{Dir: dir, Path: filepath.Join(dir, "sqletch.yaml")}
-	cfg.Cache.Path = filepath.Join(".sqletch", "cache")
-	diags, err := pruneCache(cfg, map[string]bool{})
-	if err != nil || len(diags) != 0 {
-		t.Fatalf("pruneCache on a fresh project: diags=%+v err=%v", diags, err)
-	}
-}
-
-// TestPruneCache_LeavesSymlinksAlone: the cache tree is committed, so a
-// clone can plant one. The sweep never follows or deletes it.
-func TestPruneCache_LeavesSymlinksAlone(t *testing.T) {
-	dir := t.TempDir()
-	cacheDir := filepath.Join(dir, ".sqletch", "cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	secret := filepath.Join(dir, "secret.json")
-	if err := os.WriteFile(secret, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(secret, filepath.Join(cacheDir, "planted.json")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	cfg := config.Config{Dir: dir, Path: filepath.Join(dir, "sqletch.yaml")}
-	cfg.Cache.Path = filepath.Join(".sqletch", "cache")
-	if _, err := pruneCache(cfg, map[string]bool{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(secret); err != nil {
-		t.Fatalf("the symlink target was removed: %v", err)
-	}
-	if _, err := os.Lstat(filepath.Join(cacheDir, "planted.json")); err != nil {
-		t.Fatalf("a non-regular file was removed: %v", err)
-	}
-}
-
 // TestOracleRef_MatchesStoreNaming keeps the pipeline's ref builder and
 // the store's path builder from drifting apart: the LSP looks entries
 // up through the same pair, and a silent divergence would make every
 // editor lookup a miss.
 func TestOracleRef_MatchesStoreNaming(t *testing.T) {
-	ref := cache.OracleRef{Target: "app/signin/gen", Query: "SearchUsers", Shape: "maximal"}
+	ref := oracleRef("app/signin/gen", "SearchUsers", ast.Rendering{Shape: "maximal"})
 	if got := cache.OracleFileName(ref); got != "oracle/app/signin/gen/SearchUsers/maximal.json" {
 		t.Fatalf("OracleFileName = %q", got)
+	}
+}
+
+// TestOutsideProject pins the shared refusal both sweeps depend on.
+func TestOutsideProject(t *testing.T) {
+	cfg := config.Config{Dir: filepath.Join("/tmp", "proj")}
+	for path, want := range map[string]bool{
+		".sqletch/cache": false,
+		"gen":            false,
+		"a/../b":         false,
+		"..":             true,
+		"../elsewhere":   true,
+		"/etc":           true,
+	} {
+		if got := outsideProject(cfg, path); got != want {
+			t.Errorf("outsideProject(%q) = %v, want %v", path, got, want)
+		}
 	}
 }

@@ -1,7 +1,10 @@
 package cache
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -57,7 +60,7 @@ func TestParseOracleRef_RoundTrip(t *testing.T) {
 		{Target: "_corpus", Query: "agree-000", Shape: "maximal"},
 	}
 	for _, want := range refs {
-		got, ok := ParseOracleRef(OracleFileName(want))
+		got, ok := parseOracleRef(OracleFileName(want))
 		if !ok || got != want {
 			t.Errorf("round trip of %+v = %+v, ok=%v", want, got, ok)
 		}
@@ -73,8 +76,8 @@ func TestParseOracleRef_Rejects(t *testing.T) {
 		"oracle/gen/q/maximal",  // not a .json file
 		"other/gen/q/maximal.json",
 	} {
-		if _, ok := ParseOracleRef(rel); ok {
-			t.Errorf("ParseOracleRef(%q) must be rejected", rel)
+		if _, ok := parseOracleRef(rel); ok {
+			t.Errorf("parseOracleRef(%q) must be rejected", rel)
 		}
 	}
 }
@@ -106,5 +109,151 @@ func TestStore_SingletonFileNames(t *testing.T) {
 	}
 	if _, ok := s.LoadCatalog(fpB); !ok {
 		t.Error("the current fingerprint must hit")
+	}
+}
+
+// writeStoreFile plants a file at a store-relative slash path.
+func writeStoreFile(t *testing.T, dir, rel string) string {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// storeTree lists every file under dir, as sorted slash paths.
+func storeTree(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestStore_Walk(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	for _, rel := range []string{
+		"oracle/gen/B/maximal.json",
+		"oracle/gen/A/maximal.json",
+		"oracle/gen/A/case-sort-x.json",
+		"oracle/deadbeefdeadbeefdeadbeef.json", // v1 flat: not an entry path
+		"oracle/gen/A/NOTES.md",                // not JSON
+		"catalog.json",                         // not under oracle/
+	} {
+		writeStoreFile(t, dir, rel)
+	}
+
+	var got []string
+	if err := s.Walk(func(ref OracleRef, p string) error {
+		got = append(got, OracleFileName(ref))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Only entry paths, in walk order (lexical, parents first).
+	want := []string{
+		"oracle/gen/A/case-sort-x.json",
+		"oracle/gen/A/maximal.json",
+		"oracle/gen/B/maximal.json",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("Walk visited %v, want %v", got, want)
+	}
+
+	// An absent tree is not an error: a store nothing has written yet.
+	if err := NewStore(t.TempDir()).Walk(func(OracleRef, string) error { return nil }); err != nil {
+		t.Errorf("Walk on an empty store: %v", err)
+	}
+}
+
+// TestStore_Sweep is the mechanism behind design 21 §4: what the caller
+// did not declare live goes, and what the store does not write stays.
+func TestStore_Sweep(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	live := OracleRef{Target: "gen", Query: "Keep", Shape: "maximal"}
+	for _, rel := range []string{
+		OracleFileName(live),
+		"oracle/gen/Gone/maximal.json",           // deleted query
+		"oracle/gen/Keep/case-sort-gone.json",    // deleted shape
+		"oracle/former/target/Keep/maximal.json", // renamed target
+		"oracle/deadbeefdeadbeefdeadbeef.json",   // v1 entry
+		"catalog-a662b82ee1b8313dbbd5c652.json",  // v1 catalog
+		"env-a662b82ee1b8313dbbd5c652.json",      // v1 sidecar
+		"catalog.json", "env.json",               // the store's own
+		".gitignore", "package.json", // not the store's
+		"oracle/gen/NOTES.md", "other/tool/data.json", // not the store's
+	} {
+		writeStoreFile(t, dir, rel)
+	}
+
+	if err := s.Sweep(map[OracleRef]bool{live: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		".gitignore",
+		"catalog.json",
+		"env.json",
+		"oracle/gen/Keep/maximal.json",
+		"oracle/gen/NOTES.md",
+		"other/tool/data.json",
+		"package.json",
+	}
+	if got := storeTree(t, dir); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("after Sweep:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// A directory emptied by the sweep leaves no husk.
+	if _, err := os.Stat(filepath.Join(dir, "oracle", "former")); !os.IsNotExist(err) {
+		t.Errorf("an emptied directory must be removed, stat err = %v", err)
+	}
+}
+
+func TestStore_SweepEmptyStore(t *testing.T) {
+	if err := NewStore(t.TempDir()).Sweep(nil); err != nil {
+		t.Errorf("Sweep on a store nothing has written: %v", err)
+	}
+}
+
+// TestStore_SweepLeavesSymlinksAlone: the cache tree is committed, so a
+// clone can plant one. The sweep never follows or deletes it.
+func TestStore_SweepLeavesSymlinksAlone(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(secret, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, OracleDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, OracleDir, "planted.json")
+	if err := os.Symlink(secret, planted); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := NewStore(dir).Sweep(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(secret); err != nil {
+		t.Errorf("the symlink target was removed: %v", err)
+	}
+	if _, err := os.Lstat(planted); err != nil {
+		t.Errorf("a non-regular file was removed: %v", err)
 	}
 }
