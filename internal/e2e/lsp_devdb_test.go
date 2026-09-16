@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/cli"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/devdb"
@@ -132,8 +133,14 @@ cache:
 	// 3. All-or-nothing: with one rendering evicted, the query's
 	//    catalog-dependent pass must be skipped wholesale rather than
 	//    producing half-true answers from partial oracle data.
-	entries, err := filepath.Glob(filepath.Join(dir, ".sqletch/cache/oracle/*.json"))
-	if err != nil {
+	// The store owns its tree, so the fixture's renderings are collected
+	// through its walk rather than a hand-rolled one (design 21 §3).
+	var entries []string
+	if err := cache.NewStore(filepath.Join(dir, ".sqletch", "cache")).Walk(
+		func(_ cache.OracleRef, p string) error {
+			entries = append(entries, p)
+			return nil
+		}); err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) < 2 {

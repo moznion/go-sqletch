@@ -108,6 +108,26 @@ $ sqletch check
 sqletch: 6 queries ok (oracle cache: 10 hits, 0 misses; offline: yes)
 ```
 
+The tree is meant to be read in review, so every file is named after
+what it is — one entry per verified rendering of a query, under the
+target that generates it:
+
+```
+.sqletch/cache/
+  catalog.json                                 the schema snapshot
+  env.json                                     which server produced it
+  oracle/gen/SearchUsers/maximal.json          one file per rendering
+  oracle/gen/SearchUsers/case-sort-email_asc.json
+  oracle/gen/ListUsers/order-default-sort.json
+```
+
+Editing a query changes the files of the shapes it affects, in place;
+a new shape is one new file whose name says which construct created
+it. `generate` also **removes cache files it did not write** — an
+entry for a deleted query or a superseded schema would otherwise stay
+forever — so what you commit is exactly what the current templates and
+schema need. (`check` never deletes anything.)
+
 The cache is an optimization, never a source of truth: entries are
 keyed by the full rendered SQL plus a schema fingerprint, verified on
 read, and safe to delete at any time.

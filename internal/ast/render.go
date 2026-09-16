@@ -57,6 +57,11 @@ type Rendering struct {
 	OrderIdx  int // which @order-by block (RenderOrderDefault)
 	InIdx     int // which @in construct (RenderInEmpty)
 	TreeIdx   int // which @filter-tree block (RenderTreeEmpty)
+	// Shape names this rendering within its query — the file name of
+	// its committed cache entry (docs/design/21-cache-layout.md §3).
+	// Only Renderings assigns it: a one-off Render/RenderShape is not
+	// part of any enumeration and has no name.
+	Shape     string
 	SQL       string
 	ParamsSeq []string // template param name per placeholder ($1 = [0])
 	Frags     []FragRange
@@ -251,6 +256,7 @@ func Renderings(profile dialect.LexerProfile, q *template.QueryTemplate) ([]Rend
 		r.TreeIdx = i
 		out = append(out, r)
 	}
+	assignShapes(q, out)
 	return out, nil
 }
 

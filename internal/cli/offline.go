@@ -60,6 +60,11 @@ type OfflineChecker struct {
 	targetWalks int
 }
 
+// fileOwner is the target a workspace file belongs to, in the two
+// spellings the check needs: Path scopes duplicate-name detection, Slug
+// addresses the committed cache.
+type fileOwner struct{ path, slug string }
+
 type targetMemo struct {
 	dirs   []schemaStat // reused shape: path + stat signature
 	cfgSig statSig
@@ -255,11 +260,17 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	resolution, targetDiags := c.resolveTargets()
 	// Which target owns a file decides the SCOPE of duplicate-name
 	// detection below: two generated packages may each define GetUser.
-	fileTarget := map[string]string{}
+	// The owner carries both spellings a file needs: the output path
+	// (the duplicate-name scope) and the slug the committed cache names
+	// entries with (doc 21 §3) — the LSP must look where the pipeline
+	// writes. Slug() is per target, never per file: this runs on every
+	// keystroke.
+	fileTarget := map[string]fileOwner{}
 	for _, t := range resolution.Targets {
+		owner := fileOwner{path: t.Path, slug: t.Slug()}
 		for _, f := range t.Files {
 			p := absClean(f)
-			fileTarget[p] = t.Path
+			fileTarget[p] = owner
 			add(p)
 		}
 	}
@@ -320,7 +331,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 	names := map[string]map[string]string{}
 	dup := map[*template.QueryTemplate]bool{}
 	for _, p := range paths {
-		scope := fileTarget[p]
+		scope := fileTarget[p].path
 		byName := names[scope]
 		if byName == nil {
 			byName = map[string]string{}
@@ -360,7 +371,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if wq == nil {
 					wq = q
 				}
-				descs, hit := loadDescs(store, fp, rs)
+				descs, hit := loadDescs(store, fp, fileTarget[p].slug, q.Name, rs)
 				if !hit {
 					continue
 				}
@@ -460,7 +471,7 @@ func (c *OfflineChecker) loadCatalog() (*cache.Catalog, *cache.Store, string, bo
 	fp := cache.Fingerprint(c.cfg.Dialect, c.cfg.ServerVersion, schemaFiles)
 	cacheDir := c.cfg.Abs(c.cfg.Cache.Path)
 	store := cache.NewStore(cacheDir)
-	catPath := filepath.Join(cacheDir, cache.CatalogFileName(fp))
+	catPath := filepath.Join(cacheDir, cache.CatalogFile)
 	cat, ok := store.LoadCatalog(fp)
 	// Record the memo AFTER the load so catSig reflects the file we just
 	// read (present or absent); a later appearance/rewrite invalidates.
@@ -481,10 +492,10 @@ func (c *OfflineChecker) loadCatalog() (*cache.Catalog, *cache.Store, string, bo
 
 // loadDescs resolves every rendering through the committed oracle
 // cache; a single miss fails the whole query (all-or-nothing).
-func loadDescs(store *cache.Store, fp string, rs []ast.Rendering) ([]dialect.Desc, bool) {
+func loadDescs(store *cache.Store, fp, slug, query string, rs []ast.Rendering) ([]dialect.Desc, bool) {
 	descs := make([]dialect.Desc, len(rs))
 	for i, r := range rs {
-		e, ok := store.LoadOracle(fp, r.SQL)
+		e, ok := store.LoadOracle(oracleRef(slug, query, r), fp, r.SQL)
 		if !ok {
 			return nil, false
 		}

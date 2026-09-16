@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -33,7 +32,12 @@ type Manifest struct {
 
 // Entry is one committed oracle entry with its exact file bytes.
 type Entry struct {
-	Path  string // case-dir-relative, e.g. cache/oracle/<qh>.json
+	// Path is case-dir-relative, e.g.
+	// cache/oracle/<target>/<query>/<shape>.json.
+	Path string
+	// Ref is the same place as a store address, so an update rewrites
+	// the entry where it was found rather than inventing a path.
+	Ref   cache.OracleRef
 	Bytes []byte
 	E     *cache.OracleEntry
 }
@@ -51,7 +55,9 @@ type Case struct {
 	CatalogPath   string // case-dir-relative
 	CatalogBytes  []byte
 	Catalog       *cache.Catalog
-	Entries       []Entry // sorted by Path
+	// Entries are in the store's walk order: lexical, parents before
+	// children. Deterministic, which is what replay messages need.
+	Entries []Entry
 }
 
 // Backend constructs the oracle under test for a case. The returned
@@ -117,44 +123,43 @@ func Load(dir string) (*Case, error) {
 		return nil, fmt.Errorf("%s: no catalog for fingerprint %s (schema inputs or pinned version drifted from the captured cache)", c.Name, c.FP[:12])
 	}
 	c.Catalog = cat
-	c.CatalogPath = filepath.ToSlash(filepath.Join("cache", cache.CatalogFileName(c.FP)))
+	c.CatalogPath = filepath.ToSlash(filepath.Join("cache", cache.CatalogFile))
 	c.CatalogBytes, err = os.ReadFile(filepath.Join(dir, filepath.FromSlash(c.CatalogPath)))
 	if err != nil {
 		return nil, err
 	}
 
-	entryPaths, err := filepath.Glob(filepath.Join(dir, "cache", "oracle", "*.json"))
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(entryPaths)
-	for _, p := range entryPaths {
+	// Entries are discovered through the store's own walk (design 21 §3:
+	// a case is an ordinary committed cache, so its entries carry the
+	// same <target>/<query>/<shape> paths a real project's do).
+	err = store.Walk(func(ref cache.OracleRef, p string) error {
+		rel := filepath.ToSlash(filepath.Join("cache", cache.OracleFileName(ref)))
 		raw, err := os.ReadFile(p)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var e cache.OracleEntry
 		if err := json.Unmarshal(raw, &e); err != nil {
-			return nil, fmt.Errorf("%s: %s: %w", c.Name, filepath.Base(p), err)
+			return fmt.Errorf("%s: %s: %w", c.Name, rel, err)
 		}
-		// Store-and-compare through the real loader: proves the
-		// filename matches the entry's own keys and the keys match
-		// this case's fingerprint.
-		if _, ok := store.LoadOracle(c.FP, e.RenderedSQL); !ok {
-			return nil, fmt.Errorf("%s: %s: entry does not load for this case's fingerprint (misnamed, stale, or foreign)", c.Name, filepath.Base(p))
+		// Store-and-compare through the real loader: proves the entry
+		// at this path carries its own keys and that they match this
+		// case's fingerprint.
+		if _, ok := store.LoadOracle(ref, c.FP, e.RenderedSQL); !ok {
+			return fmt.Errorf("%s: %s: entry does not load for this case's fingerprint (misplaced, stale, or foreign)", c.Name, rel)
 		}
 		canon, err := cache.EncodeOracle(&e)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !bytes.Equal(canon, raw) {
-			return nil, fmt.Errorf("%s: %s: not in canonical form (hand-edited?)", c.Name, filepath.Base(p))
+			return fmt.Errorf("%s: %s: not in canonical form (hand-edited?)", c.Name, rel)
 		}
-		c.Entries = append(c.Entries, Entry{
-			Path:  filepath.ToSlash(filepath.Join("cache", "oracle", filepath.Base(p))),
-			Bytes: raw,
-			E:     &e,
-		})
+		c.Entries = append(c.Entries, Entry{Path: rel, Ref: ref, Bytes: raw, E: &e})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return c, nil
 }

@@ -4,16 +4,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 )
 
 // MaxFileBytes bounds every cache file sqletch reads. Cache file names
-// are fingerprint-derived, hence attacker-computable: a cloned repo can
-// plant a file at the exact hit path, so an unbounded os.ReadFile would
-// OOM before any key check runs. 64 MiB dwarfs any real catalog/oracle
+// are derived from the config and the templates, hence fully
+// attacker-computable (doc 21 made them more predictable, not less): a
+// cloned repo can plant a file at the exact hit path, so an unbounded
+// os.ReadFile would OOM before any key check runs. 64 MiB dwarfs any real catalog/oracle
 // entry while capping the blast radius (mirrors the LSP body cap).
 const MaxFileBytes = 64 << 20
 
@@ -21,12 +26,211 @@ const MaxFileBytes = 64 << 20
 // carries it; loads treat any other value — including its absence in
 // pre-1.0 caches — as a miss, so a format change can never misread an
 // old entry: the pipeline falls back to the database and rewrites.
-const FormatVersion = 1
+//
+// v2 is the doc-21 layout: named paths instead of fingerprint-derived
+// hashes. The bump is what migrates an existing committed cache — every
+// v1 file is a miss, the first `generate` rewrites the tree, and the
+// same run's sweep removes what the old layout left behind.
+const FormatVersion = 2
+
+// CatalogFile and EnvFile are the store's two singleton files. Neither
+// name carries the schema fingerprint: it is compared from INSIDE the
+// file, so a schema change modifies these files rather than renaming
+// them, and one committed cache describes one schema state
+// (docs/design/21-cache-layout.md D1).
+const (
+	CatalogFile = "catalog.json"
+	EnvFile     = "env.json"
+	// OracleDir holds one file per verified rendering.
+	OracleDir = "oracle"
+)
+
+// legacyRootFile reports whether a cache-root file is one a SUPERSEDED
+// layout wrote, which Sweep removes on sight.
+//
+// It lives next to FormatVersion on purpose: "what did older layouts
+// write" belongs where "what layout am I" is declared, so the next
+// version bump finds it. v1 named the catalog and the env sidecar by
+// fingerprint.
+func legacyRootFile(name string) bool {
+	return (strings.HasPrefix(name, "catalog-") || strings.HasPrefix(name, "env-")) &&
+		strings.HasSuffix(name, ".json")
+}
+
+// OracleRef is an entry's place in the committed tree: the target slug,
+// the query name, and the rendering's shape name (doc 21 §3).
+//
+// It is a NAME, never a key. LoadOracle still compares the fingerprint
+// and the rendered SQL stored inside the file, so a file sitting at a
+// ref's path that does not match them is a miss and gets rewritten —
+// exactly as a stale hash-named entry was under v1. Nothing downstream
+// may treat "found at this path" as evidence of what an entry is.
+type OracleRef struct {
+	Target string // config.ResolvedTarget.Slug(); may contain '/'
+	Query  string
+	Shape  string // ast.Rendering.Shape
+}
+
+// OracleFileName is the ref's store-relative, slash-separated path.
+//
+// Every component is folded to [A-Za-z0-9_-]. The grammar already
+// restricts query names (SQLETCH002/003) and construct parameters to
+// that alphabet and Slug folds the target, so the folding here is
+// defence in depth: these strings become filesystem paths, and no
+// spelling of them may climb out of the cache directory.
+func OracleFileName(r OracleRef) string {
+	parts := []string{OracleDir}
+	for _, seg := range strings.Split(r.Target, "/") {
+		parts = append(parts, safeSegment(seg))
+	}
+	parts = append(parts, safeSegment(r.Query), safeSegment(r.Shape)+".json")
+	return path.Join(parts...)
+}
+
+// parseOracleRef is OracleFileName's inverse for a store-relative
+// path: it is how Walk names what it finds. It reports false for
+// anything that is not an entry path, including the flat
+// `oracle/<hash>.json` files v1 wrote.
+func parseOracleRef(rel string) (OracleRef, bool) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 4 || parts[0] != OracleDir {
+		return OracleRef{}, false
+	}
+	last := parts[len(parts)-1]
+	if !strings.HasSuffix(last, ".json") {
+		return OracleRef{}, false
+	}
+	return OracleRef{
+		Target: strings.Join(parts[1:len(parts)-2], "/"),
+		Query:  parts[len(parts)-2],
+		Shape:  strings.TrimSuffix(last, ".json"),
+	}, true
+}
+
+// safeSegment folds one path component to the cache tree's alphabet.
+// "." and ".." fold to "_" and "__", so no component can traverse.
+func safeSegment(seg string) string {
+	if seg == "" {
+		return "_"
+	}
+	b := []byte(seg)
+	for i, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}
+
+// Walk calls fn for every oracle entry in the store, with the ref that
+// names it and its absolute path, in a deterministic order (lexical,
+// parents before children — filepath.WalkDir's).
+//
+// The store owns its own tree: anything that discovers entries rather
+// than addressing one — the oracle corpus, a test — goes through here
+// instead of re-deriving the layout. Files that are not entry paths
+// (a README, an older layout's leftovers) are skipped; an absent tree
+// is not an error.
+func (s *Store) Walk(fn func(ref OracleRef, path string) error) error {
+	return s.walkEntryFiles(nil, func(rel, p string) error {
+		ref, ok := parseOracleRef(rel)
+		if !ok {
+			return nil
+		}
+		return fn(ref, p)
+	})
+}
+
+// Sweep deletes everything in the store that live does not account
+// for: entries whose ref is absent, and the root files superseded
+// layouts wrote. The two singletons are the store's own and are never
+// removed.
+//
+// It touches only files the store itself writes — regular `.json`
+// files under OracleDir, plus legacyRootFile matches at the root — so
+// a `.gitignore`, a README, a sibling tool's data file, and every
+// other subdirectory survive. A planted symlink is left alone rather
+// than followed. That discipline matters because the cache directory
+// is configured: pointed at a directory somebody else also owns, a
+// broader sweep would eat their files.
+//
+// Directories emptied by the sweep are removed, so a renamed target or
+// query leaves no husk.
+func (s *Store) Sweep(live map[OracleRef]bool) error {
+	// The root: superseded layouts' catalog/env files. Not recursive —
+	// a sibling subdirectory in there is not the store's.
+	ents, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing written yet: nothing to sweep
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if e.IsDir() || !e.Type().IsRegular() || !legacyRootFile(e.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, e.Name())); err != nil {
+			return err
+		}
+	}
+
+	var dirs []string
+	err = s.walkEntryFiles(&dirs, func(rel, p string) error {
+		if ref, ok := parseOracleRef(rel); ok && live[ref] {
+			return nil
+		}
+		return os.Remove(p)
+	})
+	if err != nil {
+		return err
+	}
+	// WalkDir yields a parent before its children, so walking dirs
+	// backwards is deepest-first. A directory that still holds
+	// something fails to remove, which is the intended outcome.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		_ = os.Remove(dirs[i])
+	}
+	return nil
+}
+
+// walkEntryFiles visits every regular `.json` file under OracleDir,
+// passing its store-relative slash path and its absolute path. When
+// dirs is non-nil it collects the subdirectories it descended, in
+// visit order (Sweep needs them to remove the ones it empties).
+func (s *Store) walkEntryFiles(dirs *[]string, fn func(rel, path string) error) error {
+	root := filepath.Join(s.dir, OracleDir)
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != root && dirs != nil {
+				*dirs = append(*dirs, p)
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".json") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.dir, p)
+		if err != nil {
+			return err
+		}
+		return fn(filepath.ToSlash(rel), p)
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
 
 // Store is the committed, offline-usable cache of oracle results and
-// catalog snapshots. Hashes are an index, never identity: every entry
+// catalog snapshots. A path is an index, never identity: every entry
 // stores its full inputs and loads compare them byte-wise
-// (store-and-compare; design 04 §3).
+// (store-and-compare; design 04 §3, layout in design 21).
 type Store struct{ dir string }
 
 func NewStore(dir string) *Store { return &Store{dir: dir} }
@@ -86,37 +290,18 @@ type OracleEntry struct {
 	Columns     []EntryColumn `json:"columns"`
 }
 
-func queryHash(fp, renderedSQL string) string {
-	h := sha256.New()
-	h.Write([]byte(fp))
-	h.Write([]byte{0})
-	h.Write([]byte(renderedSQL))
-	return hex.EncodeToString(h.Sum(nil))[:24]
+func (s *Store) catalogPath() string {
+	return filepath.Join(s.dir, CatalogFile)
 }
 
-// CatalogFileName and OracleFileName expose the store's
-// dir-relative file naming, so harnesses (the oracle corpus, entry
-// pruning) can address files without duplicating the hashing scheme.
-func CatalogFileName(fp string) string {
-	return "catalog-" + fp[:min(24, len(fp))] + ".json"
-}
-
-func OracleFileName(fp, renderedSQL string) string {
-	return filepath.Join("oracle", queryHash(fp, renderedSQL)+".json")
-}
-
-func (s *Store) catalogPath(fp string) string {
-	return filepath.Join(s.dir, CatalogFileName(fp))
-}
-
-func (s *Store) oraclePath(qh string) string {
-	return filepath.Join(s.dir, "oracle", qh+".json")
+func (s *Store) oraclePath(r OracleRef) string {
+	return filepath.Join(s.dir, filepath.FromSlash(OracleFileName(r)))
 }
 
 // LoadCatalog returns the snapshot for fp, or ok=false on miss or
 // key mismatch.
 func (s *Store) LoadCatalog(fp string) (*Catalog, bool) {
-	data, err := ReadFileCapped(s.catalogPath(fp))
+	data, err := ReadFileCapped(s.catalogPath())
 	if err != nil {
 		return nil, false
 	}
@@ -132,13 +317,14 @@ func (s *Store) SaveCatalog(cat *Catalog) error {
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.catalogPath(cat.SchemaFP), data)
+	return s.writeFile(s.catalogPath(), data)
 }
 
-// LoadOracle returns the cached Describe result for (fp, renderedSQL),
-// comparing the stored full keys (never trusting the filename hash).
-func (s *Store) LoadOracle(fp, renderedSQL string) (*OracleEntry, bool) {
-	data, err := ReadFileCapped(s.oraclePath(queryHash(fp, renderedSQL)))
+// LoadOracle returns the cached Describe result for (fp, renderedSQL)
+// from the entry named by ref, comparing the stored full keys (the
+// path is where to look, never what the file is).
+func (s *Store) LoadOracle(r OracleRef, fp, renderedSQL string) (*OracleEntry, bool) {
+	data, err := ReadFileCapped(s.oraclePath(r))
 	if err != nil {
 		return nil, false
 	}
@@ -147,17 +333,17 @@ func (s *Store) LoadOracle(fp, renderedSQL string) (*OracleEntry, bool) {
 		return nil, false
 	}
 	if e.Format != FormatVersion || e.SchemaFP != fp || e.RenderedSQL != renderedSQL {
-		return nil, false // format drift, hash collision, or stale file: miss
+		return nil, false // format drift, renamed query, or stale file: miss
 	}
 	return &e, true
 }
 
-func (s *Store) SaveOracle(e *OracleEntry) error {
+func (s *Store) SaveOracle(r OracleRef, e *OracleEntry) error {
 	data, err := EncodeOracle(e)
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.oraclePath(queryHash(e.SchemaFP, e.RenderedSQL)), data)
+	return s.writeFile(s.oraclePath(r), data)
 }
 
 // EncodeCatalog returns the exact canonical bytes SaveCatalog writes.

@@ -4,6 +4,7 @@ package corpus
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,7 +90,7 @@ func updateCase(ctx context.Context, t *testing.T, c *Case, o dialect.Oracle) {
 		if err != nil {
 			t.Fatalf("%s: the real engine refuses a corpus input: %v", e.Path, err)
 		}
-		if err := store.SaveOracle(dialect.EntryFromDesc(c.FP, e.E.RenderedSQL, desc)); err != nil {
+		if err := store.SaveOracle(e.Ref, dialect.EntryFromDesc(c.FP, e.E.RenderedSQL, desc)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,12 +148,15 @@ func TestCaptureAdversarialCase(t *testing.T) {
 	if err := store.SaveCatalog(snap); err != nil {
 		t.Fatal(err)
 	}
-	for _, sql := range agreeSQL {
+	// A captured case has no template, so it uses the synthetic naming
+	// of design 21 §5: one "query" per agree-set statement, by position.
+	for i, sql := range agreeSQL {
 		desc, err := server.Describe(ctx, sql)
 		if err != nil {
 			t.Fatalf("agree-set statement rejected by the engine: %s: %v", sql, err)
 		}
-		if err := store.SaveOracle(dialect.EntryFromDesc(fp, sql, desc)); err != nil {
+		ref := cache.OracleRef{Target: "_corpus", Query: fmt.Sprintf("agree-%03d", i), Shape: "maximal"}
+		if err := store.SaveOracle(ref, dialect.EntryFromDesc(fp, sql, desc)); err != nil {
 			t.Fatal(err)
 		}
 	}

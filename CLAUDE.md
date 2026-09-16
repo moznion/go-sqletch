@@ -394,9 +394,40 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   under-report. The derivation runs beside P5 in `pipeline.Run`, NOT in
   `cli.resolvedChecks` (it emits no diagnostics).
 
+## Known decisions: committed-cache layout (doc 21)
+
+- The cache tree is a REVIEW ARTIFACT: `catalog.json`, `env.json`,
+  `oracle/<target-slug>/<query>/<shape>.json`. The schema fingerprint
+  is in every file and in no file NAME (D1), so a DDL change modifies
+  entries instead of re-keying all of them; one committed cache
+  describes one schema state (branches with different DDL no longer
+  share a cache — accepted).
+- The path is a NAME, never a key. `LoadOracle` still compares the
+  stored `(schema_fp, rendered_sql)` byte-wise, so an entry found at a
+  ref's path that does not match is a miss and gets rewritten. Never
+  let anything treat "found at this path" as evidence.
+- Shape names come from the CONSTRUCT (`case-<param>-<case>`,
+  `order-default-<param>`, `in-empty-<param>`, `tree-empty-<param>`),
+  not from enumeration position, and `ast.Renderings` disambiguates a
+  colliding group by block index. `cli.oracleRef` is the single seam
+  pipeline.Run and the LSP share — do not build a path anywhere else.
+- `generate` (and ONLY generate, D3) prunes every entry the run
+  neither wrote nor hit. The MECHANISM is `cache.Store.Sweep(live)` —
+  the store owns its layout, and `Store.Walk` is the one traversal
+  anything discovering entries uses (corpus included). `cli.pruneCache`
+  adds only the policy: an out-of-project cache dir is refused with
+  SQLETCH306 (via `cli.outsideProject`, shared with
+  `removeStaleGenerated`). Files sqletch does not write — non-JSON,
+  foreign subdirectories, symlinks — are never touched.
+- `cache.FormatVersion` = 2 is the migration (D4): v1 files miss, one
+  cold `generate` rewrites and sweeps. A layout change means
+  regenerating examples/ AND `internal/corpus/testdata` (captured cases
+  use the synthetic `_corpus/<name>/maximal` naming; `examples-mysql`
+  is a copy of examples/mysql's tree).
+
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 
-- `.sqletch/cache/env-<fp>.json` records the server a run actually
+- `.sqletch/cache/env.json` records the server a run actually
   connected to. It is a SIDECAR, never a key: the fingerprint must
   stay offline-computable, and catalog/oracle bytes are pinned
   byte-identical across oracle backends by the corpus gates — nothing

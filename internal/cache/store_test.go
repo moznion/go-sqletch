@@ -60,34 +60,35 @@ func TestStore_SaveCatalogWithoutFP(t *testing.T) {
 func TestStore_OracleRoundTripAndStoreCompare(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
+	ref := OracleRef{Target: "gen", Query: "Q", Shape: "maximal"}
 	e := &OracleEntry{
 		SchemaFP:    "fp1",
 		RenderedSQL: "SELECT $1",
 		Params:      []EntryType{{OID: 25, Name: "text"}},
 		Columns:     []EntryColumn{{Name: "c", OID: 25, TypeName: "text"}},
 	}
-	if err := s.SaveOracle(e); err != nil {
+	if err := s.SaveOracle(ref, e); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := s.LoadOracle("fp1", "SELECT $1")
+	got, ok := s.LoadOracle(ref, "fp1", "SELECT $1")
 	if !ok || got.Params[0].OID != 25 {
 		t.Fatalf("round trip failed: ok=%v got=%+v", ok, got)
 	}
-	if _, ok := s.LoadOracle("fp2", "SELECT $1"); ok {
+	if _, ok := s.LoadOracle(ref, "fp2", "SELECT $1"); ok {
 		t.Error("different fingerprint must miss")
 	}
-	if _, ok := s.LoadOracle("fp1", "SELECT $2"); ok {
+	if _, ok := s.LoadOracle(ref, "fp1", "SELECT $2"); ok {
 		t.Error("different SQL must miss")
 	}
 
 	// Store-and-compare: a doctored file whose content doesn't match
 	// its stored keys is treated as a miss, not trusted.
-	path := s.oraclePath(queryHash("fp1", "SELECT $1"))
+	path := s.oraclePath(ref)
 	doctored := strings.Replace(string(mustRead(t, path)), `"rendered_sql": "SELECT $1"`, `"rendered_sql": "SELECT $9"`, 1)
 	if err := os.WriteFile(path, []byte(doctored), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.LoadOracle("fp1", "SELECT $1"); ok {
+	if _, ok := s.LoadOracle(ref, "fp1", "SELECT $1"); ok {
 		t.Error("mismatched stored keys must be treated as a miss")
 	}
 }
@@ -95,13 +96,14 @@ func TestStore_OracleRoundTripAndStoreCompare(t *testing.T) {
 func TestStore_CanonicalJSON(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
+	ref := OracleRef{Target: "gen", Query: "Q", Shape: "maximal"}
 	e := &OracleEntry{SchemaFP: "fp", RenderedSQL: "SELECT 1"}
-	if err := s.SaveOracle(e); err != nil {
+	if err := s.SaveOracle(ref, e); err != nil {
 		t.Fatal(err)
 	}
-	path := s.oraclePath(queryHash("fp", "SELECT 1"))
+	path := s.oraclePath(ref)
 	first := mustRead(t, path)
-	if err := s.SaveOracle(e); err != nil {
+	if err := s.SaveOracle(ref, e); err != nil {
 		t.Fatal(err)
 	}
 	second := mustRead(t, path)
