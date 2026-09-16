@@ -182,7 +182,7 @@ func synthCase(t *testing.T, dir string) (fp string, store *cache.Store) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveOracle(&cache.OracleEntry{
+	if err := store.SaveOracle(synthRef, &cache.OracleEntry{
 		SchemaFP:    fp,
 		RenderedSQL: "SELECT id FROM t",
 		Params:      []cache.EntryType{},
@@ -192,6 +192,10 @@ func synthCase(t *testing.T, dir string) (fp string, store *cache.Store) {
 	}
 	return fp, store
 }
+
+// synthRef is where synthCase's single entry lives: a captured case
+// has no template, so it uses the synthetic naming of design 21 §5.
+var synthRef = cache.OracleRef{Target: "_corpus", Query: "select_id", Shape: "maximal"}
 
 func TestLoadSynthesizedCase(t *testing.T) {
 	dir := t.TempDir()
@@ -231,7 +235,7 @@ func TestLoadRejections(t *testing.T) {
 		dir := t.TempDir()
 		synthCase(t, dir)
 		other := cache.NewStore(filepath.Join(dir, "cache"))
-		if err := other.SaveOracle(&cache.OracleEntry{
+		if err := other.SaveOracle(cache.OracleRef{Target: "_corpus", Query: "foreign", Shape: "maximal"}, &cache.OracleEntry{
 			SchemaFP:    "deadbeef",
 			RenderedSQL: "SELECT 1",
 		}); err != nil {
@@ -243,8 +247,8 @@ func TestLoadRejections(t *testing.T) {
 	})
 	t.Run("non-canonical entry bytes", func(t *testing.T) {
 		dir := t.TempDir()
-		fp, _ := synthCase(t, dir)
-		p := filepath.Join(dir, "cache", filepath.FromSlash(cache.OracleFileName(fp, "SELECT id FROM t")))
+		synthCase(t, dir)
+		p := filepath.Join(dir, "cache", filepath.FromSlash(cache.OracleFileName(synthRef)))
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)

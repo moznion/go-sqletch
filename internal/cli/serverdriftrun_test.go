@@ -27,7 +27,7 @@ func loadDriftConfig(t *testing.T, cfgPath string) config.Config {
 
 func envSidecarPath(t *testing.T, dir string) string {
 	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(dir, ".sqletch", "cache", "env-*.json"))
+	matches, err := filepath.Glob(filepath.Join(dir, ".sqletch", "cache", cache.EnvFile))
 	if err != nil {
 		t.Fatal(err)
 	}

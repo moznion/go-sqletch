@@ -2,6 +2,7 @@ package cache
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -96,7 +97,7 @@ func TestStore_EnvMissIsNeverAFailure(t *testing.T) {
 	}
 
 	// Store-and-compare: the filename hash is an index, never identity.
-	path := s.envPath(fp)
+	path := s.envPath()
 	doctored := strings.Replace(string(mustRead(t, path)),
 		`"schema_fp": "`+fp+`"`, `"schema_fp": "`+strings.Repeat("cd", 32)+`"`, 1)
 	if err := os.WriteFile(path, []byte(doctored), 0o644); err != nil {
@@ -121,14 +122,14 @@ func TestStore_EnvFormatVersion(t *testing.T) {
 	if err := s.SaveEnv(&Env{SchemaFP: fp, ServerVersion: "16.4"}); err != nil {
 		t.Fatal(err)
 	}
-	data := mustRead(t, s.envPath(fp))
+	data := mustRead(t, s.envPath())
 	if !strings.Contains(string(data), "\"format\": "+strconv.Itoa(FormatVersion)) {
 		t.Fatalf("env file missing format marker:\n%s", data)
 	}
 	bumped := strings.Replace(string(data),
 		"\"format\": "+strconv.Itoa(FormatVersion),
 		"\"format\": "+strconv.Itoa(FormatVersion+1), 1)
-	if err := os.WriteFile(s.envPath(fp), []byte(bumped), 0o644); err != nil {
+	if err := os.WriteFile(s.envPath(), []byte(bumped), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.LoadEnv(fp); ok {
@@ -143,11 +144,11 @@ func TestStore_EnvCanonicalJSON(t *testing.T) {
 	if err := s.SaveEnv(env); err != nil {
 		t.Fatal(err)
 	}
-	first := mustRead(t, s.envPath(fp))
+	first := mustRead(t, s.envPath())
 	if err := s.SaveEnv(env); err != nil {
 		t.Fatal(err)
 	}
-	if string(first) != string(mustRead(t, s.envPath(fp))) {
+	if string(first) != string(mustRead(t, s.envPath())) {
 		t.Error("env files must be byte-stable across saves")
 	}
 	if !strings.HasSuffix(string(first), "\n") {
@@ -155,17 +156,23 @@ func TestStore_EnvCanonicalJSON(t *testing.T) {
 	}
 }
 
-func TestEnvFileName_DistinctPerFingerprint(t *testing.T) {
-	a := EnvFileName(strings.Repeat("ab", 32))
-	b := EnvFileName(strings.Repeat("cd", 32))
-	if a == b {
-		t.Error("distinct fingerprints must name distinct env files")
+func TestEnvFile_SingletonAndFingerprintCompared(t *testing.T) {
+	// The sidecar is one file whose fingerprint is compared from inside
+	// (doc 21 D1), so a record written for another schema state reads as
+	// "no record yet" — which SaveEnv then replaces.
+	dir := t.TempDir()
+	s := NewStore(dir)
+	fpA, fpB := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
+	if err := s.SaveEnv(&Env{SchemaFP: fpA, Dialect: "postgres", ServerVersion: "16.4"}); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasPrefix(a, "env-") || !strings.HasSuffix(a, ".json") {
-		t.Errorf("unexpected env file name %q", a)
+	if _, ok := s.LoadEnv(fpB); ok {
+		t.Error("a record for another fingerprint must read as absent")
 	}
-	// The sidecar must not collide with the catalog for the same fp.
-	if a == CatalogFileName(strings.Repeat("ab", 32)) {
-		t.Error("env and catalog file names must differ")
+	if _, ok := s.LoadEnv(fpA); !ok {
+		t.Error("the current fingerprint must hit")
+	}
+	if filepath.Base(s.envPath()) != EnvFile || EnvFile == CatalogFile {
+		t.Error("env and catalog must be distinct singleton files")
 	}
 }

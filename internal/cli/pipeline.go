@@ -153,10 +153,13 @@ type RunOptions struct {
 }
 
 type compiledQuery struct {
-	q           *template.QueryTemplate // woven: every phase past scanChecks reads this
-	target      int                     // index into the run's resolved targets
-	woven       []policy.WovenPolicy    // policy coverage (enforcement, explain)
-	rs          []ast.Rendering
+	q      *template.QueryTemplate // woven: every phase past scanChecks reads this
+	target int                     // index into the run's resolved targets
+	woven  []policy.WovenPolicy    // policy coverage (enforcement, explain)
+	rs     []ast.Rendering
+	// refs name each rendering's committed cache entry, parallel to rs
+	// (docs/design/21-cache-layout.md §3).
+	refs        []cache.OracleRef
 	descs       []dialect.Desc
 	paramTypes  map[string]dialect.TypeRef
 	nullable    []bool
@@ -241,6 +244,11 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		cq.q = wres.Query
 		cq.woven = wres.Woven
 		cq.rs = rs
+		slug := resolution.Targets[cq.target].Slug()
+		cq.refs = make([]cache.OracleRef, len(rs))
+		for i, r := range rs {
+			cq.refs[i] = oracleRef(slug, cq.q.Name, r)
+		}
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil
@@ -256,7 +264,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	for _, cq := range queries {
 		cq.descs = make([]dialect.Desc, len(cq.rs))
 		for i, r := range cq.rs {
-			if e, ok := store.LoadOracle(fp, r.SQL); ok {
+			if e, ok := store.LoadOracle(cq.refs[i], fp, r.SQL); ok {
 				cq.descs[i] = dialect.DescFromEntry(e)
 				res.OracleHits++
 			} else {
@@ -340,7 +348,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 				continue
 			}
 			m.cq.descs[m.ri] = desc
-			if err := store.SaveOracle(dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
+			if err := store.SaveOracle(m.cq.refs[m.ri], dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 				return nil, err
 			}
 		}
@@ -524,6 +532,19 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {
 		return res, nil
 	}
+	// The committed tree is now exactly the live set: every entry this
+	// run wrote or hit, and nothing else (doc 21 §4).
+	live := map[string]bool{cache.CatalogFile: true, cache.EnvFile: true}
+	for _, cq := range queries {
+		for _, ref := range cq.refs {
+			live[cache.OracleFileName(ref)] = true
+		}
+	}
+	pruneDiags, err := pruneCache(cfg, live)
+	if err != nil {
+		return nil, err
+	}
+	res.Diags = append(res.Diags, pruneDiags...)
 	if err := writeExplainData(cfg, resolution, queries); err != nil {
 		return nil, err
 	}

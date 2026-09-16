@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -132,10 +133,22 @@ cache:
 	// 3. All-or-nothing: with one rendering evicted, the query's
 	//    catalog-dependent pass must be skipped wholesale rather than
 	//    producing half-true answers from partial oracle data.
-	entries, err := filepath.Glob(filepath.Join(dir, ".sqletch/cache/oracle/*.json"))
+	// Entries live at oracle/<target>/<query>/<shape>.json (design 21),
+	// so the fixture's renderings are collected by walking the tree.
+	var entries []string
+	err = filepath.WalkDir(filepath.Join(dir, ".sqletch/cache/oracle"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
+			entries = append(entries, p)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	sort.Strings(entries)
 	if len(entries) < 2 {
 		t.Fatalf("fixture must cache several renderings, got %d", len(entries))
 	}

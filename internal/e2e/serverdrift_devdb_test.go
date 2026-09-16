@@ -75,7 +75,7 @@ cache:
 		t.Fatalf("cold generate: exit %d\n%s%s", code, out.String(), errW.String())
 	}
 
-	sidecars, err := filepath.Glob(filepath.Join(dir, ".sqletch/cache/env-*.json"))
+	sidecars, err := filepath.Glob(filepath.Join(dir, ".sqletch/cache", cache.EnvFile))
 	if err != nil || len(sidecars) != 1 {
 		t.Fatalf("want exactly one env sidecar, got %v (%v)", sidecars, err)
 	}

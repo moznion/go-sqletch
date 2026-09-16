@@ -303,6 +303,17 @@ func warmCache(t *testing.T, cfg config.Config, relPath, entries string) {
 		t.Fatal(err)
 	}
 
+	// The entry paths must be the ones the checker will look under, so
+	// the slug comes from the same resolution the pipeline uses.
+	resolution, _ := cfg.ResolveTargets()
+	var target string
+	for _, rt := range resolution.Targets {
+		for _, f := range rt.Files {
+			if absClean(f) == absClean(cfg.Abs(relPath)) {
+				target = rt.Slug()
+			}
+		}
+	}
 	drv := driverFor(cfg)
 	src, err := os.ReadFile(cfg.Abs(relPath))
 	if err != nil {
@@ -327,7 +338,7 @@ func warmCache(t *testing.T, cfg config.Config, relPath, entries string) {
 		if strings.Contains(r.SQL, "$1") {
 			desc.Params = []dialect.TypeRef{{OID: 20, Name: "int8"}}
 		}
-		if err := store.SaveOracle(dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
+		if err := store.SaveOracle(oracleRef(target, file.Queries[0].Name, r), dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -62,14 +62,8 @@ func NumericVersionPrefix(raw string) string {
 	return raw[:end]
 }
 
-// EnvFileName exposes the sidecar's dir-relative naming, mirroring
-// CatalogFileName.
-func EnvFileName(fp string) string {
-	return "env-" + fp[:min(24, len(fp))] + ".json"
-}
-
-func (s *Store) envPath(fp string) string {
-	return filepath.Join(s.dir, EnvFileName(fp))
+func (s *Store) envPath() string {
+	return filepath.Join(s.dir, EnvFile)
 }
 
 // LoadEnv returns the recorded generation environment for fp.
@@ -80,7 +74,7 @@ func (s *Store) envPath(fp string) string {
 // before this sidecar existed have no record, and adopting the
 // connected server on the next write is the correct migration.
 func (s *Store) LoadEnv(fp string) (*Env, bool) {
-	data, err := ReadFileCapped(s.envPath(fp))
+	data, err := ReadFileCapped(s.envPath())
 	if err != nil {
 		return nil, false
 	}
@@ -96,7 +90,7 @@ func (s *Store) SaveEnv(e *Env) error {
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.envPath(e.SchemaFP), data)
+	return s.writeFile(s.envPath(), data)
 }
 
 // EncodeEnv returns the exact canonical bytes SaveEnv writes, stamping

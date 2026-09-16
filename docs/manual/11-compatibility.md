@@ -121,8 +121,16 @@ Two consequences:
 Entries store their full keys and compare them on read; hashes are an
 index, never an identity.
 
+The **layout** of the cache directory is not a stable interface: file
+names and directory structure may change between releases, and such a
+change arrives as a format bump — every old file is a miss, one cold
+run rewrites the tree, and that same `generate` removes what the old
+layout left behind. v0.6 did exactly this, replacing hash-derived names
+with `oracle/<target>/<query>/<shape>.json` so cache diffs are
+reviewable. What *is* stable is that no cache file is ever misread.
+
 The cache also records the server each fingerprint's entries were
-generated against (`env-<fp>.json`). That record is **not** a key: it
+generated against (`env.json`). That record is **not** a key: it
 never affects hits or misses, and deleting it only costs the next
 connecting run its ability to notice that the entries came from
 somewhere else (SQLETCH203 — see

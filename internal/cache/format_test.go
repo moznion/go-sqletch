@@ -16,13 +16,14 @@ func TestFormatVersion(t *testing.T) {
 	if err := s.SaveCatalog(cat); err != nil {
 		t.Fatal(err)
 	}
+	ref := OracleRef{Target: "gen", Query: "Q", Shape: "maximal"}
 	e := &OracleEntry{SchemaFP: fp, RenderedSQL: "SELECT 1"}
-	if err := s.SaveOracle(e); err != nil {
+	if err := s.SaveOracle(ref, e); err != nil {
 		t.Fatal(err)
 	}
 
 	// Written files self-describe their format version.
-	catData, err := os.ReadFile(s.catalogPath(fp))
+	catData, err := os.ReadFile(s.catalogPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestFormatVersion(t *testing.T) {
 	if _, ok := s.LoadCatalog(fp); !ok {
 		t.Fatal("catalog round trip failed")
 	}
-	if _, ok := s.LoadOracle(fp, "SELECT 1"); !ok {
+	if _, ok := s.LoadOracle(ref, fp, "SELECT 1"); !ok {
 		t.Fatal("oracle round trip failed")
 	}
 
@@ -52,12 +53,12 @@ func TestFormatVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	bump(s.catalogPath(fp))
-	bump(s.oraclePath(queryHash(fp, "SELECT 1")))
+	bump(s.catalogPath())
+	bump(s.oraclePath(ref))
 	if _, ok := s.LoadCatalog(fp); ok {
 		t.Error("newer-format catalog must be a miss")
 	}
-	if _, ok := s.LoadOracle(fp, "SELECT 1"); ok {
+	if _, ok := s.LoadOracle(ref, fp, "SELECT 1"); ok {
 		t.Error("newer-format oracle entry must be a miss")
 	}
 }

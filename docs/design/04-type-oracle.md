@@ -100,14 +100,21 @@ diagnostic. The error carries only the engine name, never the DSN
 
 ## 3. `internal/cache` — committed cache
 
-Layout (path from config, default `.sqletch/cache/`, committed to VCS):
+Layout (path from config, default `.sqletch/cache/`, committed to VCS).
+**The layout below is v0.6's; `docs/design/21-cache-layout.md` is the
+authority for it and for the `generate` sweep that keeps it exact:**
 
 ```
 .sqletch/cache/
-  catalog-<fp>.json        one per schema fingerprint
-  oracle/<qh>.json         one per rendering
-  env-<fp>.json            §3.1: generation-environment record (not a key)
+  catalog.json                                the schema snapshot
+  oracle/<target-slug>/<query>/<shape>.json   one per rendering
+  env.json                                    §3.1: generation-environment
+                                              record (not a key)
 ```
+
+The fingerprint is in every file and in no file *name* (doc 21 D1), so
+one committed cache describes one schema state and a DDL change shows
+up as a modification of the entries it actually affected.
 
 **Schema fingerprint** `fp = sha256(dialect ‖ server_version ‖
 concat(sorted schema inputs: path + content))` — offline-computable
@@ -115,7 +122,9 @@ concat(sorted schema inputs: path + content))` — offline-computable
 matched by `cfg.SchemaFingerprintGlobs` (config-required in that mode:
 sqletch cannot guess what goose/atlas reads).
 
-**Oracle entry** `qh = sha256(fp ‖ rendering.SQL)`:
+**Oracle entry**, keyed by `(fp, rendering.SQL)` and *named* by
+`(target slug, query name, shape name)` — the path is a lookup hint,
+never evidence (doc 21 §3.1):
 
 ```json
 {
@@ -129,13 +138,16 @@ sqletch cannot guess what goose/atlas reads).
 Store-and-compare (spec: "hashes are an index, not identity"): on
 read, `rendered_sql` and `schema_fp` are compared byte-wise against
 the current values; mismatch = treated as miss, entry rewritten.
-Canonical JSON (sorted keys, LF, trailing newline) for clean diffs;
-`generate` prunes entries whose `qh` no longer corresponds to any
-rendering (keeps the committed dir from accreting garbage).
+Canonical JSON (sorted keys, LF, trailing newline) for clean diffs.
+`generate` — and only `generate` — prunes every `.json` under the cache
+directory that the run did not write or hit, which is what keeps the
+committed tree equal to the live set rather than the union of every
+revision the project ever had (doc 21 §4).
 
 **Untrusted-tree hardening.** The cache tree is committed, so a cloned
-repository can plant files at these *fingerprint-derived, hence
-attacker-computable* paths. Two defences (`internal/cache`):
+repository can plant files at these paths — which since doc 21 are
+name-derived and therefore *more* predictable than the old
+fingerprint-derived ones, not less. Two defences (`internal/cache`):
 
 - **Bounded reads** (`ReadFileCapped`, `MaxFileBytes` = 64 MiB): every
   cache read (`LoadCatalog`/`LoadOracle`/`LoadEnv`, and the `explain`
@@ -150,7 +162,7 @@ attacker-computable* paths. Two defences (`internal/cache`):
   writers (cache entries, generated `.go`, `expanded/`, `explain/`) use
   it.
 
-### 3.1 Generation-environment record (`env-<fp>.json`)
+### 3.1 Generation-environment record (`env.json`)
 
 The fingerprint pins the *pinned* `server_version` (a major, e.g.
 `"16"`), so two servers that satisfy the same pin — 16.4 and 16.9 —
@@ -159,7 +171,7 @@ a run actually connected to, so a later run can:
 
 ```json
 {
-  "format": 1, "schema_fp": "…",
+  "format": 2, "schema_fp": "…",
   "dialect": "postgres", "oracle_backend": "server",
   "server_version": "16.4",
   "server_version_raw": "16.4 (Debian 16.4-1.pgdg120+1)"
@@ -171,7 +183,7 @@ has to stay offline-computable (spec requirement) and the version of a
 server we have not contacted cannot enter it; putting it in would also
 mean every patch bump invalidates the committed cache, destroying the
 offline-CI property the cache exists for. It lives outside
-`catalog-<fp>.json` and `oracle/<qh>.json` for a second reason: those
+`catalog.json` and the `oracle/` entries for a second reason: those
 files are pinned byte-identical across oracle backends by
 `internal/corpus` (design 15 §7.2), and a backend that contacts no
 server cannot reproduce a connection-derived byte.
@@ -218,7 +230,7 @@ type Column struct{ Name string; Att int16; TypeOID uint32;
 
 Snapshot query: single SELECT over `pg_class` ⋈ `pg_attribute` ⋈
 `pg_namespace` (user schemas only, `attnum > 0`, not dropped), plus a
-`pg_type` name map. Serialized to `catalog-<fp>.json`.
+`pg_type` name map. Serialized to `catalog.json`.
 
 ## 4. Pipeline flow (cache-aware)
 
