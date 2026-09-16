@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.0.3](https://github.com/moznion/go-sqletch/compare/v0.0.2...v0.0.3) - 2026-09-16
+
+- Nullable value parameters: Option[T] for NULL, sqletch.Omittable[T] for omission (design 20) by @moznion in https://github.com/moznion/go-sqletch/pull/136
+- cache: named, prunable committed-cache layout (design 21) by @moznion in https://github.com/moznion/go-sqletch/pull/137
+- cli: weave policies before explain enumerates or analyzes shapes by @moznion in https://github.com/moznion/go-sqletch/pull/138
+- policy: require_annotation and the @policy-apply acknowledgment (design 14 §12) by @moznion in https://github.com/moznion/go-sqletch/pull/139
+
 ## [v0.0.2](https://github.com/moznion/go-sqletch/compare/v0.0.1...v0.0.2) - 2026-09-11
 
 - release: introduce Songmu/tagpr for release automation by @moznion in https://github.com/moznion/go-sqletch/pull/129
