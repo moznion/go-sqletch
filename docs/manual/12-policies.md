@@ -81,6 +81,57 @@ the `explain` report. An opt-out naming an unknown policy, or one that
 does not apply to the query, is `SQLETCH126`: renaming a policy can
 never silently disarm its opt-outs.
 
+## Requiring an explicit answer
+
+By default only the *exemption* is visible in the template: a scoped
+query is scoped by writing nothing, so reading `orders.sql` does not
+tell you which queries the policy touches. Set `require_annotation` to
+make both sides explicit:
+
+```yaml
+policies:
+  - name: tenant_scope
+    tables: [orders, order_items, invoices]
+    predicate: "{}.tenant_id = :tenant_id"
+    require_annotation: true
+```
+
+Every query the policy applies to must then say which it is:
+
+```sql
+-- name: CountAuditLogs :one
+-- @policy-apply: tenant_scope
+SELECT count(*) AS total FROM audit_logs;
+
+-- name: AllAuditActions :many
+-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)
+SELECT a.action, count(*) FROM audit_logs AS a GROUP BY a.action;
+```
+
+A query with neither is `SQLETCH127`.
+
+- **`-- @policy-apply` is an acknowledgment, not a switch.** It changes
+  nothing about what is woven — scoping is decided by `tables` and
+  `applies_to`, and a query that fails this requirement is woven first
+  and reported second, so it fails *scoped*. The key buys review
+  legibility, not a safety property; forgetting an annotation can never
+  leak a row.
+- The obligation is **per policy**: three applicable policies need
+  three annotations. A policy without the key never asks for one, so
+  you can adopt this one policy at a time.
+- It keys on exactly the applicability rule `SQLETCH126` uses, so the
+  two annotations are always both available: you will never be told to
+  annotate a query that then rejects the annotation.
+- A trailing `(reason)` on `@policy-apply` is optional.
+- Turning the key on fails every applicable query at once, by design —
+  there is no warning tier that would let a codebase sit half
+  annotated while reading as compliant. `sqletch explain` lists which
+  policies apply to each query; that is the worklist, and it is
+  available before you set the key.
+- Annotations are comments, and comments stay in the compiled SQL
+  verbatim. Adding one changes a query's rendered SQL and so re-checks
+  its cache entries, exactly like any other edit to the template.
+
 ## Enforcement
 
 Weaving covers what the weaver reaches; a separate enforcement pass

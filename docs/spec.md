@@ -1248,6 +1248,49 @@ its opt-outs. `sqletch explain` reports per-query policy coverage
 (woven / opted out with reason), machine-readably under
 `--format json`.
 
+## Mandatory acknowledgment
+
+The opt-out makes *disabling* a policy explicit; by default, enabling
+it is silent — a scoped query is scoped by writing nothing. A policy
+may demand that both sides be stated:
+
+```yaml
+policies:
+  - name: tenant_scope
+    tables: [orders, order_items, invoices]
+    predicate: "{}.tenant_id = :tenant_id"
+    require_annotation: true
+```
+
+Every query the policy applies to must then carry either
+`-- @policy-apply: tenant_scope` (with an optional trailing
+`(reason)`) or the opt-out above; a query with neither is
+`SQLETCH127`. The obligation is per policy and keys on exactly the
+applicability predicate `SQLETCH126` uses, so the two annotations are
+exhaustive: no query can be obliged to annotate and simultaneously
+forbidden from doing so. `-- @policy-apply` is subject to the same
+sanity rules as the opt-out, under the same code — naming an unknown
+or inapplicable policy, or accompanying an opt-out for the same
+policy, is `SQLETCH126`.
+
+`-- @policy-apply` is an **acknowledgment, never a switch**. It
+changes nothing about what is woven: scoping is decided by `tables`
+and `applies_to`, and an unannotated query is woven and *then*
+reported, so failing this requirement fails scoped. Making the
+annotation *enable* weaving would restore the opt-in default this
+feature exists to remove. `require_annotation` therefore buys review
+legibility — the template file states the query's scoping instead of
+leaving a reader to re-derive it from `sqletch.yaml` — and adds no
+soundness property; the enforcement invariant above is unchanged and
+does not depend on it.
+
+This is the one place where configuration bears on whether a template
+compiles. The narrower invariant that holds everywhere: **no
+configuration may make a template compile that would not compile
+without it.** Weaving satisfies it because the R6 anchor rule is
+checked on the unwoven template; `require_annotation` satisfies it
+because it only ever subtracts.
+
 ## Boundary
 
 Policies constrain only sqletch-generated queries; they express

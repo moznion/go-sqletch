@@ -272,11 +272,27 @@ type QueryTemplate struct {
 	// annotations in declaration order (a slice so diagnostics never
 	// depend on map iteration order).
 	PolicyOptOuts []PolicyOptOut
+	// PolicyApplies are the query's `-- @policy-apply: name` (optional
+	// `(reason)`) acknowledgments in declaration order — the
+	// affirmative half of a policy's `require_annotation` (design 14
+	// §12). They never change what is woven.
+	PolicyApplies []PolicyApply
 }
 
 // PolicyOptOut is one `-- @policy-optout` annotation: a deliberate,
 // reviewable exemption from a policy, with a mandatory reason.
 type PolicyOptOut struct {
+	Policy string
+	Reason string
+	Span   diagnostics.Span
+}
+
+// PolicyApply is one `-- @policy-apply` annotation: an explicit
+// acknowledgment that a policy scopes this query. It is a review
+// artifact, never a switch — the conjunct is woven whether or not the
+// annotation is present (design 14 §12.2). Reason is "" when the
+// optional trailing `(reason)` is omitted.
+type PolicyApply struct {
 	Policy string
 	Reason string
 	Span   diagnostics.Span

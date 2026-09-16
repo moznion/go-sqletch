@@ -36,6 +36,8 @@ func compilePolicies(drv driver, cfg config.Config) ([]policy.Policy, []diagnost
 			ParamName: p.Param.Name,
 			ParamType: p.Param.Type,
 			Kinds:     kinds,
+
+			RequireAnnotation: p.RequireAnnotation,
 		})
 	}
 	diags := policy.Validate(drv.profile, drv.frontend, pols, cfg.Path)

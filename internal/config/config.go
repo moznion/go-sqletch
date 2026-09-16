@@ -261,6 +261,14 @@ type Policy struct {
 	// empty means select, update, and delete. INSERT … VALUES is
 	// never a policy target (no rows are filtered).
 	AppliesTo []string `yaml:"applies_to"`
+	// RequireAnnotation demands that every query this policy applies
+	// to say so out loud — `-- @policy-apply: name` or
+	// `-- @policy-optout: name (reason)` — on pain of SQLETCH127
+	// (design 14 §12). It never changes what is woven: scoping is
+	// decided by Tables and AppliesTo whether or not the annotation is
+	// present. The key buys review legibility, not a soundness
+	// property.
+	RequireAnnotation bool `yaml:"require_annotation"`
 }
 
 // PolicyParam declares the policy predicate's parameter. Type is

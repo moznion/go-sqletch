@@ -30,6 +30,12 @@ var (
 	// diagnostic instead of silently staying skeleton text.
 	optOutRe     = regexp.MustCompile(`^--\s*@policy-optout\b`)
 	optOutFormRe = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
+	// applyRe/applyFormRe are the same split for @policy-apply, the
+	// acknowledgment half of `require_annotation` (design 14 §12). The
+	// trailing reason is OPTIONAL: an acknowledgment claims no
+	// exemption, so there is nothing for it to justify.
+	applyRe     = regexp.MustCompile(`^--\s*@policy-apply\b`)
+	applyFormRe = regexp.MustCompile(`^--\s*@policy-apply:\s*([a-z][a-z0-9_]*)\s*(?:\((.+)\)\s*)?$`)
 )
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -400,13 +406,14 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 }
 
 // isDirectiveComment reports whether a line comment is one of the
-// per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`),
-// including a malformed @policy-optout (which still targets a query, so
-// its diagnostic must attach there too).
+// per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`,
+// `-- @policy-apply`), including a malformed policy annotation (which
+// still targets a query, so its diagnostic must attach there too).
 func isDirectiveComment(text string) bool {
 	return paramHintRe.MatchString(text) ||
 		colHintRe.MatchString(text) ||
-		optOutRe.MatchString(text)
+		optOutRe.MatchString(text) ||
+		applyRe.MatchString(text)
 }
 
 // applyDirectives attaches every buffered directive to q (in source
@@ -444,6 +451,17 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 		} else {
 			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
 				"malformed @policy-optout; the reason is mandatory: `-- @policy-optout: policy_name (reason)`")
+		}
+		return
+	}
+	if applyRe.MatchString(tok.Text) {
+		if m := applyFormRe.FindStringSubmatch(tok.Text); m != nil {
+			q.PolicyApplies = append(q.PolicyApplies, PolicyApply{
+				Policy: m[1], Reason: strings.TrimSpace(m[2]), Span: fs.span(tok.Start, tok.End),
+			})
+		} else {
+			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
+				"malformed @policy-apply; the form is `-- @policy-apply: policy_name` with an optional trailing `(reason)`")
 		}
 	}
 }

@@ -70,6 +70,33 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		}
 	}
 
+	// The same sanity for the affirmative annotation (design 14 §12.4),
+	// under the same code: a stale `-- @policy-apply` left behind by a
+	// rename tells a reviewer the query is scoped by a policy that no
+	// longer exists, which is exactly as misleading as a stale opt-out.
+	// It holds whether or not the policy sets require_annotation — the
+	// annotation is legal (and meaningful to a reader) either way.
+	for _, a := range q.PolicyApplies {
+		p, ok := byName[a.Policy]
+		if !ok {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, a.Span,
+				"@policy-apply names unknown policy %q", a.Policy).
+				WithHint("declared policies come from sqletch.yaml `policies:`; remove the annotation or fix the name"))
+			continue
+		}
+		if _, exempt := optOutFor(q, a.Policy); exempt {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, a.Span,
+				"policy %q is both acknowledged (@policy-apply) and exempted (@policy-optout) by this query", a.Policy).
+				WithHint("a query is scoped or exempt, never both; keep the one you mean"))
+			continue
+		}
+		if !applies(p) {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyBadOptOut, a.Span,
+				"@policy-apply: policy %q does not apply to this query", a.Policy).
+				WithHint("the query touches no table designated by %q (in a kind it covers), so nothing is woven; remove the annotation", a.Policy))
+		}
+	}
+
 	where := whereClause(profile, q)
 	whereOK := where.lexOK && !where.hasOR
 	onScans := map[int]*joinOnResult{}

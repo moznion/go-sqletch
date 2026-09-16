@@ -57,3 +57,24 @@ parenthesized reason is mandatory (SQLETCH001 without it); naming a
 policy that does not exist or does not apply to the query is
 SQLETCH126. Like every annotation it must follow the `-- name:` header
 and stays in the skeleton verbatim.
+
+## `-- @policy-apply: name`
+
+```sql
+-- name: CountAuditLogs :one
+-- @policy-apply: tenant_scope
+SELECT count(*) AS total FROM audit_logs;
+```
+
+Acknowledges that a [cross-query policy](12-policies.md) scopes this
+query. It **changes nothing**: the conjunct is woven whether or not the
+annotation is present. Its purpose is to make the query's scoping
+readable in the template file — and to satisfy a policy declared with
+`require_annotation: true`, which fails an unannotated query with
+SQLETCH127.
+
+A trailing `(reason)` is optional, unlike the opt-out's: an
+acknowledgment claims no exemption, so there is nothing to justify.
+Naming a policy that does not exist or does not apply to the query is
+SQLETCH126, as is carrying both this and `-- @policy-optout` for one
+policy.
