@@ -95,6 +95,28 @@ whether each is woven or opted out (with the reason) — and carries the
 same data as a `policies` array under `--format json`, so CI can
 assert on the opt-out set.
 
+## Seeing the woven SQL
+
+You never write the conjunct, so every place that shows you SQL shows
+it woven — there is no view of your queries in which the policy is
+missing:
+
+- **`sqletch explain <Name>`** prints the policy coverage and the
+  maximal rendering, read back from the last `generate` (no database,
+  no recompilation).
+- **`sqletch explain <Name> --enumerate`** prints every reachable
+  shape's SQL, and **`--analyze`** plans each of them against the dev
+  database. Both weave first, so what you read is what runs — the
+  maximal shape is byte-identical to the cached rendering below.
+- **`.sqletch/cache/oracle/<target>/<query>/<shape>.json`** holds the
+  `rendered_sql` that was actually `PREPARE`d and typed. It is
+  committed, so a policy change is a reviewable diff.
+- **The generated `*.gen.go`** fragment table carries the conjunct in
+  its skeleton text, which is what `runtime.Compose` concatenates.
+- **`static_expansion`** materializes each shape to
+  `.sqletch/expanded/<target>/<query>/*.sql` if you want the whole
+  shape space on disk.
+
 ## The parameter
 
 The policy parameter is typed by the oracle on PostgreSQL (where

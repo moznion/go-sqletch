@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -221,5 +223,114 @@ func TestOffline_AnchorRuleIsConfigIndependent(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("SQLETCH113 suppressed by the policy: %+v", res.Diags[path])
+	}
+}
+
+// `explain --enumerate` is downstream of the weave (design 14 §2), so
+// every shape it prints must carry the policy conjunct. Printing the
+// scanned template's rendering instead would show the unscoped form of
+// a query the compiler scopes — the exact statement this surface
+// exists to rule out.
+func TestExplainEnumerate_WeavesPolicies(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{
+		"sqletch.yaml":  policyProjectYAML,
+		"db/schema.sql": "CREATE TABLE u (id bigint NOT NULL);\nCREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
+		"queries/orders.sql": "-- name: ListOrders :many\n" +
+			"SELECT id FROM orders WHERE status = :status;\n\n" +
+			"-- name: WithOrders :many\n" +
+			"SELECT u.id FROM u LEFT JOIN orders AS o ON o.id = u.id;\n",
+	})
+	var out, errW bytes.Buffer
+	if code := Explain(context.Background(), cfg.Path, nil, ExplainOptions{Enumerate: true}, &out, &errW); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, errW.String())
+	}
+	got := out.String()
+	// The WHERE-append form, and the ON-clause form for the
+	// null-extended side (D2a): both are the weaver's output, so both
+	// must reach the printed shape.
+	for _, want := range []string{
+		"(orders.tenant_id = $1) AND status = $2",
+		"ON o.id = u.id AND (o.tenant_id = $1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("enumerated shape is not the woven SQL, missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// A policy set that does not validate disables every policy for the
+// run (design 14 §D4), so enumerating past it would print unscoped SQL
+// with a warning attached. Refuse instead, as generate and check do.
+func TestExplainEnumerate_BrokenPolicySetRefuses(t *testing.T) {
+	broken := strings.Replace(policyProjectYAML,
+		`predicate: "{}.tenant_id = :tenant_id"`,
+		`predicate: "ORDER BY oops"`, 1)
+	cfg := writeOfflineProject(t, map[string]string{
+		"sqletch.yaml":       broken,
+		"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL);",
+		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE id = :id;\n",
+	})
+	var out, errW bytes.Buffer
+	code := Explain(context.Background(), cfg.Path, nil, ExplainOptions{Enumerate: true}, &out, &errW)
+	if code != ExitDiagnostics {
+		t.Fatalf("exit %d, want %d\n%s", code, ExitDiagnostics, errW.String())
+	}
+	if !strings.Contains(errW.String(), string(diagnostics.CodePolicyInvalid)) {
+		t.Errorf("no %s against the config:\n%s", diagnostics.CodePolicyInvalid, errW.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("unscoped SQL printed despite a broken policy set:\n%s", out.String())
+	}
+}
+
+// A query the weaver cannot scope (SQLETCH125) is a build failure, so
+// the enumeration that shows its unscoped shapes must fail too — the
+// shape cap stays a warning, this does not.
+func TestExplainEnumerate_UnweavableFails(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{
+		"sqletch.yaml":  policyProjectYAML,
+		"db/schema.sql": "CREATE TABLE u (id bigint NOT NULL);\nCREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL);",
+		"queries/leaky.sql": "-- name: Leaky :many\n" +
+			"SELECT u.id FROM u LEFT JOIN orders USING (id) WHERE u.id = :id;\n",
+	})
+	var out, errW bytes.Buffer
+	code := Explain(context.Background(), cfg.Path, nil, ExplainOptions{Enumerate: true}, &out, &errW)
+	if code != ExitDiagnostics {
+		t.Fatalf("exit %d, want %d\n%s", code, ExitDiagnostics, errW.String())
+	}
+	if !strings.Contains(errW.String(), string(diagnostics.CodePolicyUnweavable)) {
+		t.Errorf("no %s on stderr:\n%s", diagnostics.CodePolicyUnweavable, errW.String())
+	}
+}
+
+// wovenTemplates is the seam `--enumerate` and `--analyze` share, so
+// the plans `--analyze` prints come from the woven SQL too: a scoped
+// query's plan is not its unscoped text's plan, and the unscoped text
+// is never executed. (--analyze itself needs a live planner; the devdb
+// suite runs it.)
+func TestWovenTemplates_IsTheSharedAnalyzeSeam(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{
+		"sqletch.yaml":       policyProjectYAML,
+		"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
+		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE status = :status;\n",
+	})
+	var errW bytes.Buffer
+	drv := driverFor(cfg)
+	queries, res, code, ok := wovenTemplates(cfg, drv, []string{"ListOrders"}, &errW)
+	if !ok || code != ExitOK {
+		t.Fatalf("exit %d ok=%v\n%s", code, ok, errW.String())
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries = %d, want the one named", len(queries))
+	}
+	if len(res.Diags) != 0 {
+		t.Errorf("unexpected diagnostics: %+v", res.Diags)
+	}
+	r, err := ast.Render(drv.profile, queries[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.SQL, "(orders.tenant_id = $1)") {
+		t.Errorf("the shared seam returned an unwoven template:\n%s", r.SQL)
 	}
 }

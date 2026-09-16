@@ -183,3 +183,39 @@ WHERE
 		t.Fatalf("formatted project must pass --check, got %d\n%s", code, out.String())
 	}
 }
+
+// The report's SQL is the point of `explain` (design 07 §3, manual
+// §CLI): the summary must show the maximal rendering as the compiler
+// produced it — policy conjuncts and all — so reading what sqletch
+// compiled never means recompiling it. The field was written to
+// .sqletch/explain/ and never printed.
+func TestPrintExplain_ShowsMaximalSQL(t *testing.T) {
+	var b strings.Builder
+	printExplain(&b, explainData{
+		Name:       "CountOrders",
+		ShapeCount: "1",
+		Policies: []policyCoverage{
+			{Name: "tenant_scope", Status: "woven", Conjuncts: []string{"orders.tenant_id = :tenant_id"}},
+		},
+		MaximalSQL: "\nSELECT count(*) FROM orders\nWHERE (orders.tenant_id = $1);\n\n",
+	})
+	out := b.String()
+	if !strings.Contains(out, "  maximal SQL:\n") {
+		t.Fatalf("no maximal SQL section:\n%s", out)
+	}
+	for _, want := range []string{
+		"    SELECT count(*) FROM orders\n",
+		"    WHERE (orders.tenant_id = $1);\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("maximal SQL missing %q (every line indented under the heading):\n%s", want, out)
+		}
+	}
+
+	// A query with no recorded SQL prints no empty heading.
+	b.Reset()
+	printExplain(&b, explainData{Name: "Q", ShapeCount: "1"})
+	if strings.Contains(b.String(), "maximal SQL") {
+		t.Errorf("empty maximal SQL must print no heading:\n%s", b.String())
+	}
+}

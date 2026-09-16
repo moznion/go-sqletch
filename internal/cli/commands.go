@@ -15,6 +15,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/gosrc"
+	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/shape"
 	"github.com/moznion/go-sqletch/internal/template"
 )
@@ -206,6 +207,15 @@ func printExplain(w io.Writer, d explainData) {
 			}
 		}
 	}
+	// The maximal rendering, verbatim from the last generate (design 07
+	// §3): the report's whole point is that you read the SQL sqletch
+	// compiled, woven conjuncts included, without recompiling it.
+	if sql := strings.TrimSpace(d.MaximalSQL); sql != "" {
+		fmt.Fprintln(w, "  maximal SQL:")
+		for _, line := range strings.Split(sql, "\n") {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	}
 	fmt.Fprintln(w)
 }
 
@@ -259,59 +269,100 @@ func queryFiles(cfg config.Config, errW io.Writer) ([]string, int, bool) {
 	return resolution.Files, ExitOK, true
 }
 
-func explainEnumerate(cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
-	drv := driverFor(cfg)
-	profile := drv.profile
+// wovenTemplates is the shape-enumerating commands' entry into the
+// pipeline: every target's template files, scanned and then WOVEN with
+// the configured policies (design 14 §2).
+//
+// `explain --enumerate` and `explain --analyze` sit downstream of the
+// weave arrow just like rendering and the oracle do, so they must
+// consume the woven template. Rendering the scanned template directly
+// would print — and plan — SQL that the program never executes: the
+// unscoped form of a query the compiler scopes, which is exactly the
+// statement an audit of this surface is trying to rule out.
+//
+// A defective policy set disables every policy for the run
+// (compilePolicies returns none, design 14 §D4), so continuing here
+// would emit that same unscoped SQL with only a warning attached:
+// refuse instead, as generate and check do. Per-query weave failures
+// (SQLETCH125) are returned in the Result for the caller to report —
+// the shapes are still worth printing, and the caller owns the exit
+// code.
+func wovenTemplates(cfg config.Config, drv driver, queryNames []string, errW io.Writer) ([]*template.QueryTemplate, *Result, int, bool) {
 	paths, code, ok := queryFiles(cfg, errW)
 	if !ok {
-		return code
+		return nil, nil, code, false
+	}
+	pols, polDiags := compilePolicies(drv, cfg)
+	res := &Result{Diags: polDiags, Sources: map[string][]byte{}}
+	if diagnostics.HasErrors(polDiags) {
+		PrintDiags(errW, res, false)
+		return nil, nil, ExitDiagnostics, false
 	}
 	want := map[string]bool{}
 	for _, n := range queryNames {
 		want[n] = true
 	}
-	scanner := template.NewScanner(profile)
-	printed := 0
-	capped := &Result{Sources: map[string][]byte{}}
+	scanner := template.NewScanner(drv.profile)
+	var queries []*template.QueryTemplate
 	for _, p := range paths {
 		src, err := os.ReadFile(p)
 		if err != nil {
 			fmt.Fprintf(errW, "sqletch: %v\n", err)
-			return ExitEnvironment
+			return nil, nil, ExitEnvironment, false
 		}
 		file, diags := scanSource(scanner, p, src)
 		if diagnostics.HasErrors(diags) {
 			printBare(errW, diags, false)
-			return ExitDiagnostics
+			return nil, nil, ExitDiagnostics, false
 		}
-		capped.Sources[p] = src
+		res.Sources[p] = src
 		for _, q := range file.Queries {
 			if len(want) > 0 && !want[q.Name] {
 				continue
 			}
-			keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
-			for _, k := range keys {
-				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
-				if err != nil {
-					fmt.Fprintf(errW, "sqletch: %v\n", err)
-					return ExitEnvironment
-				}
-				fmt.Fprintf(out, "-- %s shape %s\n%s\n\n", q.Name, k, strings.TrimSpace(r.SQL))
-			}
-			if truncated {
-				// Warning, and on stderr: stdout is the shape SQL
-				// stream, which `explain > shapes.sql` must keep clean.
-				capped.Diags = append(capped.Diags,
-					shapeCapDiag(q, capN, diagnostics.Warning, "enumeration"))
-			}
-			printed++
+			wres := policy.Weave(drv.profile, drv.frontend, pols, q)
+			res.Diags = append(res.Diags, wres.Diags...)
+			queries = append(queries, wres.Query)
 		}
 	}
-	if printed == 0 {
+	return queries, res, ExitOK, true
+}
+
+func explainEnumerate(cfg config.Config, queryNames []string, capN int, out, errW io.Writer) int {
+	drv := driverFor(cfg)
+	queries, capped, code, ok := wovenTemplates(cfg, drv, queryNames, errW)
+	if !ok {
+		return code
+	}
+	if len(queries) == 0 {
 		fmt.Fprintf(errW, "sqletch: no matching queries\n")
 		return ExitDiagnostics
 	}
+	for _, q := range queries {
+		keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
+		for _, k := range keys {
+			r, err := ast.RenderShape(drv.profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
+			if err != nil {
+				fmt.Fprintf(errW, "sqletch: %v\n", err)
+				return ExitEnvironment
+			}
+			fmt.Fprintf(out, "-- %s shape %s\n%s\n\n", q.Name, k, strings.TrimSpace(r.SQL))
+		}
+		if truncated {
+			// Warning, and on stderr: stdout is the shape SQL
+			// stream, which `explain > shapes.sql` must keep clean.
+			capped.Diags = append(capped.Diags,
+				shapeCapDiag(q, capN, diagnostics.Warning, "enumeration"))
+		}
+	}
 	PrintDiags(errW, capped, false)
+	// The cap alone stays a warning (exit 0), but a query the weaver
+	// could not scope printed shapes that the compiler would reject:
+	// the enumeration no longer describes a buildable program, so it
+	// fails like every other command on that code.
+	if diagnostics.HasErrors(capped.Diags) {
+		return ExitDiagnostics
+	}
 	return ExitOK
 }
 
@@ -364,60 +415,39 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		return ExitEnvironment
 	}
 
-	paths, code, ok := queryFiles(cfg, errW)
+	// The WOVEN templates, for the same reason `check` plans them:
+	// the plan a policy-scoped query gets is not the plan its unscoped
+	// text gets, and the unscoped text is never executed.
+	queries, capped, code, ok := wovenTemplates(cfg, drv, queryNames, errW)
 	if !ok {
 		return code
 	}
-	want := map[string]bool{}
-	for _, n := range queryNames {
-		want[n] = true
-	}
-	scanner := template.NewScanner(profile)
-	printed := 0
-	capped := &Result{Sources: map[string][]byte{}}
-	for _, p := range paths {
-		src, err := os.ReadFile(p)
-		if err != nil {
-			fmt.Fprintf(errW, "sqletch: %v\n", err)
-			return ExitEnvironment
-		}
-		file, diags := scanSource(scanner, p, src)
-		if diagnostics.HasErrors(diags) {
-			printBare(errW, diags, false)
-			return ExitDiagnostics
-		}
-		capped.Sources[p] = src
-		for _, q := range file.Queries {
-			if len(want) > 0 && !want[q.Name] {
-				continue
-			}
-			keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
-			for _, k := range keys {
-				r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
-				if err != nil {
-					fmt.Fprintf(errW, "sqletch: %v\n", err)
-					return ExitEnvironment
-				}
-				plan, err := oracle.PlanText(ctx, r.SQL)
-				if err != nil {
-					fmt.Fprintf(errW, "sqletch: %s shape %s: %v\n", q.Name, k, err)
-					return ExitDiagnostics
-				}
-				fmt.Fprintf(out, "-- %s shape %s\n%s\n", q.Name, k, plan)
-			}
-			if truncated {
-				// An error: the plans printed are the low guard bits
-				// only, so "every shape plans acceptably" was never
-				// established. Other queries still get analyzed.
-				capped.Diags = append(capped.Diags,
-					shapeCapDiag(q, capN, diagnostics.Error, "analysis"))
-			}
-			printed++
-		}
-	}
-	if printed == 0 {
+	if len(queries) == 0 {
 		fmt.Fprintf(errW, "sqletch: no matching queries\n")
 		return ExitDiagnostics
+	}
+	for _, q := range queries {
+		keys, truncated := shape.EnumerateExpand(q, capN, drv.expandIn)
+		for _, k := range keys {
+			r, err := ast.RenderShape(profile, q, k.Guards, k.Selection(), k.OrderSelection(), k.InSelection())
+			if err != nil {
+				fmt.Fprintf(errW, "sqletch: %v\n", err)
+				return ExitEnvironment
+			}
+			plan, err := oracle.PlanText(ctx, r.SQL)
+			if err != nil {
+				fmt.Fprintf(errW, "sqletch: %s shape %s: %v\n", q.Name, k, err)
+				return ExitDiagnostics
+			}
+			fmt.Fprintf(out, "-- %s shape %s\n%s\n", q.Name, k, plan)
+		}
+		if truncated {
+			// An error: the plans printed are the low guard bits
+			// only, so "every shape plans acceptably" was never
+			// established. Other queries still get analyzed.
+			capped.Diags = append(capped.Diags,
+				shapeCapDiag(q, capN, diagnostics.Error, "analysis"))
+		}
 	}
 	if len(capped.Diags) > 0 {
 		PrintDiags(errW, capped, false)

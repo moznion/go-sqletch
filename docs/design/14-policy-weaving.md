@@ -114,7 +114,21 @@ Therefore:
   parse as one complete node in its slot, that is a normal R1
   diagnostic (with the span question of §6.4).
 - Static expansion, the committed cache, and `explain --enumerate` need
-  no awareness of policies.
+  no policy-specific *code* — but only because they read a template
+  that has already been through the arrow. "No awareness" is not "may
+  skip the weave": a phase that re-scans the source and renders it
+  itself sits *before* the arrow, whatever its position in the file,
+  and emits the unscoped form of a query the compiler scopes.
+  `explain --enumerate` and `explain --analyze` are the two commands
+  that enumerate shapes outside `pipeline.Run`, so they reach the
+  woven template through `cli.wovenTemplates` — the seam is theirs the
+  way `cli.scanChecks` is the pipeline's and the LSP's. A defective
+  policy set disables every policy (§D4), so they refuse rather than
+  print what would then be unscoped SQL. (Fixed 2026-09-16; both had
+  rendered the scanned template directly since P7, so `--enumerate`
+  showed and `--analyze` planned SQL that is never executed. The
+  regression tests are `TestExplainEnumerate_WeavesPolicies` and the
+  index-search assertion in `TestSQLitePolicyWeaveCLI`.)
 
 This is the whole reason the feature is cheap in soundness terms, and
 it is why no alternative placement (weaving into the rendered SQL

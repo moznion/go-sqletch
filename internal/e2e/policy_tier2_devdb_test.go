@@ -83,7 +83,10 @@ func TestSQLitePolicyWeaveCLI(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	writeFile(t, dir, "db/schema.sql", sqliteSchemaSQL)
+	// The index on the scoping column is what makes the planner's
+	// answer differ between the woven and the unwoven statement below.
+	writeFile(t, dir, "db/schema.sql",
+		sqliteSchemaSQL+"\nCREATE INDEX audit_tenant_idx ON audit_logs(tenant_id);\n")
 	writeFile(t, dir, "queries/audit.sql", policyAuditQueries)
 	writeFile(t, dir, "sqletch.yaml",
 		policyConfigYAML("sqlite", "3", filepath.Join(dir, "dev.sqlite3"), "integer"))
@@ -103,6 +106,28 @@ func TestSQLitePolicyWeaveCLI(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "offline") {
 		t.Logf("check output: %s", out.String())
+	}
+
+	// `explain --analyze` plans the WOVEN statement (design 14 §2): a
+	// scoped query's plan is not its unscoped text's plan, and the
+	// unscoped text is never executed. With an index on tenant_id the
+	// woven query SEARCHes it; the opt-out, which keeps no conjunct,
+	// still SCANs. Planning the scanned template would print the scan
+	// for both.
+	var woven, wovenErr bytes.Buffer
+	analyze := cli.ExplainOptions{Analyze: true, AllowDestructive: true}
+	if code := cli.Explain(ctx, configPath, []string{"AllAudit"}, analyze, &woven, &wovenErr); code != cli.ExitOK {
+		t.Fatalf("explain --analyze: exit %d\n%s", code, wovenErr.String())
+	}
+	if !strings.Contains(woven.String(), "audit_tenant_idx") {
+		t.Errorf("--analyze planned the unwoven statement (no index search):\n%s", woven.String())
+	}
+	var optout, optoutErr bytes.Buffer
+	if code := cli.Explain(ctx, configPath, []string{"AllAuditBackfill"}, analyze, &optout, &optoutErr); code != cli.ExitOK {
+		t.Fatalf("explain --analyze (opt-out): exit %d\n%s", code, optoutErr.String())
+	}
+	if strings.Contains(optout.String(), "audit_tenant_idx") {
+		t.Errorf("the opt-out query was woven before planning:\n%s", optout.String())
 	}
 }
 
