@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.0.4](https://github.com/moznion/go-sqletch/compare/v0.0.3...v0.0.4) - 2026-09-23
+
+- Enable FTS5 in the SQLite dev database by @AnaTofuZ in https://github.com/moznion/go-sqletch/pull/141
+- build(deps): bump github.com/jackc/pgx/v5 from 5.10.0 to 5.11.0 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/140
+- build(deps): bump go.opentelemetry.io/otel/sdk from 1.43.0 to 1.45.0 in /contrib/otel in the go_modules group across 1 directory by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/143
+
 ## [v0.0.3](https://github.com/moznion/go-sqletch/compare/v0.0.2...v0.0.3) - 2026-09-16
 
 - Nullable value parameters: Option[T] for NULL, sqletch.Omittable[T] for omission (design 20) by @moznion in https://github.com/moznion/go-sqletch/pull/136
