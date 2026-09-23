@@ -6,7 +6,7 @@ require (
 	github.com/go-mysql-org/go-mysql v1.16.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/goccy/go-yaml v1.19.2
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/moznion/go-optional v0.13.0
 	github.com/ncruces/go-sqlite3 v0.35.4
 	github.com/pganalyze/pg_query_go/v6 v6.2.2
