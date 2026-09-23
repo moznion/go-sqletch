@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	sqlite3 "github.com/ncruces/go-sqlite3"
+	"github.com/ncruces/go-sqlite3/ext/fts5"
 )
 
 // AcquireSQLite opens (or creates) the SQLite dev database — fully
@@ -38,6 +39,10 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 	closeAll := func() {
 		_ = conn.Close()
 		removeDir()
+	}
+	if err := fts5.Register(conn); err != nil {
+		closeAll()
+		return nil, func() {}, fmt.Errorf("register SQLite FTS5 extension: %w", err)
 	}
 
 	if cfg.wantVersion() {
