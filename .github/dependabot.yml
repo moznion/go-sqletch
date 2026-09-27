@@ -1,9 +1,27 @@
 version: 2
 updates:
+  # contrib/otel is a separate module that consumes the root module via
+  # `replace github.com/moznion/go-sqletch => ../..`, so any version the
+  # root module raises (including indirect ones such as golang.org/x/sys)
+  # must land in contrib/otel/go.mod in the SAME pull request, or
+  # `go test -C contrib/otel ./...` fails with "updates to go.mod needed".
+  # Both directories are therefore updated together as one group, which
+  # Dependabot opens as a single PR spanning both modules.
   - package-ecosystem: "gomod"
-    directory: "/"
+    directories:
+      - "/"
+      - "/contrib/otel"
     schedule:
       interval: "weekly"
+    groups:
+      go-modules:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      go-modules-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
