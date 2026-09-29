@@ -44,6 +44,36 @@ LEFT JOIN audit_logs AS a ON a.actor_id = u.id
 ORDER BY u.id, a.id;
 `
 
+// Set-operation branch weaving (design 14 §13). Each query returns a
+// DIFFERENT row set when any one branch is left unscoped:
+//   - AuditUnion: both UNION ALL branches read audit_logs; either
+//     branch unscoped shows another tenant's rows.
+//   - AuditEnds: parenthesized operands with their own ORDER BY/LIMIT;
+//     the conjunct must land INSIDE each operand, before its LIMIT, or
+//     "the last row" is another tenant's.
+//   - OrphanActors: an EXCEPT whose left operand is designated; tenant
+//     1's answer is EMPTY, the unscoped answer is not.
+const auditUnion = `-- name: AuditUnion :many
+SELECT a.id, a.action FROM audit_logs AS a WHERE a.actor_id IS NOT NULL
+UNION ALL
+SELECT a.id, a.action FROM audit_logs AS a WHERE a.actor_id IS NULL
+ORDER BY 1;
+`
+
+const auditEnds = `-- name: AuditEnds :many
+(SELECT a.id, a.action FROM audit_logs AS a ORDER BY a.id LIMIT 1)
+UNION ALL
+(SELECT a.id, a.action FROM audit_logs AS a ORDER BY a.id DESC LIMIT 1)
+ORDER BY 1;
+`
+
+const orphanActors = `-- name: OrphanActors :many
+SELECT a.actor_id FROM audit_logs AS a WHERE a.actor_id IS NOT NULL
+EXCEPT
+SELECT u.id FROM users AS u
+ORDER BY 1;
+`
+
 func tenantScopePolicy() policy.Policy {
 	return policy.Policy{
 		Name:      "tenant_scope",
@@ -93,7 +123,7 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 	}
 
 	var inputs []codegen.QueryInput
-	for _, src := range []string{allAudit, allAuditBackfill, usersWithAudit, corpus["list_audit_logs"]} {
+	for _, src := range []string{allAudit, allAuditBackfill, usersWithAudit, corpus["list_audit_logs"], auditUnion, auditEnds, orphanActors} {
 		q := compile(t, src)
 		if d := rules.CheckLexical(postgres.Profile{}, q); len(d) != 0 {
 			t.Fatalf("lexical: %+v", d)
@@ -132,6 +162,18 @@ func TestPolicyWeavingEndToEnd(t *testing.T) {
 		case "UsersWithAudit":
 			if !strings.Contains(rs[0].SQL, "ON a.actor_id = u.id AND (a.tenant_id = $1)") {
 				t.Fatalf("outer-join occurrence not woven into the ON clause:\n%s", rs[0].SQL)
+			}
+		case "AuditUnion":
+			if n := strings.Count(rs[0].SQL, "WHERE (a.tenant_id = $1) AND"); n != 2 {
+				t.Fatalf("AuditUnion: %d branches woven, want 2:\n%s", n, rs[0].SQL)
+			}
+		case "AuditEnds":
+			if n := strings.Count(rs[0].SQL, "WHERE (a.tenant_id = $1) ORDER BY a.id"); n != 2 {
+				t.Fatalf("AuditEnds: %d operands woven before their own ORDER BY, want 2:\n%s", n, rs[0].SQL)
+			}
+		case "OrphanActors":
+			if !strings.Contains(rs[0].SQL, "WHERE (a.tenant_id = $1) AND a.actor_id IS NOT NULL") || strings.Contains(rs[0].SQL, "u.tenant_id") {
+				t.Fatalf("OrphanActors: only the designated EXCEPT operand is woven:\n%s", rs[0].SQL)
 			}
 		case "ListAuditLogs":
 			if n := strings.Count(rs[0].SQL, "tenant_id ="); n != 1 {
@@ -320,6 +362,30 @@ func main() {
 	}
 	expect(sawBob, "outer row preserved by the ON conjunct")
 	expect(!sawCrossed, "cross-tenant action must not leak through the join")
+
+	// Set-operation branches are each scoped (design 14 §13).
+	un, err := q.AuditUnion(ctx, tenant1, gen.AuditUnionParams{})
+	die(err)
+	// Set-operation output is never narrowed (design 05 §2b), so every
+	// column is an Option.
+	expect(len(un) == 2 && un[0].Action.TakeOr("") == "login" && un[1].Action.TakeOr("") == "cron",
+		"UNION ALL: tenant 1 sees exactly its own row from each branch")
+	un2, err := q.AuditUnion(ctx, gen.TenantID(2), gen.AuditUnionParams{})
+	die(err)
+	expect(len(un2) == 2 && un2[0].Action.TakeOr("") == "secret" && un2[1].Action.TakeOr("") == "crossed",
+		"UNION ALL: tenant 2 sees exactly its rows")
+
+	ends, err := q.AuditEnds(ctx, tenant1, gen.AuditEndsParams{})
+	die(err)
+	expect(len(ends) == 2 && ends[0].ID.TakeOr(0) == 1 && ends[1].ID.TakeOr(0) == 2,
+		"parenthesized operands: first/last are tenant 1's own (unscoped last would be id 4)")
+
+	orphans, err := q.OrphanActors(ctx, tenant1, gen.OrphanActorsParams{})
+	die(err)
+	expect(len(orphans) == 0, "EXCEPT: tenant 1 has no orphan actors (unscoped would report 9)")
+	orphans2, err := q.OrphanActors(ctx, gen.TenantID(2), gen.OrphanActorsParams{})
+	die(err)
+	expect(len(orphans2) == 1 && orphans2[0].ActorID.TakeOr(0) == 9, "EXCEPT: tenant 2's orphan actor is 9")
 
 	// The hand-scoped query still paginates as written.
 	page, err := q.ListAuditLogs(ctx, gen.ListAuditLogsParams{TenantID: 1, Limit: 10})

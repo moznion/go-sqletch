@@ -68,6 +68,50 @@ func TestOffline_PolicyWeaves(t *testing.T) {
 	}
 }
 
+// A set operation is woven branch by branch (design 14 §13) through
+// the shared scanChecks, and the woven statement passes R1 like any
+// other — on both dialects that admit top-level set operations.
+func TestOffline_PolicyWeavesSetOperationBranches(t *testing.T) {
+	for _, tc := range []struct {
+		dialect, want string
+	}{
+		{"postgres", "SELECT id FROM orders WHERE (orders.tenant_id = $1) AND status = $2 UNION ALL SELECT id FROM u UNION ALL (SELECT o.id FROM orders o WHERE (o.tenant_id = $1) LIMIT 1)"},
+		{"sqlite", "SELECT id FROM orders WHERE (orders.tenant_id = ?) AND status = ? UNION ALL SELECT id FROM u UNION ALL SELECT o.id FROM orders o WHERE (o.tenant_id = ?)"},
+	} {
+		t.Run(tc.dialect, func(t *testing.T) {
+			q := "SELECT id FROM orders WHERE status = :status UNION ALL SELECT id FROM u UNION ALL (SELECT o.id FROM orders o LIMIT 1)"
+			yaml := strings.Replace(policyProjectYAML, "dialect: postgres", "dialect: "+tc.dialect, 1)
+			if tc.dialect == "sqlite" {
+				// SQLite has no parenthesized compound operands.
+				q = "SELECT id FROM orders WHERE status = :status UNION ALL SELECT id FROM u UNION ALL SELECT o.id FROM orders o"
+				yaml = strings.Replace(yaml, `server_version: "16"`, `server_version: "3"`, 1)
+				yaml = strings.Replace(yaml, "type: bigint", "type: integer", 1)
+			}
+			cfg := writeOfflineProject(t, map[string]string{
+				"sqletch.yaml":       yaml,
+				"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);\nCREATE TABLE u (id bigint NOT NULL);",
+				"queries/orders.sql": "-- name: ListOrders :many\n-- @param status: text\n" + q + ";\n",
+			})
+			c := NewOfflineChecker(cfg)
+			res, err := c.Check(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := cfg.Abs("queries/orders.sql")
+			if diags := res.Diags[path]; len(diags) != 0 {
+				t.Fatalf("unexpected diagnostics: %+v", diags)
+			}
+			rs := c.memo[path].rends["ListOrders"]
+			if len(rs) == 0 {
+				t.Fatal("no renderings memoized")
+			}
+			if got := rs[0].SQL; !strings.Contains(got, tc.want+";") {
+				t.Errorf("woven rendering:\n got: %s\nwant: %s;", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOffline_PolicyUnweavableIsDiagnosed(t *testing.T) {
 	// A USING join on the null-extended side has no ON expression to
 	// extend (a plain ON join would be woven there, design 14 §D2(a)).

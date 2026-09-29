@@ -60,9 +60,31 @@ statement and the executed statement differ.
   outer join into an inner join, while the `ON` conjunct preserves
   the outer row set and scopes only the joined rows.
 
+- A `UNION`/`INTERSECT`/`EXCEPT` is woven **branch by branch**: each
+  `SELECT` operand is scoped like a statement of its own — its own
+  `WHERE` (synthesized before the operand's `GROUP BY`/`ORDER BY`/
+  `LIMIT`, or before a parenthesized operand's closing paren), or its
+  own join's `ON`. Each operand then reads the designated table as if
+  it held only in-scope rows, which is also what makes `EXCEPT` and
+  `INTERSECT` correct.
+
+  ```sql
+  -- written
+  SELECT id FROM orders UNION ALL (SELECT id FROM orders o LIMIT 5)
+  -- woven
+  SELECT id FROM orders WHERE (orders.tenant_id = $1)
+  UNION ALL (SELECT id FROM orders o WHERE (o.tenant_id = $1) LIMIT 5)
+  ```
+
+  The set operation's own `WITH`/`ORDER BY`/`LIMIT` belong to no
+  operand: a designated table there is a subquery/CTE read (below).
+  (MySQL rejects top-level set operations altogether, `SQLETCH103`.)
+
 Positions sqletch cannot scope are rejected with `SQLETCH125` rather
-than silently skipped: a designated table inside a subquery, CTE, or
-set-operation branch; joined with `USING`/`NATURAL` on a
+than silently skipped: a designated table inside a subquery or CTE
+(also one inside a set-operation operand, or in the set operation's
+own clauses); read by a `TABLE t`/`VALUES` operand, which has no
+`WHERE` to extend; joined with `USING`/`NATURAL` on a
 null-extended side (no `ON` expression to extend — rewrite as an
 explicit `ON`); introduced by a guarded `@if-present` join; or bound
 to a name that is not a bare identifier. Restructure the query, or
@@ -137,7 +159,8 @@ A query with neither is `SQLETCH127`.
 Weaving covers what the weaver reaches; a separate enforcement pass
 proves the invariant from the compiled result itself: for every
 relation whose table a policy designates, a matching conjunct must be
-present in the query's WHERE clause **in every reachable shape**
+present in the query's WHERE clause — for a set operation, the WHERE
+clause of the relation's own operand — **in every reachable shape**
 (`SQLETCH124` otherwise). It runs in the same pass the LSP uses, so a
 violation appears live in your editor.
 

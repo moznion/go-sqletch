@@ -1201,8 +1201,28 @@ Rules, settled deliberately (D1–D6 in the design record):
   rows. `USING`/`NATURAL` joins have no `ON` expression to extend and
   are rejected (`SQLETCH125`): rewrite as an explicit `ON`, or opt
   out.
+- **A statement-level set operation is woven branch by branch**
+  (settled 2026-09-29, design 14 §13): for `UNION`/`INTERSECT`/`EXCEPT`
+  (any quantifier; nested and parenthesized operands) every leaf
+  `SELECT` core is scoped exactly as a top-level statement — the
+  conjunct goes into that core's own `WHERE` (synthesized before the
+  core's first post-`WHERE` clause, or at the core's end), or into its
+  own join's `ON` for a null-extended occurrence. Every branch
+  therefore reads a designated table as if it held only in-scope rows,
+  which is the policy's meaning everywhere; `EXCEPT` and `INTERSECT`
+  operands need no special case. Clauses owned by the whole set
+  operation (its `WITH`, `ORDER BY`, `LIMIT`) belong to no branch — a
+  designated table there is a subquery/CTE read, rejected by the next
+  rule — and an operand with no `WHERE` slot (`TABLE t`, `VALUES`)
+  that reads one is rejected (`SQLETCH125`). The parser's branch
+  structure and the weaver's own lexical split must agree on every
+  designated occurrence, and the woven statement must re-parse to the
+  same branches; any disagreement is `SQLETCH125`. (MySQL rejects
+  top-level set operations outright, `SQLETCH103`, independently of
+  policies.)
 - **A designated table visible only inside a subquery or CTE body is
-  rejected** (`SQLETCH125`): v1 weaves at the top level only, and loud
+  rejected** (`SQLETCH125`): v1 weaves at the top level — the
+  statement, or a set-operation branch core — only, and loud
   incompleteness beats silent incompleteness. A CTE whose *name*
   shadows a designated table is conservatively treated as touching it.
 - **A designated table introduced by a guarded (`@if-present`) join is
@@ -1228,8 +1248,10 @@ Weaving covers what the weaver reaches; the enforcement check states
 the invariant: for every relation whose table is designated by a
 policy, a conjunct matching that policy is present **in every
 reachable shape** (`SQLETCH124` otherwise) — in the query's WHERE
-clause, or in the relation's own `ON` clause for a null-extended
-outer-join occurrence. A
+clause (inside a set operation: the WHERE clause of the relation's
+own branch; a conjunct in one branch never vouches for another), or
+in the relation's own `ON` clause for a null-extended outer-join
+occurrence. A
 hand-written scoping conjunct inside `@if-present` satisfies only the
 guard-on shapes and therefore fails — the quantifier is what makes
 this a proof rather than a formality.

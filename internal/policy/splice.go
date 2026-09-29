@@ -140,15 +140,12 @@ func whereBoundary(it template.Item) bool {
 	return false
 }
 
-// whereClause scans the query's WHERE clause: segments for the
-// idempotence/enforcement matchers, the OR flag for wrapping, and the
-// clause end for the wrap's closing parenthesis. It works on the
-// token stream alone (the first depth-0 WHERE keyword opens the
-// clause), so scanned and woven templates read identically.
-func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clauseScan {
-	col := &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}}
-	depth := 0
-	inWhere := false
+// exprScan is the depth-aware state machine that collects one WHERE
+// expression into conjunct segments. It is shared by whereClause and the
+// set-operation branch scan (setop.go), so a statement's WHERE and a
+// branch's WHERE can never be read by different rules.
+type exprScan struct {
+	col *segCollector
 	// A keyword-spelled identifier is a clause boundary only in OPERATOR
 	// position; in OPERAND position it is a column/function name (a
 	// reserved word after `.`, or a non-reserved word bare, is a legal
@@ -156,22 +153,96 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 	// expression — misreading a keyword-column as GROUP/ORDER/OFFSET/…
 	// ends the scan early and hides a following depth-0 OR, so the weave
 	// is not wrapped and the OR escapes the tenant scope (audit-15/16).
-	// prevDot handles the same hazard for the WHERE keyword itself
-	// (`t.where`) before the expression is entered.
+	expectOperand bool
+}
+
+// newExprScan starts a WHERE expression (the WHERE keyword itself is
+// not fed): an operand is expected first.
+func newExprScan() *exprScan {
+	return &exprScan{col: &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}}, expectOperand: true}
+}
+
+// step consumes one significant token of the expression. depth0 reports
+// whether the token sits at the clause's own paren depth, dotted whether
+// it follows a qualifier `.`. It returns true when the token ENDS the
+// clause (a tail keyword in operator position); such a token is not
+// collected.
+func (e *exprScan) step(tok dialect.Token, up string, abs int, depth0, dotted bool) bool {
+	if depth0 && tok.Kind == dialect.KindIdent && !dotted {
+		// AND/OR are reserved in every dialect and can never be a
+		// bare column, so they are recognized regardless of the
+		// operand-position state. This makes a keyword-column
+		// mis-classification (a bare `binary`/`glob`/… wrongly
+		// left in operand position) unable to hide a following
+		// depth-0 OR — the wrap always fires (audit-19).
+		if up == "AND" {
+			e.col.flush()
+			e.expectOperand = true
+			return false
+		}
+		if up == "OR" {
+			e.col.cs.hasOR = true
+			e.col.flush()
+			e.expectOperand = true
+			return false
+		}
+		// A tailKeyword ends the clause only in OPERATOR
+		// position; in operand position it is a column (a
+		// non-reserved word like `offset`/`window` bare, or any
+		// reserved word after `.`).
+		if !e.expectOperand && tailKeywords[up] {
+			e.col.flush()
+			return true
+		}
+	}
+	e.expectOperand = afterOperand(tok, up, e.expectOperand)
+	e.col.content(tok, abs)
+	return false
+}
+
+// construct consumes a construct item met inside the expression. It
+// returns true when the item ends the clause (an ORDER BY/GROUP BY
+// replacement); a conjunct-slot construct is clause content.
+func (e *exprScan) construct(it template.Item) bool {
+	e.col.flush()
+	e.expectOperand = false
+	if whereBoundary(it) {
+		return true
+	}
+	e.col.cs.end = it.Raw().End
+	return false
+}
+
+// result flushes the pending segment and returns the scan.
+func (e *exprScan) result() clauseScan {
+	e.col.flush()
+	return e.col.cs
+}
+
+// whereClause scans the query's WHERE clause: segments for the
+// idempotence/enforcement matchers, the OR flag for wrapping, and the
+// clause end for the wrap's closing parenthesis. It works on the
+// token stream alone (the first depth-0 WHERE keyword opens the
+// clause), so scanned and woven templates read identically.
+func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clauseScan {
+	var ex *exprScan
+	depth := 0
+	// prevDot handles the keyword-column hazard (see exprScan) for the
+	// WHERE keyword itself (`t.where`) before the expression is entered.
 	prevDot := false
-	expectOperand := false
+	notFound := clauseScan{lexOK: true, start: -1, end: -1}
+	result := func() clauseScan {
+		if ex == nil {
+			return notFound
+		}
+		return ex.result()
+	}
 	for _, it := range q.Items {
 		s, isSkel := it.(*template.Skeleton)
 		if !isSkel {
 			prevDot = false
-			if inWhere {
-				col.flush()
-				expectOperand = false
-				if whereBoundary(it) {
-					return col.cs
-				}
-				// Conjunct-slot construct: clause content.
-				col.cs.end = it.Raw().End
+			if ex != nil && ex.construct(it) {
+				return ex.result()
 			}
 			continue
 		}
@@ -180,8 +251,9 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 		for {
 			tok, err := profile.NextToken(src, pos)
 			if err != nil {
-				col.cs.lexOK = false
-				return col.cs
+				cs := result()
+				cs.lexOK = false
+				return cs
 			}
 			if tok.Kind == dialect.KindEOF {
 				break
@@ -204,55 +276,21 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 			if tok.Kind == dialect.KindIdent {
 				up = strings.ToUpper(tok.Text)
 			}
-			if depth == 0 {
-				if tok.Kind == dialect.KindSemicolon {
-					col.flush()
-					return col.cs
-				}
-				if !inWhere {
-					if tok.Kind == dialect.KindIdent && up == "WHERE" && !dotted {
-						inWhere = true
-						expectOperand = true
-					}
-					continue
-				}
-				if tok.Kind == dialect.KindIdent && !dotted {
-					// AND/OR are reserved in every dialect and can never be a
-					// bare column, so they are recognized regardless of the
-					// operand-position state. This makes a keyword-column
-					// mis-classification (a bare `binary`/`glob`/… wrongly
-					// left in operand position) unable to hide a following
-					// depth-0 OR — the wrap always fires (audit-19).
-					if up == "AND" {
-						col.flush()
-						expectOperand = true
-						continue
-					}
-					if up == "OR" {
-						col.cs.hasOR = true
-						col.flush()
-						expectOperand = true
-						continue
-					}
-					// A tailKeyword ends the clause only in OPERATOR
-					// position; in operand position it is a column (a
-					// non-reserved word like `offset`/`window` bare, or any
-					// reserved word after `.`).
-					if !expectOperand && tailKeywords[up] {
-						col.flush()
-						return col.cs
-					}
-				}
+			if depth == 0 && tok.Kind == dialect.KindSemicolon {
+				return result()
 			}
-			if !inWhere {
+			if ex == nil {
+				if depth == 0 && tok.Kind == dialect.KindIdent && up == "WHERE" && !dotted {
+					ex = newExprScan()
+				}
 				continue
 			}
-			expectOperand = afterOperand(tok, up, expectOperand)
-			col.content(tok, abs)
+			if ex.step(tok, up, abs, depth == 0, dotted) {
+				return ex.result()
+			}
 		}
 	}
-	col.flush()
-	return col.cs
+	return result()
 }
 
 // joinOnResult reports one join's ON expression, located from the

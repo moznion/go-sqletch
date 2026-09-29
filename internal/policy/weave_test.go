@@ -280,9 +280,11 @@ func TestWeave_Rejections(t *testing.T) {
 			wantMsg: "INSERT's SELECT body",
 		},
 		{
-			name:    "set operation hides the table from the weaver",
-			src:     "-- name: Q :many\nSELECT id FROM orders UNION SELECT id FROM archive\n",
-			wantMsg: "set-operation",
+			// A set-operation branch itself is woven (design 14 §13); a
+			// subquery INSIDE a branch is still unscoped territory.
+			name:    "subquery inside a set-operation branch",
+			src:     "-- name: Q :many\nSELECT id FROM archive WHERE id IN (SELECT id FROM orders) UNION SELECT id FROM users\n",
+			wantMsg: "subquery",
 		},
 		{
 			name:    "conflicting param hint",

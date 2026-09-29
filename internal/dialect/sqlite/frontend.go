@@ -495,6 +495,31 @@ func (t *tree) HasSetOperation() bool {
 	return s != nil && s.Compound != nil
 }
 
+// SetOpBranches splits a compound SELECT into its cores in document
+// order. rqlite chains compounds through SelectStatement.Compound and
+// parses the compound's own WITH, ORDER BY, and LIMIT/OFFSET onto the
+// FIRST core, so each branch facade is a shallow copy of its core with
+// those set-level clauses and the chain link stripped — a subquery in
+// them stays visible only through the statement's DeepTables. SQLite
+// has no parenthesized compound operands, so the chain is flat.
+func (t *tree) SetOpBranches() []dialect.Tree {
+	s := t.sel()
+	if s == nil || s.Compound == nil {
+		return nil
+	}
+	var out []dialect.Tree
+	for c := s; c != nil; c = c.Compound {
+		core := *c
+		core.WithClause = nil
+		core.Compound = nil
+		core.OrderingTerms = nil
+		core.LimitExpr = nil
+		core.OffsetExpr = nil
+		out = append(out, subTree(&core, t.r2b))
+	}
+	return out
+}
+
 // HasUnresolvableProvenance: SQLite's column-origin attribution
 // carries no database qualifier, so any schema-qualified reference
 // anywhere in the statement (attached databases) can cross-resolve to

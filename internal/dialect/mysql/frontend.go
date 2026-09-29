@@ -448,6 +448,66 @@ func (t *tree) HasSetOperation() bool {
 	return ok
 }
 
+// SetOpBranches flattens a statement-level set operation into its leaf
+// query cores (SetOprSelectList nesting = parenthesized operands) in
+// document order. TiDB relation nodes carry no offsets, so every
+// branch's relations are located in ONE forward pass over the original
+// SQL in set-operation mode, which sees through parenthesized operands.
+// Clauses owned by a SetOprStmt/SetOprSelectList (the set-level WITH,
+// ORDER BY, LIMIT) belong to no branch.
+func (t *tree) SetOpBranches() []dialect.Tree {
+	so, ok := t.first().(*ast.SetOprStmt)
+	if !ok || so.SelectList == nil {
+		return nil
+	}
+	var leaves []*ast.SelectStmt
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		switch v := n.(type) {
+		case *ast.SetOprSelectList:
+			for _, s := range v.Selects {
+				walk(s)
+			}
+		case *ast.SetOprStmt:
+			if v.SelectList != nil {
+				walk(v.SelectList)
+			}
+		case *ast.SelectStmt:
+			leaves = append(leaves, v)
+		}
+	}
+	walk(so.SelectList)
+
+	per := make([][]dialect.RelRef, len(leaves))
+	var flat []dialect.RelRef
+	for i, l := range leaves {
+		if l.From != nil {
+			collectJoin(l.From.TableRefs, dialect.JoinBase, false, &per[i])
+		}
+		flat = append(flat, per[i]...)
+	}
+	locateRelationsIn(t.sql, flat, true)
+	out := make([]dialect.Tree, len(leaves))
+	k := 0
+	for i, l := range leaves {
+		rels := make([]dialect.RelRef, len(per[i]))
+		copy(rels, flat[k:k+len(per[i])])
+		k += len(per[i])
+		out[i] = &branchTree{tree: subTree(l), rels: rels}
+	}
+	return out
+}
+
+// branchTree is a set-operation branch's sub-facade: an ordinary
+// subTree whose Relations are the ones located against the whole
+// statement's SQL (a bare subTree has no SQL text, hence no locations).
+type branchTree struct {
+	*tree
+	rels []dialect.RelRef
+}
+
+func (b *branchTree) Relations() []dialect.RelRef { return b.rels }
+
 // HasUnresolvableProvenance: the protocol's org_table carries no
 // database qualifier, so ANY db-qualified reference anywhere in the
 // statement can be attributed to a same-named table of the connected
@@ -565,7 +625,26 @@ func (t *tree) HasGroupingSets() bool {
 // and context, so the relations must be supplied in source order
 // (collectJoin produces them left to right).
 func locateRelations(sql string, rels []dialect.RelRef) {
+	locateRelationsIn(sql, rels, false)
+}
+
+// locateRelationsIn is locateRelations with an optional set-operation
+// mode (design 14 §13): with setOp, a '(' in set-operation OPERAND
+// position — the statement start, directly after UNION/INTERSECT/EXCEPT
+// (optionally followed by ALL/DISTINCT), or directly inside another such
+// paren — opens a parenthesized operand, which is transparent instead of
+// being skipped whole like a subquery, so the relations of every branch
+// of `(SELECT …) UNION (SELECT …)` are located. Every other paren keeps
+// its ordinary treatment; in particular a quantified `> ALL (SELECT …)`
+// subquery is not in operand position (its ALL does not follow a set
+// operator) and stays opaque.
+func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 	src := []byte(sql)
+	// opState tracks set-operation operand position: 0 = not an operand
+	// position; 1 = directly after a set operator; 2 = after its ALL /
+	// DISTINCT quantifier; 3 = the statement start or directly inside a
+	// transparent operand paren.
+	opState := 3
 	profile := Profile{}
 	pos := 0
 	prev := ""                  // previous significant token, uppercased for idents
@@ -614,6 +693,17 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 			if !ok {
 				return -1
 			}
+			operandPos := setOp && opState != 0
+			nextState := 0
+			if tok.Kind == dialect.KindIdent {
+				switch u := strings.ToUpper(tok.Text); {
+				case u == "UNION" || u == "INTERSECT" || u == "EXCEPT":
+					nextState = 1
+				case (u == "ALL" || u == "DISTINCT") && opState == 1:
+					nextState = 2
+				}
+			}
+			opState = nextState
 			switch tok.Kind {
 			case dialect.KindLParen:
 				// Peek: subqueries and (VALUES …) table constructors are
@@ -625,9 +715,26 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 				aliasSlot = false
 				save := pos
 				peek, ok2 := next()
+				if operandPos && ok2 && (peek.Kind == dialect.KindLParen || peek.Kind == dialect.KindIdent) {
+					// A parenthesized set-operation operand (setOp mode
+					// only): transparent, so its relations are located.
+					pos = save
+					opState = 3
+					prev = setOpParenPrev
+					prevIdentInFrom = false
+					continue
+				}
 				if ok2 && peek.Kind == dialect.KindIdent {
 					if u := strings.ToUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
+						cteBody := prev == "AS"
 						skipParen()
+						if setOp && cteBody {
+							// `name AS (…)` closes a WITH-list body: what
+							// follows is another CTE (after a ',') or the
+							// set operation's first operand, which may be
+							// parenthesized.
+							opState = 3
+						}
 						prev = ")"
 						prevIdentInFrom = false
 						continue
@@ -751,6 +858,12 @@ func locateRelations(sql string, rels []dialect.RelRef) {
 // identifier: a non-keyword, non-punctuation marker so quoted content can
 // never be read as a FROM-introducing token.
 const quotedIdentPrev = "\x00quoted"
+
+// setOpParenPrev is the neutral `prev` sentinel recorded for a
+// transparent set-operation operand paren (locateRelationsIn): like
+// selectOptionPrev it neither opens the FROM region nor introduces the
+// following token as a relation.
+const setOpParenPrev = "\x00setop("
 
 // selectOptionPrev is the neutral `prev` sentinel recorded for a
 // STRAIGHT_JOIN seen in SELECT-modifier position (like
