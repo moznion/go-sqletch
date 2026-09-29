@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.0.5](https://github.com/moznion/go-sqletch/compare/v0.0.4...v0.0.5) - 2026-09-29
+
+- build(deps): bump github.com/ncruces/go-sqlite3 from 0.35.4 to 0.35.5 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/144
+- dependabot: update root and contrib/otel Go modules together by @moznion in https://github.com/moznion/go-sqletch/pull/145
+- build(deps): bump Songmu/tagpr from 1.20.3 to 1.21.0 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/147
+- build(deps): bump the go-modules group across 2 directories with 6 updates by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/148
+- policy: weave set-operation branches (design 14 §13) by @moznion in https://github.com/moznion/go-sqletch/pull/149
+- rules: optional conjuncts inside set-operation operands (spec R1) by @moznion in https://github.com/moznion/go-sqletch/pull/150
+
 ## [v0.0.4](https://github.com/moznion/go-sqletch/compare/v0.0.3...v0.0.4) - 2026-09-23
 
 - Enable FTS5 in the SQLite dev database by @AnaTofuZ in https://github.com/moznion/go-sqletch/pull/141
