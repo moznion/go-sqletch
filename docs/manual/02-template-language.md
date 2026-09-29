@@ -1127,6 +1127,32 @@ appear inside subqueries, CTEs, derived tables, `OVER (…)` windows, or
 an aggregate's internal `ORDER BY` — although a guarded fragment may
 itself *contain* a subquery.
 
+One exception widens the `WHERE`/`HAVING` conjunct slot: in a
+`UNION`/`INTERSECT`/`EXCEPT`, every **unparenthesized** operand has its
+own conjunct slots, so an optional conjunct may sit in any operand's
+`WHERE`/`HAVING` (each must be a whole top-level conjunct of *its*
+operand's clause). A typical use is one keyset cursor shared by several
+listings; put the `ORDER BY`/`LIMIT` on the whole statement:
+
+```sql
+SELECT c.id, c.label FROM rooms AS c WHERE c.room_id = :room_id
+@if-present(after)
+  AND c.id > :after
+@endif
+UNION ALL
+SELECT d.id, d.label FROM dms AS d WHERE d.user_id = :user_id
+@if-present(after)
+  AND d.id > :after
+@endif
+ORDER BY 1
+LIMIT :limit;
+```
+
+Optional joins and `@filter-tree` cannot be used in such a statement
+at all; `@choose` cases and `@in` work inside an operand as usual; and a
+parenthesized operand (`(SELECT … LIMIT 5) UNION …`) is a nested scope:
+no constructs inside it.
+
 Anchoring (rule R6):
 
 - Clauses that are optional as a whole (`WHERE`, `HAVING`, `ORDER BY`)

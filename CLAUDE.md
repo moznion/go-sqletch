@@ -258,6 +258,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   and branches — extend it, don't fork it.
 - MySQL: a set operation is StmtOther ⇒ R1 SQLETCH103 before weaving;
   admitting it is a separate decision (nullability, native oracle).
+- R1 set-operation operands (spec R1, 2026-09-29): WHERE/HAVING
+  conjunct slots (`@if-present`/`@when`) are legal in UNPARENTHESIZED
+  operand cores; membership counts against the union of the branch
+  cores' conjunct locs (`rules.conjunctSlotLocs`), never the
+  statement's (SQLite's = first core's). Guarded joins and
+  @filter-tree are refused anywhere in a set-op statement
+  (`setOpUnsupported`; SQLite used to accept them in the first
+  operand); @choose/@in inside operands were already legal and stay
+  so; parenthesized operands are nested scopes (SQLETCH006).
 
 ## Known v0.4 decisions and limits
 

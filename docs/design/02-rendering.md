@@ -127,6 +127,20 @@ clause context against the parsed maximal tree:
   membership on the top-level qual's arg list).
   `SlotHavingConjunct` runs the same membership over the HAVING
   clause's conjuncts (`Tree.HavingConjunctLocs`).
+  Inside a statement-level set operation (spec R1, "set-operation
+  operands", 2026-09-29) both memberships run over the union of every
+  operand core's own conjunct locations (`Tree.SetOpBranches()`
+  sub-facades, `rules.conjunctSlotLocs`) instead of the statement's:
+  PostgreSQL reports no statement-level WHERE for a set operation and
+  SQLite reports the FIRST core's, so the statement's list is never
+  mixed in. A fragment lies in exactly one core, so the union counts
+  it against its own core. Parenthesized operands never get here — the
+  scanner rejects constructs inside parentheses (SQLETCH006). Optional
+  join items and `@filter-tree` are refused outright in a set-operation
+  statement (`setOpUnsupported`, SQLETCH102) on every dialect: before
+  this, SQLite's whole-statement `Relations()`/WHERE (the first core's)
+  accepted them in the first operand only, while PostgreSQL rejected
+  them everywhere.
 - `@filter-tree`: membership runs on the **empty rendering**
   (`RenderTreeEmpty`), not the maximal — the maximal conjunction
   AND-flattens through its parentheses into several top-level

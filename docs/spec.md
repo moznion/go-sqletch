@@ -654,6 +654,27 @@ name is a compile diagnostic.
     fragment's meaning. Placement and node-completeness are validated
     against the dialect AST. At most one dynamic construct per
     `ORDER BY` clause.
+
+    *Set-operation operands* (settled 2026-09-29): in a statement-level
+    `UNION`/`INTERSECT`/`EXCEPT`, each **unparenthesized** operand's
+    `SELECT` core counts as the top level for **WHERE/HAVING conjunct
+    slots** — an optional conjunct (`@if-present`, `@when`) may sit in
+    any operand's `WHERE`/`HAVING`, and must be exactly one top-level
+    conjunct of *that operand's* clause (the statement-level clause
+    of a set operation is not a conjunct slot). Optional joins and
+    `@filter-tree` are rejected anywhere in a set-operation statement
+    (R3's guard-scope resolution does not model operand scopes);
+    `@choose` projection/`GROUP BY` cases and `@in` inside an operand
+    are verified per case and per arity exactly as elsewhere; a
+    set-level `ORDER BY` is the statement's own; and a parenthesized
+    operand is a nested scope like a subquery (constructs inside it
+    are rejected). The soundness
+    argument is unchanged, because an operand core's `WHERE`/`HAVING`
+    is a list-shaped clause of the same kind: deleting a complete
+    top-level conjunct of it preserves validity (R6 anchors each
+    clause, R1 forbids regrouping), a conjunct introduces no relation
+    (R3 is unaffected), and its parameters are fragment-local (typing
+    is unaffected).
 -   **R2 — Constant result shape.** Optional blocks must not change the
     result shape. Optional joins may not contribute result columns and
     must be `INNER` or `LEFT` — `RIGHT`/`FULL` are rejected because

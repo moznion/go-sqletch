@@ -97,14 +97,29 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 	maxTree, maxR := trees[0], rs[0]
 
 	// 3. AST-membership consistency on the parsed maximal rendering.
+	whereLocs, havingLocs := conjunctSlotLocs(maxTree)
+	setOp := maxTree.SetOpBranches() != nil
 	for _, fr := range maxR.Frags {
 		switch v := fr.Item.(type) {
+		case *template.FilterTree:
+			if setOp {
+				diags = append(diags, setOpUnsupported(v.Span, "a @filter-tree"))
+			}
 		case *template.IfPresent:
+			if setOp && v.Slot == template.SlotJoinItem {
+				// R3's guard-scope resolution works on the statement's own
+				// relations and does not model operand scopes, so an
+				// optional join inside an operand is refused outright —
+				// on every dialect (SQLite's whole-statement Relations()
+				// is the first operand's, which used to let one through).
+				diags = append(diags, setOpUnsupported(v.Span, "an optional join"))
+				continue
+			}
 			switch v.Slot {
 			case template.SlotWhereConjunct:
-				diags = append(diags, checkConjunctMembership(maxTree.TopConjunctLocs(), "WHERE", v.BodySpan, fr)...)
+				diags = append(diags, checkConjunctMembership(whereLocs, "WHERE", v.BodySpan, fr)...)
 			case template.SlotHavingConjunct:
-				diags = append(diags, checkConjunctMembership(maxTree.HavingConjunctLocs(), "HAVING", v.BodySpan, fr)...)
+				diags = append(diags, checkConjunctMembership(havingLocs, "HAVING", v.BodySpan, fr)...)
 			case template.SlotJoinItem:
 				diags = append(diags, checkJoinMembership(maxTree, v, fr)...)
 			}
@@ -117,14 +132,15 @@ func CheckR1(profile dialect.LexerProfile, fe dialect.Frontend,
 		diags = append(diags, checkOrderByContainment(trees[i], r)...)
 	}
 
-	// @filter-tree conjunct membership runs on the empty-tree rendering,
+	// @filter-tree conjunct membership runs on the empty-tree rendering
+	// (a @filter-tree inside a set operation was refused above),
 	// not the maximal: the maximal conjunction AND-flattens through its
 	// parentheses into several top-level conjuncts, but the empty form
 	// is the single constant TRUE — it must be exactly one top-level
 	// conjunct, or the runtime's TRUE fallback would not substitute the
 	// whole construct (e.g. under OR precedence).
 	for i, r := range rs {
-		if r.Kind != ast.RenderTreeEmpty || trees[i] == nil {
+		if setOp || r.Kind != ast.RenderTreeEmpty || trees[i] == nil {
 			continue
 		}
 		treeIdx := 0
@@ -296,6 +312,37 @@ func probeChooseCases(profile dialect.LexerProfile, fe dialect.Frontend,
 		check(c.Default.Body, c.Default.Span)
 	}
 	return diags
+}
+
+// setOpUnsupported reports a construct that R1 admits only at the
+// statement level inside a set operation (spec R1, set-operation
+// operands: only WHERE/HAVING conjunct slots widen to the operands).
+func setOpUnsupported(span diagnostics.Span, what string) diagnostics.Diagnostic {
+	return diagnostics.Errorf(diagnostics.CodeNodeIncomplete, span,
+		"%s cannot be used in a UNION/INTERSECT/EXCEPT statement (R1): only optional WHERE/HAVING conjuncts may sit inside a set-operation operand", what).
+		WithHint("move the optional part into a WHERE/HAVING conjunct of the operand, or split the statement into separate queries")
+}
+
+// conjunctSlotLocs returns the top-level WHERE and HAVING conjunct
+// locations a conjunct-slot fragment is counted against. For an
+// ordinary statement they are the statement's own. Inside a
+// statement-level set operation the conjunct slots belong to the
+// operand cores (spec R1): the locations are the union of every
+// branch core's own top-level conjuncts. A fragment lies in exactly one
+// core, so counting against the union counts against its core. The
+// whole statement's clause is deliberately NOT included — PostgreSQL
+// reports none for a set operation, and SQLite reports the FIRST
+// core's, which would double-count that core.
+func conjunctSlotLocs(tree dialect.Tree) (where, having []int) {
+	bs := tree.SetOpBranches()
+	if bs == nil {
+		return tree.TopConjunctLocs(), tree.HavingConjunctLocs()
+	}
+	for _, b := range bs {
+		where = append(where, b.TopConjunctLocs()...)
+		having = append(having, b.HavingConjunctLocs()...)
+	}
+	return where, having
 }
 
 func checkConjunctMembership(locs []int, clause string, span diagnostics.Span,
