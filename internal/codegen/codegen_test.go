@@ -150,6 +150,25 @@ WHERE u.created_at >= :since
 GROUP BY 1
 ORDER BY 1;
 `,
+	// Optional conjuncts in set-operation branches (spec R1), one guard
+	// shared across branches plus a branch-local one: every guard
+	// combination must compose byte-identically, binds included.
+	`-- name: BranchConjuncts :many
+SELECT c.id FROM convs AS c WHERE c.scope = 'room'
+@if-present(after)
+  AND c.id > :after
+@endif
+UNION ALL
+SELECT s.conv_id FROM subs AS s WHERE s.user_id = :user_id
+@if-present(after)
+  AND s.conv_id > :after
+@endif
+@if-present(kind)
+  AND s.kind = :kind
+@endif
+ORDER BY 1
+LIMIT :limit;
+`,
 }
 
 // Generation must be deterministic even on the internal-error path:
