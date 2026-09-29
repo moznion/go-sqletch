@@ -237,6 +237,28 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - Policy edits re-key only affected oracle entries (rendered SQL
   changes); the policy config must NEVER enter the cache fingerprint.
 
+## Known decisions: set-operation branch weaving (doc 14 §13)
+
+- Owner decision 2026-09-29: statement-level UNION/INTERSECT/EXCEPT
+  branches are woven, each leaf core like a top-level statement
+  (own WHERE / own join's ON). Subqueries and CTE bodies — inside a
+  branch or in the set operation's own WITH/ORDER BY — stay
+  SQLETCH125; so does a `TABLE t`/`VALUES` operand.
+- Inside a set operation NEVER use the whole-statement `Relations()`,
+  `q.WhereKwEnd`/`TailStart`, or `whereClause` (SQLite's Relations()
+  is the FIRST core's — that was a silent wrong-branch leak).
+  `policy.topRelations` (over `Tree.SetOpBranches`) is the one seam
+  Weave and Enforce share.
+- Two views must agree before anything is woven or credited: the
+  AST branches and the lexical `scanSetOp` split (same branch count;
+  each occurrence's name token in the core of the same index). The
+  weaver also re-parses the woven statement and requires identical
+  branches. Disagreement = SQLETCH125/124, never a best guess.
+- `exprScan` is the single WHERE-expression reader for statements
+  and branches — extend it, don't fork it.
+- MySQL: a set operation is StmtOther ⇒ R1 SQLETCH103 before weaving;
+  admitting it is a separate decision (nullability, native oracle).
+
 ## Known v0.4 decisions and limits
 
 - `-- @param name: type` hints: parsed per query (the comment stays in

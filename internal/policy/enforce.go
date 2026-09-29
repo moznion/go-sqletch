@@ -20,6 +20,12 @@ import (
 // the weaver decided, so a weaver regression surfaces as SQLETCH124
 // instead of a silent leak.
 //
+// Inside a statement-level set operation the same holds per branch
+// (§13): each designated occurrence needs the conjunct in its OWN
+// branch core's WHERE (or its own join's ON), and the lexical branch
+// holding the occurrence must be the branch the parser assigned it —
+// a conjunct in one branch never vouches for another branch's read.
+//
 // It also owns SQLETCH126: an opt-out naming an unknown policy, or
 // one that does not apply to the query — renaming a policy must never
 // silently disarm its opt-outs.
@@ -35,7 +41,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	var diags []diagnostics.Diagnostic
 
 	kind := tree.Kind()
-	rels := tree.Relations()
+	rels, nBranches := topRelations(tree)
 	deep := tree.DeepTables()
 	upsert := tree.HasConflictUpdate()
 	// Independently re-derive the non-maximal overread set (a designated
@@ -97,8 +103,30 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		}
 	}
 
-	where := whereClause(profile, q)
-	whereOK := where.lexOK && !where.hasOR
+	// The WHERE clause(s) conjuncts are credited from: the statement's,
+	// or — for a set operation — each branch core's, attributed through
+	// the lexical split that must agree with the parser's branches.
+	var where clauseScan
+	var so setOpScan
+	if nBranches > 0 {
+		so = scanSetOp(profile, q)
+	} else {
+		where = whereClause(profile, q)
+	}
+	wherePresent := func(r topRel, conjunct string) bool {
+		cs := where
+		if r.branch >= 0 {
+			if !so.ok || len(so.branches) != nBranches || r.Loc < 0 {
+				return false
+			}
+			tOff, synth := maxR.Map.ToTemplate(r.Loc)
+			if bi, found := so.branchOf[tOff]; synth || !found || bi != r.branch {
+				return false
+			}
+			cs = so.branches[r.branch].where
+		}
+		return cs.lexOK && !cs.hasOR && segsContain(profile, cs.segs, conjunct)
+	}
 	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
@@ -143,10 +171,10 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		// WHERE presence for every occurrence of such a predicate.
 		hasPlaceholder := strings.Contains(p.Predicate, Placeholder)
 		for _, r := range a.topOcc {
-			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r))
+			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r.RelRef))
 			present := false
 			if r.NullableSide && hasPlaceholder {
-				if res := onScanFor(profile, q, maxR, r, onScans); res != nil {
+				if res := onScanFor(profile, q, maxR, r.RelRef, onScans); res != nil {
 					// wrongJoin: the located ON does not gate this
 					// occurrence's rows (D2a soundness), so a conjunct there
 					// does not scope the table — treat it as absent and
@@ -156,7 +184,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 						segsContain(profile, res.cs.segs, conjunct)
 				}
 			} else {
-				present = whereOK && segsContain(profile, where.segs, conjunct)
+				present = wherePresent(r, conjunct)
 			}
 			if !present {
 				clause := "WHERE clause"

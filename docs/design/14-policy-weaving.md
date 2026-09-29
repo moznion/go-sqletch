@@ -7,7 +7,9 @@ recorded notes
 (spec §"Stability and Beyond v1.0"; `08-later-phases.md` §"Beyond
 1.0") into a design. The settled outcomes are reflected in
 `docs/spec.md` §"Cross-Query Policies". §11 records the mechanical
-resolutions made during pre-implementation reconnaissance.
+resolutions made during pre-implementation reconnaissance. §13
+(2026-09-29) lifts D6's rejection for statement-level set-operation
+branches.
 
 A *policy* is a boolean predicate declared once in `sqletch.yaml` and
 woven, at compile time, into every query that touches a designated
@@ -504,6 +506,12 @@ target, never the select body's tables, so v1 *rejects* (`SQLETCH125`)
 an `INSERT … SELECT` reading a designated table rather than weaving
 its body — the spec states this.
 
+**Set-operation refinement (owner decision 2026-09-29, §13).** A
+statement-level `UNION`/`INTERSECT`/`EXCEPT` branch is not a nested
+scope: each leaf core is woven like a top-level statement. Subqueries
+and CTE bodies — including those inside a branch, or in the set
+operation's own `WITH`/`ORDER BY` — stay rejected.
+
 **Upsert refinement (owner decision 2026-08-21, audit-12 M10).** The
 spec only excludes `INSERT … VALUES` as a policy target ("no rows are
 filtered"), but an `INSERT … ON CONFLICT DO UPDATE` (PostgreSQL/SQLite;
@@ -580,7 +588,7 @@ otherwise.
 | Code | Meaning |
 | --- | --- |
 | `SQLETCH124` | A query touches a policy-designated table without the scoping conjunct in every shape, and has no opt-out. |
-| `SQLETCH125` | A policy applies to this query but cannot be woven: the designated table is in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2, guarded-join relation per D5), its bound name is not a bare identifier (§11.3), or the query already declares the policy's parameter name with a conflicting *type* (§11.4) or a conflicting *kind* — an optional `@if-present`/`@when` control parameter or a `@filter-tree` `@predicate` argument (§11.4). Opt out explicitly or restructure. |
+| `SQLETCH125` | A policy applies to this query but cannot be woven: the designated table is in a position sqletch cannot scope (subquery/CTE per D6, nullable outer-join side per D2, guarded-join relation per D5, a set-operation operand with no WHERE slot or a branch split the parser and the weaver do not agree on per §13), its bound name is not a bare identifier (§11.3), or the query already declares the policy's parameter name with a conflicting *type* (§11.4) or a conflicting *kind* — an optional `@if-present`/`@when` control parameter or a `@filter-tree` `@predicate` argument (§11.4). Opt out explicitly or restructure. |
 | `SQLETCH126` | `-- @policy-optout` names an unknown policy, or one that does not apply to this query. |
 | `SQLETCH303` | A policy declaration in `sqletch.yaml` is malformed, or its predicate does not parse as one complete boolean node. |
 
@@ -661,6 +669,8 @@ Step 4 status (2026-08-02): D2(a) `ON`-clause weaving is
 unscheduled (see the D3 note); subquery/CTE weaving stays rejected —
 its scope-resolution model is the same unmodeled territory R3
 deliberately skips, and loud rejection remains the design.
+Statement-level set-operation branches are woven since 2026-09-29
+(§13): a branch core is a top-level statement, not a nested scope.
 
 ## 11. Mechanical resolutions (pre-implementation reconnaissance)
 
@@ -976,3 +986,119 @@ every other directive (§11.1), so adding one to a query changes its
 rendered SQL and re-keys that query's oracle entries — the ordinary
 §7 behavior for any template edit. The config key itself never enters
 the fingerprint, consistent with the rest of `policies:`.
+
+## 13. Set-operation branch weaving
+
+**Status: IMPLEMENTED (2026-09-29, owner decision "A" of the D6
+follow-up).** D6 rejected every designated read outside the statement's
+own FROM, set-operation branches included. This section lifts that
+rejection for **statement-level set operations only**; subqueries,
+CTE bodies, and `INSERT … SELECT` stay `SQLETCH125` exactly as D6
+settled.
+
+### 13.1 Semantics — every branch is a top-level statement
+
+A policy means "every read of a designated table sees only in-scope
+rows". A leaf `SELECT` core of `UNION`/`INTERSECT`/`EXCEPT` is an
+ordinary statement with its own FROM and WHERE slot, so it is scoped
+exactly as §4 scopes a top-level statement: a WHERE conjunct per
+designated occurrence (D1), an `ON` conjunct for a null-extended
+occurrence (D2a), idempotence and OR-wrapping per branch WHERE, and a
+`{}`-less predicate as one conjunct per *branch* that reads a
+designated table. Scoping the operands, rather than the set
+operation's result, is the only placement that respects the meaning:
+an `EXCEPT`'s right operand is read — the rows it removes must be the
+tenant's — and filtering the result could not scope it. `INTERSECT`
+and `EXCEPT` therefore need no special case.
+
+Set-level clauses (`WITH`, `ORDER BY`, `LIMIT` of the whole operation)
+belong to no branch. A designated read there is a subquery or CTE read
+(D6, still rejected); the Relations/DeepTables count comparison already
+catches it because the branch sub-facades exclude those clauses. An
+operand without a WHERE slot (`TABLE t`, `VALUES`) that reads a
+designated table is rejected.
+
+### 13.2 Two independent views of the branch structure
+
+Placement needs template offsets, and the parser alone cannot supply
+them (PostgreSQL SelectStmt nodes carry no location; TiDB relation
+nodes none at all). So the branch structure is derived twice:
+
+1. **AST** — `dialect.Tree.SetOpBranches()` (new facade capability,
+   compile-visible across all three frontends): the leaf cores in
+   document order, nested/parenthesized operands flattened, each a
+   sub-facade whose `Relations()` are that core's own relations with
+   locations in the original SQL. PostgreSQL walks `larg`/`rarg`;
+   SQLite follows the `Compound` chain and strips the set-level
+   clauses rqlite hangs on the first core; MySQL flattens
+   `SetOprSelectList` and locates every branch's relations in one
+   lexical pass that treats a paren in set-operation operand position
+   as transparent (a quantified `> ALL (SELECT …)` is not in operand
+   position).
+2. **Lexical** — `policy.scanSetOp`: a small recursive descent over
+   the template's token stream (`query := [WITH …] operand {setop
+   [ALL|DISTINCT] operand} tail`, `operand := '(' query ')' | core`)
+   recording, per core, its lead keyword, its WHERE clause (via the
+   same `exprScan` state machine `whereClause` uses — one WHERE reader
+   for statements and branches), and its insertion points (after
+   `WHERE`; before the first post-WHERE clause keyword; at the core's
+   end). It also maps every original token offset to its core.
+   Set operators are reserved in every dialect, so only a dotted
+   `t.union` needs excluding; anything off the modeled shape is
+   `ok=false`.
+
+The weaver requires the two to agree before it inserts anything: the
+same number of branches, and every designated occurrence's name token
+lying in the lexical core of the index the parser assigned it. After
+splicing it re-parses the woven maximal rendering and requires the
+same branches with the same relations. Any disagreement is
+`SQLETCH125` — a mis-split can be loud, never a conjunct in the wrong
+branch.
+
+### 13.3 Enforcement
+
+`Enforce` credits a designated occurrence only with a conjunct in its
+**own** branch's WHERE (or its own join's ON), found through the
+lexical split and attributed through the parser's branch index — the
+same two-view agreement, re-derived from the woven template. A
+conjunct in one branch never vouches for another.
+
+### 13.4 The pre-§13 SQLite leak this closes
+
+SQLite's whole-statement `Relations()` of a compound SELECT is the
+FIRST core's. The weaver therefore treated a designated table in the
+first branch as a plain top-level occurrence and spliced its conjunct
+at the scanner's `WhereKwEnd` — the statement's first WHERE keyword,
+which belongs to a LATER branch when the first has none. With both
+branches aliasing `o` and the later table carrying the scoping column,
+the result was valid SQL scoping the wrong table, and `Enforce`
+(reading the same first WHERE) passed it: a silent all-tenant read,
+confirmed against the real engine (tenant 1 received tenant 2's rows).
+PostgreSQL and MySQL were unaffected (their whole-statement
+`Relations()` is empty for a set operation, so D6 refused). The
+branch path replaces the whole-statement path for every set operation;
+`TestWeave_SQLite_CompoundBranchLeakRegression` and the devdb
+`TestSQLitePolicySetOpWeaving`/`…LeakedShapeRejected` pin it.
+
+### 13.5 Tests
+
+Facade conformance (`dialecttest.CheckSetOpBranches`, all three
+dialects); `scanSetOp` unit tests; golden woven renderings incl.
+parenthesized operands with their own LIMIT, nested operands, per-branch
+OR-wrap and idempotence, ON-weave inside a branch, `{}`-less
+predicates; the refusals (subquery in a branch, statement-level CTE,
+set-level ORDER BY subquery, `TABLE` operand, guarded join, USING);
+per-branch enforcement incl. the wrong-branch alias shape; the offline
+pipeline (R1 on the woven statement, PostgreSQL and SQLite); and
+row-level devdb proofs on real PostgreSQL (UNION ALL, parenthesized
+first/last-row operands, an EXCEPT whose tenant-1 answer is empty) and
+real SQLite (the §13.4 shape, every-branch, EXCEPT).
+
+### 13.6 MySQL
+
+MySQL maps a top-level set operation to `StmtOther`, so R1 rejects it
+(`SQLETCH103`) before weaving matters, and the nullability soundness
+suite relies on that. `SetOpBranches` is implemented and tested for
+MySQL, but admitting MySQL set operations is a separate decision
+(nullability attribution, the native oracle), pinned by
+`TestFrontend_SetOperationIsNotADMLKind`.

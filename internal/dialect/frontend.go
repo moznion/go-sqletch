@@ -195,6 +195,18 @@ type Tree interface {
 	// FIRST branch), which no per-branch analysis can license —
 	// SrcRel narrowing is off for the level (design 05 §2b).
 	HasSetOperation() bool
+	// SetOpBranches returns the leaf query cores of a statement-level
+	// set operation in document order — nested and parenthesized
+	// operands flattened — each as a sub-facade (Kind StmtSelect) whose
+	// Relations are that core's own FROM relations, located (Loc) in
+	// the ORIGINAL parsed SQL, and whose DeepTables are everything the
+	// core reads. Clauses owned by the whole set operation (its WITH,
+	// ORDER BY, LIMIT) belong to no branch; a parenthesized operand's
+	// own clauses belong to its branch. nil when the statement is not
+	// a set operation. The policy weaver scopes every branch
+	// independently (design 14 §13); it cross-checks this list against
+	// its own lexical branch split and refuses on any disagreement.
+	SetOpBranches() []Tree
 	// DerivedRels returns the statement's own FROM-reachable derived
 	// tables, each wrapped in a sub-facade for recursive analysis.
 	DerivedRels() []SubRel

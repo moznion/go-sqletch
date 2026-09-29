@@ -457,6 +457,33 @@ func (t *tree) HasSetOperation() bool {
 	return sel != nil && sel.Op != pgquery.SetOperation_SETOP_NONE
 }
 
+// SetOpBranches flattens a statement-level set operation into its leaf
+// SelectStmts (larg before rarg = document order). A leaf keeps its own
+// WITH/ORDER BY/LIMIT (a parenthesized operand's clauses); the
+// set-level ones live on the op nodes and belong to no branch. RangeVar
+// locations are absolute, so the sub-facades' Relations stay located.
+func (t *tree) SetOpBranches() []dialect.Tree {
+	sel := t.sel()
+	if sel == nil || sel.Op == pgquery.SetOperation_SETOP_NONE {
+		return nil
+	}
+	var out []dialect.Tree
+	var walk func(s *pgquery.SelectStmt)
+	walk = func(s *pgquery.SelectStmt) {
+		if s == nil {
+			return
+		}
+		if s.Op != pgquery.SetOperation_SETOP_NONE {
+			walk(s.Larg)
+			walk(s.Rarg)
+			return
+		}
+		out = append(out, subTree(&pgquery.Node{Node: &pgquery.Node_SelectStmt{SelectStmt: s}}))
+	}
+	walk(sel)
+	return out
+}
+
 // HasUnresolvableProvenance is always false: PostgreSQL attributes
 // result columns by OID (resorigtbl), immune to name collisions.
 func (t *tree) HasUnresolvableProvenance() bool { return false }
