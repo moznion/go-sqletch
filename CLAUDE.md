@@ -512,6 +512,25 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   added/removed) plus the config file, so a keystroke does not re-walk
   a `**` subtree.
 
+## Known decisions: query timeout (doc 23)
+
+- `-- @timeout <duration>|none` per query + `query_timeout.default` in
+  sqletch.yaml (owner decisions 2026-10-02). Client-side ONLY:
+  generated code does `ctx, cancel := context.WithTimeout(ctx, d)` /
+  `defer cancel()` after composition + the OnQuery hook, before the
+  exec clock — never server-side SQL (that would change renderings).
+- It is a CODEGEN input: never in the cache fingerprint, never in a
+  rendering decision. A method with no effective deadline emits no new
+  bytes (examples regenerate byte-identically without the knobs).
+- Malformed/non-positive/duplicate directive = SQLETCH017; bad config
+  value (incl. `""`, `0s`, `none`) = SQLETCH318 — never a silent
+  "no deadline". The directive comment stays in the skeleton, so
+  editing it re-keys oracle entries; the config default re-keys nothing.
+- Literal spelling `N*time.Unit` (largest exact unit) — pinned by
+  `TestDurationLiteral`. ncruces/go-sqlite3 reports expiry as
+  `sqlite3.INTERRUPT`, not `context.DeadlineExceeded`; pgx/MySQL wrap
+  the context error. Errors are passed through unchanged (doc 23 §5).
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

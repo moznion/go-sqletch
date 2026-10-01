@@ -25,6 +25,7 @@ module.exports = grammar({
       $.header,
       $.param_directive,
       $.column_directive,
+      $.timeout_directive,
       $._construct,
       $._sql_content,
     ),
@@ -59,6 +60,13 @@ module.exports = grammar({
       field('name', alias(IDENT, $.column_name)),
       ':',
       field('type', alias(/[^\n]+/, $.type_name)),
+    ),
+
+    // `-- @timeout 500ms` / `-- @timeout none` (design 23). The value
+    // is taken verbatim; the scanner validates it (SQLETCH017).
+    timeout_directive: $ => seq(
+      alias(token(prec(3, /--[ \t]*@timeout/)), $.directive_marker),
+      field('value', alias(/[^\n]+/, $.timeout_value)),
     ),
 
     // ---- construct blocks ------------------------------------------

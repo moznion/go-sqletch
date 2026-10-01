@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
@@ -28,8 +29,13 @@ var (
 	// optOutRe matches any @policy-optout-shaped comment; optOutFormRe
 	// is the valid form — the split lets malformed annotations get a
 	// diagnostic instead of silently staying skeleton text.
-	optOutRe     = regexp.MustCompile(`^--\s*@policy-optout\b`)
-	optOutFormRe = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
+	optOutRe = regexp.MustCompile(`^--\s*@policy-optout\b`)
+	// timeoutRe matches any @timeout-shaped comment (so a malformed one
+	// is diagnosed rather than ignored); timeoutFormRe is the accepted
+	// form, whose argument is then parsed by time.ParseDuration.
+	timeoutRe     = regexp.MustCompile(`^--\s*@timeout\b`)
+	timeoutFormRe = regexp.MustCompile(`^--\s*@timeout\s+(\S+)\s*$`)
+	optOutFormRe  = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
 	// applyRe/applyFormRe are the same split for @policy-apply, the
 	// acknowledgment half of `require_annotation` (design 14 §12). The
 	// trailing reason is OPTIONAL: an acknowledgment claims no
@@ -407,13 +413,14 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 
 // isDirectiveComment reports whether a line comment is one of the
 // per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`,
-// `-- @policy-apply`), including a malformed policy annotation (which
+// `-- @policy-apply`, `-- @timeout`), including a malformed policy annotation (which
 // still targets a query, so its diagnostic must attach there too).
 func isDirectiveComment(text string) bool {
 	return paramHintRe.MatchString(text) ||
 		colHintRe.MatchString(text) ||
 		optOutRe.MatchString(text) ||
-		applyRe.MatchString(text)
+		applyRe.MatchString(text) ||
+		timeoutRe.MatchString(text)
 }
 
 // applyDirectives attaches every buffered directive to q (in source
@@ -454,6 +461,10 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 		}
 		return
 	}
+	if timeoutRe.MatchString(tok.Text) {
+		fs.applyTimeout(q, tok)
+		return
+	}
 	if applyRe.MatchString(tok.Text) {
 		if m := applyFormRe.FindStringSubmatch(tok.Text); m != nil {
 			q.PolicyApplies = append(q.PolicyApplies, PolicyApply{
@@ -464,6 +475,40 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 				"malformed @policy-apply; the form is `-- @policy-apply: policy_name` with an optional trailing `(reason)`")
 		}
 	}
+}
+
+// applyTimeout parses one `-- @timeout` directive. Every malformed
+// form is an error that records nothing: silently falling back to "no
+// timeout" (or to the config default) would leave unbounded a query
+// its author believes is bounded.
+func (fs *fileScan) applyTimeout(q *QueryTemplate, tok dialect.Token) {
+	span := fs.span(tok.Start, tok.End)
+	const form = "the form is `-- @timeout <duration>` with a positive Go duration such as `500ms` or `2s`, or `-- @timeout none` to opt out of query_timeout.default"
+	if q.Timeout != nil {
+		fs.errorf(diagnostics.CodeBadTimeout, span,
+			"duplicate @timeout for query %s; a query has one deadline, and with two the effective one would depend on source order", q.Name)
+		return
+	}
+	m := timeoutFormRe.FindStringSubmatch(tok.Text)
+	if m == nil {
+		fs.errorf(diagnostics.CodeBadTimeout, span, "malformed @timeout; %s", form)
+		return
+	}
+	if m[1] == "none" {
+		q.Timeout = &TimeoutDirective{None: true, Span: span}
+		return
+	}
+	d, err := time.ParseDuration(m[1])
+	if err != nil {
+		fs.errorf(diagnostics.CodeBadTimeout, span, "malformed @timeout %q; %s", m[1], form)
+		return
+	}
+	if d <= 0 {
+		fs.errorf(diagnostics.CodeBadTimeout, span,
+			"@timeout %q is not positive; a zero or negative deadline would fail every call before it reaches the database (%s)", m[1], form)
+		return
+	}
+	q.Timeout = &TimeoutDirective{Duration: d, Span: span}
 }
 
 func (fs *fileScan) startQuery(name, ann string, headerTok dialect.Token) {

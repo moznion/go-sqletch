@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
@@ -59,6 +60,9 @@ type Options struct {
 	// flavor of the generated code (StyleDollar → pgx, StyleQuestion →
 	// database/sql) and the composition entry points.
 	Style runtime.Style
+	// DefaultTimeout is query_timeout.default (design 23): the deadline
+	// of every method whose query has no `-- @timeout`. 0 = none.
+	DefaultTimeout time.Duration
 }
 
 // Generate emits the full package: db.gen.go, querier.gen.go, and one
@@ -91,7 +95,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 
 	for _, in := range sorted {
 		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
-			sigImports: map[string]bool{}}
+			defTimeout: opts.DefaultTimeout, sigImports: map[string]bool{}}
 		src, sig, ds := g.emit(typeNames, policyTypes)
 		for imp := range g.sigImports {
 			sigImports[imp] = true
@@ -179,6 +183,7 @@ type queryGen struct {
 	tm         dialect.TypeMap
 	pkg        string
 	caps       runtime.TreeCaps
+	defTimeout time.Duration
 	style      runtime.Style
 	imports    map[string]bool
 	b          strings.Builder
@@ -1142,6 +1147,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	} else {
 		fmt.Fprint(w, "\tq.hook(key, sqlText)\n")
 	}
+	g.writeTimeout(w)
 	// The exec clock starts only for observed calls: time.Now is pure
 	// waste ahead of an unobserved query. (The time import is declared
 	// in emit, ahead of the header.)
@@ -1275,6 +1281,46 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	}
 	fmt.Fprint(w, "}\n")
 	return sig
+}
+
+// writeTimeout emits the method's deadline (design 23), if any. It
+// sits after composition — reject branches are not deadline-bound and
+// observe the caller's ctx — and before the exec clock and the database
+// call; the deferred cancel keeps the deadline over row iteration and
+// scanning. A caller's shorter deadline still wins, by context
+// semantics. Nothing is emitted when there is no deadline, so such
+// methods stay byte-identical to pre-design-23 output.
+func (g *queryGen) writeTimeout(w *strings.Builder) {
+	d, source := g.defTimeout, fmt.Sprintf("query_timeout.default (%s)", g.defTimeout)
+	if td := g.in.Q.Timeout; td != nil {
+		if td.None {
+			return
+		}
+		d, source = td.Duration, fmt.Sprintf("`-- @timeout %s`", td.Duration)
+	}
+	if d <= 0 {
+		return
+	}
+	fmt.Fprintf(w, "\t// Deadline from %s (design 23).\n", source)
+	fmt.Fprintf(w, "\tctx, cancel := context.WithTimeout(ctx, %s)\n\tdefer cancel()\n", durationLiteral(d))
+}
+
+// durationLiteral spells d as `N*time.Unit` with the largest unit
+// that divides it exactly — readable, and a pure function of the value
+// (determinism). time.Duration's String form is not Go source.
+func durationLiteral(d time.Duration) string {
+	for _, u := range []struct {
+		d    time.Duration
+		name string
+	}{
+		{time.Hour, "Hour"}, {time.Minute, "Minute"}, {time.Second, "Second"},
+		{time.Millisecond, "Millisecond"}, {time.Microsecond, "Microsecond"},
+	} {
+		if d%u.d == 0 {
+			return fmt.Sprintf("%d*time.%s", d/u.d, u.name)
+		}
+	}
+	return fmt.Sprintf("%d*time.Nanosecond", d)
 }
 
 // treeHookFunc is spliced into db.gen.go only when the package has a

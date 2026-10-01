@@ -43,6 +43,10 @@ filter_tree_caps:              # @filter-tree limits, baked into generated code
   max_nodes: 32                # default
   max_depth: 8                 # default
 
+query_timeout:                 # optional, baked into generated code
+  default: 5s                  # deadline for methods without `-- @timeout`;
+                               # absent = no default deadline
+
 policies:                      # cross-query policies (see the policies chapter)
   - name: tenant_scope
     tables: [orders]
@@ -113,6 +117,15 @@ policies:                      # cross-query policies (see the policies chapter)
   budget.
 - **`filter_tree_caps`** bound caller-built trees; exceeding them
   returns `runtime.ErrTreeTooLarge` before any SQL is composed.
+- **`query_timeout.default`** is a positive Go duration (`2s`,
+  `500ms`) that every generated method applies as a context deadline
+  unless its query carries `-- @timeout <duration>` (which overrides
+  it) or `-- @timeout none` (which opts out) — see
+  [annotations](03-annotations.md#---timeout-duration). Anything else,
+  including `0s` or an empty string, is SQLETCH318; remove the key for
+  no default. Like `filter_tree_caps` it is baked into generated code
+  and is not part of the cache fingerprint: changing it regenerates Go
+  code without re-verifying anything.
 - **`policies`** declare predicates woven at compile time into every
   query touching the designated tables, with per-query opt-outs and
   an enforcement check — the whole story is

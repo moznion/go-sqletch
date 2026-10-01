@@ -56,6 +56,16 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
    byte-identical to what the compiler verified, pinned by a
    conformance test.
 3. Values are bound by position. Values never enter the SQL string.
+4. If the query has a deadline (`-- @timeout`, or
+   `query_timeout.default`), the method derives
+   `context.WithTimeout(ctx, d)` right before the driver call and
+   cancels it on return, so the deadline covers execution, row
+   iteration, and scanning. An expired deadline surfaces as the
+   driver's error: pgx and go-sql-driver/mysql report
+   `context.DeadlineExceeded` (`errors.Is`); ncruces/go-sqlite3
+   interrupts the statement and reports `sqlite3.INTERRUPT`. With
+   pgx, use a pool (`pgxpool`): pgx closes a single connection whose
+   query was interrupted by its context.
 
 With `static_expansion`, step 2 is a map lookup into precomposed SQL
 (the `.sqletch/expanded/` files are the audit surface).

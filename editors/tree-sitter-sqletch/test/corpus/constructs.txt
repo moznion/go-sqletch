@@ -285,3 +285,37 @@ WHERE t.v = :real;
   (sql_token)
   (param_ref)
   (sql_token))
+
+==================
+timeout directives
+==================
+
+-- name: Slow :many
+-- @timeout 1.5s
+SELECT 1;
+
+-- name: Unbounded :many
+-- @timeout none
+SELECT 2;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (timeout_directive
+    (directive_marker)
+    (timeout_value))
+  (sql_token)
+  (sql_token)
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (timeout_directive
+    (directive_marker)
+    (timeout_value))
+  (sql_token)
+  (sql_token))

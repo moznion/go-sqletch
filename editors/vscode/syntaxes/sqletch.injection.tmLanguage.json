@@ -6,6 +6,7 @@
   "patterns": [
     { "include": "#header" },
     { "include": "#directive" },
+    { "include": "#timeout-directive" },
     { "include": "#if-present" },
     { "include": "#when" },
     { "include": "#named-clause" },
@@ -29,6 +30,13 @@
         "2": { "name": "variable.parameter.sqletch" },
         "3": { "name": "punctuation.separator.sqletch" },
         "4": { "name": "storage.type.sqletch" }
+      }
+    },
+    "timeout-directive": {
+      "match": "(--[ \\t]*@timeout)[ \\t]+(\\S+)[ \\t]*$",
+      "captures": {
+        "1": { "name": "keyword.other.directive.sqletch" },
+        "2": { "name": "constant.numeric.sqletch" }
       }
     },
     "if-present": {

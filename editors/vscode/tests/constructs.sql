@@ -15,6 +15,14 @@
 --         ^ variable.parameter.sqletch
 --            ^^^^^^^ storage.type.sqletch
 
+-- @timeout 1.5s
+-- <---------- keyword.other.directive.sqletch
+--          ^^^^ constant.numeric.sqletch
+
+-- @timeout none
+-- <---------- keyword.other.directive.sqletch
+--          ^^^^ constant.numeric.sqletch
+
 @if-present(organization_id, status)
 -- <---------- keyword.control.sqletch
 --          ^^^^^^^^^^^^^^^ variable.parameter.sqletch

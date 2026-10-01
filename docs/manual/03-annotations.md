@@ -78,3 +78,28 @@ acknowledgment claims no exemption, so there is nothing to justify.
 Naming a policy that does not exist or does not apply to the query is
 SQLETCH126, as is carrying both this and `-- @policy-optout` for one
 policy.
+
+## `-- @timeout <duration>`
+
+```sql
+-- name: AllAuditActions :many
+-- @timeout 30s
+SELECT a.action, count(*) AS occurrences FROM audit_logs AS a GROUP BY a.action;
+```
+
+Bounds the generated method with a context deadline: the method wraps
+its `ctx` in `context.WithTimeout` before calling the driver and keeps
+it until the rows are scanned, so a statement that outlasts the
+deadline is interrupted by the driver and the call fails. The value is
+a positive Go duration (`500ms`, `2s`, `1m30s`). A caller's own
+shorter deadline still wins — the generated deadline only ever
+tightens.
+
+`-- @timeout none` opts the query out of `query_timeout.default` (see
+[the config reference](05-config.md#field-notes)); without a default
+it is the same as no directive. A malformed, non-positive, or repeated
+`@timeout` is SQLETCH017 — never a silent fallback to "no deadline".
+The timeout is a runtime property only: it changes no rendering and no
+verification. Like every annotation, the comment stays in the skeleton
+verbatim, so editing it re-keys the query's oracle cache entries (one
+cold `generate`).

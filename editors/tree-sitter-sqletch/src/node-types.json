@@ -217,6 +217,10 @@
           "named": true
         },
         {
+          "type": "timeout_directive",
+          "named": true
+        },
+        {
           "type": "when_block",
           "named": true
         }
@@ -530,6 +534,32 @@
     "fields": {}
   },
   {
+    "type": "timeout_directive",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "timeout_value",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "directive_marker",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "when_block",
     "named": true,
     "fields": {
@@ -733,6 +763,10 @@
   },
   {
     "type": "sql_token",
+    "named": true
+  },
+  {
+    "type": "timeout_value",
     "named": true
   },
   {

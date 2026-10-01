@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
@@ -144,6 +145,7 @@ type Config struct {
 	Expansion     Expansion    `yaml:"static_expansion"`
 	Verification  Verification `yaml:"verification"`
 	TreeCaps      TreeCaps     `yaml:"filter_tree_caps"`
+	QueryTimeout  QueryTimeout `yaml:"query_timeout"`
 	Policies      []Policy     `yaml:"policies"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
@@ -244,6 +246,19 @@ const DefaultVerificationMaxShapes = 4096
 type TreeCaps struct {
 	MaxNodes int `yaml:"max_nodes"`
 	MaxDepth int `yaml:"max_depth"`
+}
+
+// QueryTimeout carries the run-wide default deadline for generated
+// methods (design 23). Like filter_tree_caps it is baked into generated
+// code and never enters the cache fingerprint: it changes no rendering
+// and no oracle answer.
+type QueryTimeout struct {
+	// Default is the raw `query_timeout.default` value; a pointer so an
+	// explicit empty string is told apart from an absent key (the former
+	// is an error, never a silent "no timeout").
+	Default *string `yaml:"default"`
+	// DefaultDuration is Default parsed by Load; 0 means no default.
+	DefaultDuration time.Duration `yaml:"-"`
 }
 
 // Policy declares one cross-query policy (spec §"Cross-Query
@@ -449,6 +464,19 @@ func Load(path string) (Config, []diagnostics.Diagnostic) {
 	}
 	if cfg.TreeCaps.MaxNodes < 1 || cfg.TreeCaps.MaxDepth < 1 {
 		invalid("filter_tree_caps values must be positive")
+	}
+	if raw := cfg.QueryTimeout.Default; raw != nil {
+		d, err := time.ParseDuration(*raw)
+		switch {
+		case err != nil:
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeBadDefaultTimeout, span,
+				"query_timeout.default %q is not a Go duration; use a positive value such as `2s` or `500ms`, or remove the key for no default", *raw))
+		case d <= 0:
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeBadDefaultTimeout, span,
+				"query_timeout.default %q is not positive; a zero or negative deadline would fail every generated call before it reaches the database — remove the key for no default", *raw))
+		default:
+			cfg.QueryTimeout.DefaultDuration = d
+		}
 	}
 	for i, o := range cfg.Overrides {
 		if o.Query == "" || o.Column == "" || o.Nullable == nil {

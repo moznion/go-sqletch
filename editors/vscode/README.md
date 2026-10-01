@@ -6,8 +6,8 @@ templates:
 - **Construct highlighting** via a TextMate injection grammar layered
   over the built-in SQL highlighting: `@if-present` / `@when` /
   `@choose` / `@order-by` / `@filter-tree` / `@in` blocks, `:param`
-  references, and the `-- name:` / `-- @param` / `-- @column`
-  directives.
+  references, and the `-- name:` / `-- @param` / `-- @column` /
+  `-- @timeout` directives.
 - **Language server**: starts `sqletch lsp` for `SQLETCHnnn`
   diagnostics as you type and go-to-definition on parameters. Point
   `sqletch.path` at the binary if it is not on PATH; disable with

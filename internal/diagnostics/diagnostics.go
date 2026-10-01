@@ -57,6 +57,7 @@ const (
 	CodeTooManyParams      Code = "SQLETCH013" // more parameters than the bind plan's int16 index holds
 	CodeWhenIntLiteral     Code = "SQLETCH014" // @when integer literal is ambiguous (leading zero) or out of int64 range
 	CodeWhenStringLiteral  Code = "SQLETCH015" // @when string literal is not a plain single-quoted SQL string (delimiters/escapes would survive into the generated guard)
+	CodeBadTimeout         Code = "SQLETCH017" // `-- @timeout` malformed, non-positive, or repeated (docs/design/23-query-timeout.md)
 )
 
 // Go-source input codes: templates authored in a `//sqletch:query`
@@ -146,6 +147,10 @@ const (
 	CodeTargetCollision   Code = "SQLETCH315" // two targets resolve to one path with different packages
 	CodeTargetNoMatch     Code = "SQLETCH316" // a queries pattern matched no file (warning)
 	CodeTargetNameSpan    Code = "SQLETCH317" // an overrides/static_expansion name exists in several targets (warning)
+
+	// CodeBadDefaultTimeout: query_timeout.default is not a positive Go
+	// duration (docs/design/23-query-timeout.md).
+	CodeBadDefaultTimeout Code = "SQLETCH318"
 )
 
 type Diagnostic struct {
