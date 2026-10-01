@@ -59,6 +59,7 @@ WHERE TRUE
 @if-present(x)
   AND t.x = :x
 @endif
+LIMIT 10
 ;
 `
 

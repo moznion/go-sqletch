@@ -1,0 +1,231 @@
+package rules
+
+import (
+	"slices"
+
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
+	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/template"
+)
+
+// CheckPerfTypes runs SQLETCH132 (design 24 §3.5): a column compared
+// with a parameter whose type makes the engine convert the COLUMN side,
+// which takes an index on the column out of play. It needs the catalog
+// (column types) and the resolved parameter types, so it runs in the
+// catalog-dependent pass (cli.resolvedChecks) and owns the
+// unused-@allow verdict for SQLETCH132.
+//
+// It is a per-dialect WHITELIST of pairs known to defeat the index;
+// every other pair — including every pair on SQLite, where a comparison
+// with a bound parameter applies the column's affinity to the
+// parameter — is silent. Only the top-level statement's own WHERE/ON
+// predicates are considered (a subquery's columns would need scope
+// resolution this facade does not model), with one side a bare column
+// and the other a bare parameter (PostgreSQL also accepts one cast of
+// it, which is what the oracle's inferred type reflects).
+func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
+	tree dialect.Tree, cat *cache.Catalog, paramTypes map[string]dialect.TypeRef) []diagnostics.Diagnostic {
+
+	if cat == nil || len(rs) == 0 || tree.HasSetOperation() {
+		return nil // no verdict at all, so no unused-@allow verdict either
+	}
+	c := newPerfCollector(q)
+	mismatch := typeMismatchRule(dialectName)
+	if mismatch != nil {
+		res := newResolver(profile, q, rs[0], tree, cat)
+		for _, r := range rs {
+			toks, ok := lexRendering(profile, r)
+			if !ok {
+				continue
+			}
+			pc := predicateContexts(toks)
+			for i := range toks {
+				if !pc.top[i] {
+					continue
+				}
+				kind := comparisonAt(toks, i)
+				if kind == "" || kind == "LIKE" || kind == "ILIKE" {
+					continue
+				}
+				left, right := operands(toks, i)
+				col, val := left, right
+				if !isColRef(col) {
+					if kind != "op" {
+						continue
+					}
+					col, val = right, left
+				}
+				if !isColRef(col) {
+					continue
+				}
+				params := paramOperands(val, kind == "IN", dialectName == "postgres")
+				if len(params) == 0 {
+					continue
+				}
+				column := resolveColumn(res, col)
+				if column == nil {
+					continue
+				}
+				for _, p := range params {
+					pt, ok := paramTypes[p]
+					if !ok {
+						continue
+					}
+					why := mismatch(column.TypeOID, pt.OID)
+					if why == "" {
+						continue
+					}
+					span, ok := templateSpan(q, r, toks[i-len(left):i+1+len(right)])
+					if !ok {
+						if span, ok = templateSpan(q, r, col); !ok {
+							continue
+						}
+					}
+					c.add(diagnostics.Warnf(diagnostics.CodePerfTypeMismatch, span,
+						"column %q (%s) is compared with parameter %q (%s): %s, so an index on the column cannot be used",
+						column.Name, column.TypeName, p, pt.Name, why).
+						WithHint("bind the parameter at the column's type (drop the cast, or fix its `-- @param %s:` annotation); `-- @allow %s` if the conversion is intended", p, diagnostics.CodePerfTypeMismatch))
+					break
+				}
+			}
+		}
+	}
+	return c.finish([]diagnostics.Code{diagnostics.CodePerfTypeMismatch})
+}
+
+// paramOperands returns the parameters of a value operand that is a
+// bare placeholder (or, for IN, a parenthesized list of them). With
+// allowCast, one `::type` / CAST(… AS type) around the placeholder is
+// accepted. Any other shape returns nil.
+func paramOperands(ops []ptok, inList, allowCast bool) []string {
+	if inList {
+		if len(ops) < 3 || ops[0].Kind != dialect.KindLParen || matchingParen(ops, 0) != len(ops)-1 {
+			return nil
+		}
+		var out []string
+		for _, arg := range splitArgs(ops[1 : len(ops)-1]) {
+			p := paramOperands(arg, false, allowCast)
+			if p == nil {
+				return nil
+			}
+			out = append(out, p...)
+		}
+		return out
+	}
+	if len(ops) == 1 && ops[0].param != "" {
+		return []string{ops[0].param}
+	}
+	if !allowCast || len(ops) < 3 {
+		return nil
+	}
+	if ops[0].param != "" && ops[1].Kind == dialect.KindCast && isTypeSpec(ops[2:]) {
+		for _, t := range ops[2:] {
+			if t.Kind == dialect.KindCast {
+				return nil
+			}
+		}
+		return []string{ops[0].param}
+	}
+	if ops[0].isIdent("CAST") && len(ops) >= 6 && ops[1].Kind == dialect.KindLParen &&
+		matchingParen(ops, 1) == len(ops)-1 && ops[2].param != "" && ops[3].isIdent("AS") &&
+		isTypeSpec(ops[4:len(ops)-1]) {
+		return []string{ops[2].param}
+	}
+	return nil
+}
+
+// resolveColumn binds a bare column reference against the top-level
+// relations: a qualifier must name one, and an unqualified name must
+// match exactly one relation's catalog columns. nil when unresolved.
+func resolveColumn(res *resolver, col []ptok) *cache.Column {
+	name := identText(col[len(col)-1])
+	var rel *relInfo
+	switch len(col) {
+	case 1:
+		cands := res.columnCandidates(name)
+		if len(cands) != 1 {
+			return nil
+		}
+		rel = cands[0]
+	case 3:
+		rel = res.byName[res.fold(identText(col[0]))]
+	default:
+		return nil
+	}
+	if rel == nil || rel.table == nil {
+		return nil
+	}
+	return res.col(rel.table, name)
+}
+
+// identText returns an identifier's name, unquoting a quoted one.
+func identText(t ptok) string {
+	if t.Kind == dialect.KindQuotedIdent && len(t.Text) >= 2 {
+		return t.Text[1 : len(t.Text)-1]
+	}
+	return t.Text
+}
+
+// typeMismatchRule returns the dialect's whitelist: for a (column type,
+// parameter type) pair it returns why the comparison converts the
+// column, or "" when the pair is index-safe or not known to be unsafe.
+func typeMismatchRule(dialectName string) func(colOID, paramOID uint32) string {
+	switch dialectName {
+	case "postgres":
+		return pgTypeMismatch
+	case "mysql":
+		return mysqlTypeMismatch
+	}
+	// SQLite: a comparison with a bound parameter applies the column's
+	// affinity to the parameter (the parameter has none), never the
+	// other way round.
+	return nil
+}
+
+// PostgreSQL: integer columns compared with numeric/float values. The
+// integer btree operator family has no integer-vs-numeric/float
+// operator, so the planner resolves `int_col = numeric` as
+// `int_col::numeric = numeric` — the cast lands on the column.
+// (int2/int4/int8 among themselves, float4/float8, date/timestamp and
+// text/varchar compare inside one family: never flagged.)
+func pgTypeMismatch(colOID, paramOID uint32) string {
+	const (
+		int2, int4, int8          = 21, 23, 20
+		float4, float8, numericID = 700, 701, 1700
+	)
+	if !slices.Contains([]uint32{int2, int4, int8}, colOID) {
+		return ""
+	}
+	switch paramOID {
+	case numericID:
+		return "PostgreSQL compares an integer with a numeric by casting the integer column to numeric on every row"
+	case float4, float8:
+		return "PostgreSQL compares an integer with a float by casting the integer column to double precision on every row"
+	}
+	return ""
+}
+
+// MySQL: a string column compared with a number is compared as
+// floating point (both sides converted), which the MySQL manual calls
+// out as unable to use an index on the string column. The reverse (a
+// numeric column vs a string value) converts the value and stays
+// index-safe.
+func mysqlTypeMismatch(colOID, paramOID uint32) string {
+	const flags = mysqlFlagUnsigned | mysqlFlagBinary
+	stringCodes := []uint32{0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe} // blob family (TEXT collapses here), VAR_STRING, STRING
+	numberCodes := []uint32{0x01, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09, 0xf6}
+	if !slices.Contains(stringCodes, colOID&^flags) || !slices.Contains(numberCodes, paramOID&^flags) {
+		return ""
+	}
+	return "MySQL compares a string column with a number as floating point, converting every row's column value"
+}
+
+// The MySQL TypeRef flag bits (internal/dialect/mysql/typemap.go:
+// FlagUnsigned, FlagBinary), repeated here so the rules package stays
+// free of driver imports; TestPerfTypes_MySQLFlagsAgree pins them.
+const (
+	mysqlFlagUnsigned uint32 = 1 << 8
+	mysqlFlagBinary   uint32 = 1 << 9
+)

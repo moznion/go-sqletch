@@ -59,6 +59,7 @@ LIMIT :limit;
 -- name: CountByStatus :many
 -- @param tenant_id: integer
 -- @column n: integer
+-- @allow SQLETCH130 (one row per status)
 SELECT u.status, count(*) AS n
 FROM users AS u
 WHERE u.tenant_id = :tenant_id

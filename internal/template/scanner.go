@@ -42,6 +42,12 @@ var (
 	// exemption, so there is nothing for it to justify.
 	applyRe     = regexp.MustCompile(`^--\s*@policy-apply\b`)
 	applyFormRe = regexp.MustCompile(`^--\s*@policy-apply:\s*([a-z][a-z0-9_]*)\s*(?:\((.+)\)\s*)?$`)
+	// allowRe/allowFormRe split `-- @allow` the same way: any
+	// @allow-shaped comment is the directive (so a malformed one is an
+	// error rather than an ignored comment), the form is a comma list of
+	// codes with an optional trailing `(reason)` (design 24 §4).
+	allowRe     = regexp.MustCompile(`^--\s*@allow(?:\s|:|$)`)
+	allowFormRe = regexp.MustCompile(`^--\s*@allow\s+(SQLETCH[0-9]{3}(?:\s*,\s*SQLETCH[0-9]{3})*)\s*(?:\((.*\S.*)\)\s*)?$`)
 )
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -133,7 +139,7 @@ type fileScan struct {
 	strayReported bool
 
 	// pendingDirectives buffers directive comments (`-- @param`,
-	// `-- @column`, `-- @policy-optout`) until their target query is
+	// `-- @column`, `-- @policy-optout`, `-- @allow`, …) until their target query is
 	// known. A directive attaches to a query only once a real SQL token
 	// of that query is seen (in-body directives) or, in the gap before
 	// the next `-- name:` header, to the FOLLOWING query — never the
@@ -413,14 +419,16 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 
 // isDirectiveComment reports whether a line comment is one of the
 // per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`,
-// `-- @policy-apply`, `-- @timeout`), including a malformed policy annotation (which
-// still targets a query, so its diagnostic must attach there too).
+// `-- @policy-apply`, `-- @timeout`, `-- @allow`), including a malformed
+// policy or @allow annotation (which still targets a query, so its
+// diagnostic must attach there too).
 func isDirectiveComment(text string) bool {
 	return paramHintRe.MatchString(text) ||
 		colHintRe.MatchString(text) ||
 		optOutRe.MatchString(text) ||
 		applyRe.MatchString(text) ||
-		timeoutRe.MatchString(text)
+		timeoutRe.MatchString(text) ||
+		allowRe.MatchString(text)
 }
 
 // applyDirectives attaches every buffered directive to q (in source
@@ -474,6 +482,45 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
 				"malformed @policy-apply; the form is `-- @policy-apply: policy_name` with an optional trailing `(reason)`")
 		}
+		return
+	}
+	if allowRe.MatchString(tok.Text) {
+		fs.applyAllow(q, tok)
+	}
+}
+
+// applyAllow records one `-- @allow` directive. It is all-or-nothing:
+// a directive naming any code outside the performance-lint vocabulary
+// records none of its codes, so a typo can never leave a half-applied
+// suppression behind the error.
+func (fs *fileScan) applyAllow(q *QueryTemplate, tok dialect.Token) {
+	span := fs.span(tok.Start, tok.End)
+	vocab := make([]string, len(diagnostics.PerfLintCodes))
+	for i, c := range diagnostics.PerfLintCodes {
+		vocab[i] = string(c)
+	}
+	hint := "@allow suppresses performance lints only: " + strings.Join(vocab, ", ")
+	m := allowFormRe.FindStringSubmatch(tok.Text)
+	if m == nil {
+		fs.emit(diagnostics.Errorf(diagnostics.CodeBadAllow, span,
+			"malformed @allow; the form is `-- @allow SQLETCHnnn[, SQLETCHnnn…]` with an optional trailing `(reason)`").
+			WithHint("%s", hint))
+		return
+	}
+	var codes []diagnostics.Code
+	for _, raw := range strings.Split(m[1], ",") {
+		c := diagnostics.Code(strings.TrimSpace(raw))
+		if !diagnostics.IsPerfLint(c) {
+			fs.emit(diagnostics.Errorf(diagnostics.CodeBadAllow, span,
+				"@allow names %s, which is not a performance lint; soundness and rule diagnostics cannot be suppressed per query, and an unknown code would suppress nothing", c).
+				WithHint("%s", hint))
+			return
+		}
+		codes = append(codes, c)
+	}
+	reason := strings.TrimSpace(m[2])
+	for _, c := range codes {
+		q.Allows = append(q.Allows, Allow{Code: c, Reason: reason, Span: span})
 	}
 }
 

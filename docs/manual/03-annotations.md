@@ -106,3 +106,24 @@ The timeout is a runtime property only: it changes no rendering and no
 verification. Like every annotation, the comment stays in the skeleton
 verbatim, so editing it re-keys the query's oracle cache entries (one
 cold `generate`).
+
+## `-- @allow CODE[, CODE…] (reason)`
+
+```sql
+-- name: ActionCounts :many
+-- @allow SQLETCH130 (one row per distinct action)
+SELECT action, count(*) FROM audit_logs GROUP BY action;
+```
+
+Suppresses [performance lints](08-diagnostics.md#performance-lints-warnings)
+(SQLETCH128–132) for this one query, in every shape. The trailing
+reason is optional but recommended — it is what a reviewer reads.
+
+- Only performance-lint codes may be named. A structural, oracle, or
+  configuration code, an unknown code, or a malformed directive is
+  SQLETCH016, and the directive then suppresses nothing at all.
+- An `@allow` whose lint does not fire on the query is a warning
+  (SQLETCH133): delete it, so the lint can catch the next regression.
+- Like every annotation it follows the `-- name:` header and stays in
+  the skeleton verbatim (adding one changes the query's rendered SQL,
+  so the next `generate` re-verifies it).

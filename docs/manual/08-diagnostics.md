@@ -30,6 +30,7 @@ codes).
 | SQLETCH013 | More than 32767 parameters in one query. Bind plans index the params struct with an int16; a fixed compiler limit, like SQLETCH010, not a knob. |
 | SQLETCH014 | An `@when` integer literal that is ambiguous or unrepresentable. A leading zero (`010`) would be read as a Go octal in the generated guard — a different value than the decimal written — so it is rejected; drop the leading zero. Likewise a run that does not fit a 64-bit signed integer is rejected. Only plain decimal integers are accepted (no `0x`/`0o`/`0b` prefixes). |
 | SQLETCH015 | An `@when` string literal that is not a plain single-quoted SQL string. E-strings (`E'…'`), dollar-quoted strings (`$$…$$`), double-quoted strings (`"…"`), blob literals (`x'…'`), and backslash escapes (`'a\'b'`) keep their delimiters or escapes in the stored guard value, so the generated comparison would never match the runtime value and the guarded fragment would be silently dead. Write the intended value as a plain `'…'` literal, doubling an embedded quote to escape it (`'it''s'`). |
+| SQLETCH016 | A `-- @allow` directive that is malformed, or names a code that is not a performance lint (SQLETCH128–132) or that does not exist. Structural, oracle, and configuration diagnostics cannot be suppressed per query, and a suppression of nothing must not pass silently. The directive records none of its codes. |
 | SQLETCH017 | A malformed `-- @timeout`: not a positive Go duration (`500ms`, `2s`) or the keyword `none`, or a second `@timeout` on the same query. Rejected rather than ignored: falling back to "no deadline" (or to `query_timeout.default`) would leave unbounded a query its author believes is bounded, and with two directives the effective deadline would depend on source order. |
 | SQLETCH020 | A `.go` file listed in a target's `queries:` does not parse. Templates are read syntactically, so the file must at least be valid Go syntax (it need not type-check). |
 | SQLETCH021 | `//sqletch:query` on something other than a `const` declaration. A const is what makes the verified SQL the SQL that runs. |
@@ -61,6 +62,22 @@ codes).
 | SQLETCH125 | A policy applies to this query but cannot be woven: the designated table sits in a position sqletch cannot scope (inside a subquery/CTE, read by a `TABLE`/`VALUES` set-operation operand, joined with `USING`/`NATURAL` on a null-extended side, introduced by a guarded join), its bound name is not a bare identifier, or the query declares a conflicting type for the policy parameter. Opt out explicitly (`-- @policy-optout`) or restructure. |
 | SQLETCH126 | A `-- @policy-optout` names a policy that does not exist, or one that does not apply to this query. Renaming a policy can never silently disarm its opt-outs. |
 | SQLETCH127 | A policy declared with `require_annotation: true` applies to this query, but the query carries neither `-- @policy-apply` nor `-- @policy-optout` for it. Scoping is never in doubt — the conjunct is woven either way — but the key demands the template say so. |
+
+### Performance lints (warnings)
+
+A separate axis from the rules above: these never fail a run and
+never affect what is verified or generated. Each is a whitelist that
+flags only the unambiguous form. Suppress one per query with
+`-- @allow CODE (reason)` ([annotations](03-annotations.md)).
+
+| Code | Meaning |
+| --- | --- |
+| SQLETCH128 | *(warning)* A WHERE/JOIN ON comparison wraps the column in a function or cast (`lower(email) = :e`, `created_at::date = :d`, `CAST(id AS text) = :x`) against a column-free value: an index on the plain column cannot serve it. Compare the bare column and transform the parameter instead (`created_at >= :day_start AND created_at < :day_end`); if an expression index on exactly that expression exists, `@allow` it. HAVING is not checked (no index applies after aggregation). |
+| SQLETCH129 | *(warning)* A `LIKE`/`ILIKE` pattern provably starts with `%` or `_` (`'%' \|\| :q`, `'%foo'`, `CONCAT('%', :q)`): a B-tree index serves only a known prefix, so every row is matched. A bare `:q` pattern is never flagged. |
+| SQLETCH130 | *(warning)* A `:many` SELECT has a reachable shape without `LIMIT`/`FETCH FIRST`: the result and the slice the generated method builds grow with the table. Add `LIMIT :limit` (paginate by key), or `@allow` it when the result is bounded by the data model (e.g. one row per status). |
+| SQLETCH131 | *(warning)* OFFSET pagination with a non-constant offset (`OFFSET :offset`, MySQL/SQLite `LIMIT :off, :n`): the database produces and discards every skipped row, so deep pages cost linearly more. Paginate by key (`@if-present(after_id) AND id > :after_id @endif … LIMIT :limit`). |
+| SQLETCH132 | *(warning)* A column is compared with a parameter whose type makes the engine convert the column on every row: on PostgreSQL an integer column vs a `numeric`/float parameter (`id = :p::numeric`); on MySQL a string column vs a numeric parameter (`code = :p` with `-- @param p: bigint`). Index-safe cross-type pairs (int4 vs int8, date vs timestamp, …) are never flagged, and SQLite never is (a bound parameter takes the column's affinity). Bind at the column's type. Catalog-dependent: runs only when the catalog is available. |
+| SQLETCH133 | *(warning)* An `@allow` names a lint that does not fire on this query. A stale suppression would hide that lint's next regression; remove the code from the directive. |
 
 ## SQLETCH2xx — type oracle
 

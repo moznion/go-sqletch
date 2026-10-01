@@ -57,6 +57,7 @@ const (
 	CodeTooManyParams      Code = "SQLETCH013" // more parameters than the bind plan's int16 index holds
 	CodeWhenIntLiteral     Code = "SQLETCH014" // @when integer literal is ambiguous (leading zero) or out of int64 range
 	CodeWhenStringLiteral  Code = "SQLETCH015" // @when string literal is not a plain single-quoted SQL string (delimiters/escapes would survive into the generated guard)
+	CodeBadAllow           Code = "SQLETCH016" // malformed `-- @allow`, or it names a code that is not a performance lint
 	CodeBadTimeout         Code = "SQLETCH017" // `-- @timeout` malformed, non-positive, or repeated (docs/design/23-query-timeout.md)
 )
 
@@ -97,6 +98,40 @@ const (
 	CodePolicyBadOptOut   Code = "SQLETCH126" // @policy-optout names an unknown or inapplicable policy
 	CodePolicyUnannotated Code = "SQLETCH127" // require_annotation: the query neither applies nor opts out
 )
+
+// Performance-lint codes (docs/design/24-performance-lints.md). A
+// separate axis from soundness: every one is a WARNING, never fails a
+// run, and is the only kind of code a `-- @allow` directive may name.
+const (
+	CodePerfWrappedColumn Code = "SQLETCH128" // function/cast applied to the column side of a WHERE/ON comparison
+	CodePerfLeadingLike   Code = "SQLETCH129" // LIKE/ILIKE pattern starts with a wildcard
+	CodePerfManyNoLimit   Code = "SQLETCH130" // :many query with a reachable shape that has no LIMIT
+	CodePerfOffsetPaging  Code = "SQLETCH131" // OFFSET pagination with a non-constant offset
+	CodePerfTypeMismatch  Code = "SQLETCH132" // column compared with a parameter of a type that forces a column-side conversion
+	CodePerfAllowUnused   Code = "SQLETCH133" // `-- @allow` names a lint that does not fire on this query
+)
+
+// PerfLintCodes are the codes a `-- @allow` directive may suppress, in
+// code order. SQLETCH133 (an unused @allow) is deliberately absent: it
+// reports on the directive itself, so allowing it would let a stale
+// suppression silence its own staleness report.
+var PerfLintCodes = []Code{
+	CodePerfWrappedColumn,
+	CodePerfLeadingLike,
+	CodePerfManyNoLimit,
+	CodePerfOffsetPaging,
+	CodePerfTypeMismatch,
+}
+
+// IsPerfLint reports whether c is one of PerfLintCodes.
+func IsPerfLint(c Code) bool {
+	for _, p := range PerfLintCodes {
+		if p == c {
+			return true
+		}
+	}
+	return false
+}
 
 // Oracle-phase codes (see docs/design/04-type-oracle.md).
 const (

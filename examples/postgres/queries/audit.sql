@@ -24,6 +24,9 @@ SELECT count(*) AS total FROM audit_logs;
 -- it with a context deadline (`-- @timeout none` would opt a query out
 -- of a query_timeout.default set in sqletch.yaml instead).
 -- @timeout 30s
+-- One row per distinct action, so the result is bounded by the action
+-- vocabulary, not the table: a reviewed exemption from SQLETCH130.
+-- @allow SQLETCH130 (one row per distinct action)
 SELECT a.action, count(*) AS occurrences
 FROM audit_logs AS a
 GROUP BY a.action
@@ -37,4 +40,5 @@ ORDER BY occurrences DESC;
 SELECT u.id, a.action
 FROM users AS u
 LEFT JOIN audit_logs AS a ON a.actor_id = u.id
-ORDER BY u.id, a.id;
+ORDER BY u.id, a.id
+LIMIT :limit;

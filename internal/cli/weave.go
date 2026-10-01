@@ -81,5 +81,8 @@ func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate, max
 		return wres, nil, diags, err
 	}
 	diags = append(diags, rules.CheckR1(drv.profile, drv.frontend, wres.Query, rs)...)
+	// Performance lints (design 24): warnings over every rendering, so
+	// both the pipeline and the LSP report them from this one seam.
+	diags = append(diags, rules.CheckPerf(drv.profile, wres.Query, rs)...)
 	return wres, rs, diags, nil
 }

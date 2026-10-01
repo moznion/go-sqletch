@@ -114,7 +114,8 @@ internal/ast        P2  Render/RenderShape + SourceMap — the reference
 internal/rules      P2/3/4  CheckR1 (probe-based node completeness),
                         CheckLexical (R6, R9), CheckResolved (R3
                         resolution-based, R2 star, planner table),
-                        CheckTypeAgreement/ResolveParamTypes (P1 types)
+                        CheckTypeAgreement/ResolveParamTypes (P1 types),
+                        CheckPerf/CheckPerfTypes (doc 24 warning lints)
 internal/policy     —   cross-query policy weaving (doc 14, spec
                         §Cross-Query Policies): Weave runs between
                         CheckLexical (unwoven) and Renderings (woven)
@@ -455,6 +456,28 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   regenerating examples/ AND `internal/corpus/testdata` (captured cases
   use the synthetic `_corpus/<name>/maximal` naming; `examples-mysql`
   is a copy of examples/mysql's tree).
+
+## Known decisions: performance lints (doc 24)
+
+- Owner decisions 2026-10-02: SQLETCH128–132 are WARNINGS, a separate
+  axis from soundness — never fail a run, never touch renderings,
+  shapes, cache, or fingerprint. `-- @allow CODE[, CODE…] (reason)`
+  suppresses per query; it may name ONLY `diagnostics.PerfLintCodes`
+  (anything else / malformed = SQLETCH016 error, all-or-nothing). An
+  @allow that suppresses nothing = SQLETCH133 warning.
+- Lexical WHITELIST over every verification rendering
+  (`rules.CheckPerf` in `cli.scanChecks`; `rules.CheckPerfTypes` last
+  in `cli.resolvedChecks` — both shared with the LSP). Under-report,
+  never noise; findings in synthesized (woven) text are dropped. Each
+  pass judges unused @allow only for the codes it owns (132 belongs to
+  the resolved pass, so an LSP cache miss never calls it stale).
+- HAVING is not a SQLETCH128 position; SQLETCH132 inspects only the
+  top-level statement's WHERE/ON, skips set operations, and has NO
+  SQLite pairs (a bound param takes the column's affinity). Its
+  whitelist is per-dialect (PG int vs numeric/float; MySQL string vs
+  number) — add a pair only with evidence the index is lost.
+- `:many` test fixtures need a LIMIT (or `@allow SQLETCH130`) to stay
+  diagnostic-free; examples/ is kept warning-free.
 
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 
