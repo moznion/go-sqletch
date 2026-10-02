@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
   "rendered_sql": "\n-- The tenant_scope policy (sqletch.yaml) weaves `tenant_id` scoping\n-- into every query touching audit_logs. ListAuditLogs above already\n-- scopes by hand, so it is left as written; this one never mentions\n-- tenants and is scoped by the compiler.\nSELECT count(*) AS total FROM audit_logs WHERE (audit_logs.tenant_id = $1);\n\n",
   "params": [
     {

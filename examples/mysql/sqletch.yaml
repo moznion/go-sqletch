@@ -1,6 +1,9 @@
 version: 1
 dialect: mysql
-server_version: "8.4"
+# Pinned to the patch release: the auto-managed dev database image is
+# derived from it, and a floating major tag would move the server under
+# the committed cache (SQLETCH203 on the next cache miss).
+server_version: "8.4.11"
 database:
   # dsn: user@tcp(h)/db      # optional, literal only (no ${VAR}); empty = disposable testcontainers MySQL
 schema:

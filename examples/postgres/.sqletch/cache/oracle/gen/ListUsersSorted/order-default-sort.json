@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
   "rendered_sql": "\n-- @when + @order-by (v0.3): a value-conditioned guard and\n-- caller-chosen multi-key sorting over a closed key set.\nSELECT u.id, u.email, u.created_at\nFROM users AS u\nWHERE TRUE\n\nAND (u.status != 'banned')\n\nORDER BY u.id ASC\nLIMIT $1;\n\n",
   "params": [
     {

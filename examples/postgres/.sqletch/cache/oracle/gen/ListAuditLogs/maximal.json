@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
   "rendered_sql": "\nSELECT a.id, a.actor_id, a.action, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = $1\n\n\nAND (a.id \u003c $2)\n\nORDER BY a.id DESC\nLIMIT $3;\n\n",
   "params": [
     {

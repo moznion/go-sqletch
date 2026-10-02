@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
   "rendered_sql": "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n",
   "params": null,
   "columns": [
