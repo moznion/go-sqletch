@@ -1,8 +1,8 @@
 # sqletch Design — 23: Per-query timeouts
 
-Status: ACCEPTED — owner decisions D1–D3 settled 2026-10-02, plus the
-SQLite error normalization (§5.1, same day); implemented. D4–D7 are
-the implementation choices made within them, recorded here for review.
+Status: ACCEPTED — owner decisions D1–D3 settled 2026-10-02;
+implemented. D4–D7 are the implementation choices made within them,
+recorded here for review.
 
 This is a *runtime guardrail*, not a verification feature: nothing in
 the verification model changes. A deadline bounds how long a generated
@@ -24,7 +24,7 @@ query_timeout:
 
 | Template | Config default | Generated deadline |
 |---|---|---|
-| none | absent | none (byte-identical to pre-23 output, except SQLite's §5.1 error normalization) |
+| none | absent | none (byte-identical to pre-23 output) |
 | none | `5s` | 5s |
 | `-- @timeout 30s` | any | 30s |
 | `-- @timeout none` | any | none |
@@ -72,9 +72,8 @@ query_timeout:
   (determinism), and plain pre-1.26 Go. The comment names the
   source (`-- @timeout 1.5s` or `query_timeout.default (5s)`).
 - **D6 — no deadline, no bytes.** A method with no effective deadline
-  emits nothing new, so PostgreSQL/MySQL projects that use neither
-  knob regenerate byte-identically. SQLite is the exception since the
-  §5.1 normalization (every method changes once).
+  emits nothing new, so projects that use neither knob regenerate
+  byte-identically (verified on all three examples).
 - **D7 — config shape.** `query_timeout:` is a mapping with one key,
   `default`, leaving room for later knobs without a breaking rename.
   The value is a string (`*string` in Go, so an explicit `""` is told
@@ -104,46 +103,14 @@ compile the generated package, and execute against the dev database:
 |---|---|
 | pgx v5 | `errors.Is(err, context.DeadlineExceeded)` |
 | go-sql-driver/mysql (database/sql) | `errors.Is(err, context.DeadlineExceeded)` |
-| ncruces/go-sqlite3 (database/sql) | raw: `sqlite3.INTERRUPT` only — normalized by generated code, below |
+| ncruces/go-sqlite3 (database/sql) | `sqlite3.INTERRUPT` — the statement is interrupted promptly, but the driver does not wrap the context error |
 
-With pgx, a single `*pgx.Conn` whose query is interrupted by its
-context is closed by pgx; production code uses a pool (`pgxpool`), as
-the suite does.
-
-### 5.1 SQLite normalization — owner decision 2026-10-02
-
-ncruces/go-sqlite3 stops the statement promptly (sqlite3_interrupt)
-but reports SQLITE_INTERRUPT without wrapping the context's error, so
-`errors.Is(err, context.DeadlineExceeded)` failed on SQLite only. The
-owner decided to normalize it:
-
-- **`runtime.CtxErr(ctx, err)`**: nil stays nil; when `ctx.Err() !=
-  nil` and `err` does not already match it, the result is
-  `fmt.Errorf("%w: %w", ctx.Err(), err)` — BOTH
-  `errors.Is(err, context.DeadlineExceeded|Canceled)` AND
-  `errors.Is(err, sqlite3.INTERRUPT)` hold; otherwise `err` is
-  returned unchanged (identity), so drivers that already wrap the
-  context error are never double-wrapped.
-- **Condition = `ctx.Err()`, not the driver's error code**, because
-  neither `runtime` nor generated code may import a driver. Known edge:
-  an unrelated error racing the deadline also gets the context error
-  prefixed; the original stays reachable via `errors.Is/As` and in the
-  message.
-- **Scope: every SQLite method** (`codegen.Options.NormalizeCtxErr`,
-  set when `dialect: sqlite`), not only @timeout ones — a caller's own
-  deadline or cancel hits the same INTERRUPT. Every driver-error site
-  goes through one codegen funnel (`failExec`): Query/QueryRow/Exec,
-  Scan, `RowsAffected`, plus the `:many` terminal `rows.Err()`
-  (normalized inline). `:maybe-one`'s `sql.ErrNoRows` check runs
-  BEFORE normalization and stays `(None, nil)`. Composition rejects
-  are not driver errors and are untouched.
-- **The observer sees the normalized error** — the variable is
-  rewritten before `ObserveExec`, so metrics and the caller agree on
-  the error class (pinned in the devdb suite).
-- **Byte-identity (D6) no longer holds for SQLite**: every SQLite
-  method gains the normalization lines whether or not a deadline is
-  configured (accepted by the owner; examples/sqlite regenerated, its
-  committed cache untouched). pgx and MySQL output is unchanged.
+sqletch reports the driver's error unchanged; normalizing SQLite's
+interrupt into `context.DeadlineExceeded` in generated code would add
+an error-rewriting branch to every method for one driver's convention,
+and was not done. With pgx, a single `*pgx.Conn` whose query is
+interrupted by its context is closed by pgx; production code uses a
+pool (`pgxpool`), as the suite does.
 
 ## 6. Not in scope
 

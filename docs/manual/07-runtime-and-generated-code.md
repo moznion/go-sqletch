@@ -60,17 +60,12 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
    `query_timeout.default`), the method derives
    `context.WithTimeout(ctx, d)` right before the driver call and
    cancels it on return, so the deadline covers execution, row
-   iteration, and scanning. On every dialect an expired deadline (or
-   a cancelled caller context) satisfies
-   `errors.Is(err, context.DeadlineExceeded)` (resp.
-   `context.Canceled`). pgx and go-sql-driver/mysql report that
-   themselves; ncruces/go-sqlite3 reports `sqlite3.INTERRUPT`, so
-   generated SQLite code passes every driver error through
-   `runtime.CtxErr`, which prefixes the context's error when the
-   context is done and keeps the driver's (`errors.Is(err,
-   sqlite3.INTERRUPT)` still holds). The observer receives the same
-   normalized error. With pgx, use a pool (`pgxpool`): pgx closes a
-   single connection whose query was interrupted by its context.
+   iteration, and scanning. An expired deadline surfaces as the
+   driver's error: pgx and go-sql-driver/mysql report
+   `context.DeadlineExceeded` (`errors.Is`); ncruces/go-sqlite3
+   interrupts the statement and reports `sqlite3.INTERRUPT`. With
+   pgx, use a pool (`pgxpool`): pgx closes a single connection whose
+   query was interrupted by its context.
 
 With `static_expansion`, step 2 is a map lookup into precomposed SQL
 (the `.sqletch/expanded/` files are the audit surface).

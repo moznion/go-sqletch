@@ -43,7 +43,6 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
-		err = runtime.CtxErr(ctx, err)
 		q.observeExec(ctx, "UsersInStatuses", key, execStart, -1, err)
 		return nil, err
 	}
@@ -52,13 +51,11 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 	for rows.Next() {
 		var i UsersInStatusesRow
 		if err := rows.Scan(&i.ID, &i.Email, &i.Status); err != nil {
-			err = runtime.CtxErr(ctx, err)
 			q.observeExec(ctx, "UsersInStatuses", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	err = runtime.CtxErr(ctx, rows.Err())
-	q.observeExec(ctx, "UsersInStatuses", key, execStart, int64(len(items)), err)
-	return items, err
+	q.observeExec(ctx, "UsersInStatuses", key, execStart, int64(len(items)), rows.Err())
+	return items, rows.Err()
 }

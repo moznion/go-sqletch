@@ -508,9 +508,6 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			Style:    drv.style,
 			// Codegen-only (design 23): never part of the fingerprint.
 			DefaultTimeout: cfg.QueryTimeout.DefaultDuration,
-			// ncruces/go-sqlite3 reports an expired context as
-			// SQLITE_INTERRUPT; normalize (design 23 §5).
-			NormalizeCtxErr: cfg.Dialect == "sqlite",
 		}, drv.typemap, inputsByTarget[ti])
 		res.Diags = append(res.Diags, diags...)
 		if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {

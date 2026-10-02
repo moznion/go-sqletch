@@ -25,7 +25,7 @@
 //     [ComposedCache] methods (design doc 18) — is USER API too.
 //
 //   - The GENERATED-CODE CONTRACT — [Frag], [ShapeKey], [Bind],
-//     [Compose] and friends, [ComposedCache], [Expanded], [CtxErr]. These are
+//     [Compose] and friends, [ComposedCache], [Expanded]. These are
 //     public only because generated code lives outside this module.
 //     They also follow Go API compatibility within v1, but their
 //     semantics are pinned to the sqletch compiler: after upgrading

@@ -521,23 +521,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   exec clock — never server-side SQL (that would change renderings).
 - It is a CODEGEN input: never in the cache fingerprint, never in a
   rendering decision. A method with no effective deadline emits no new
-  bytes on pgx/MySQL (examples regenerate byte-identically without the
-  knobs); SQLite differs only by the normalization below.
+  bytes (examples regenerate byte-identically without the knobs).
 - Malformed/non-positive/duplicate directive = SQLETCH017; bad config
   value (incl. `""`, `0s`, `none`) = SQLETCH318 — never a silent
   "no deadline". The directive comment stays in the skeleton, so
   editing it re-keys oracle entries; the config default re-keys nothing.
 - Literal spelling `N*time.Unit` (largest exact unit) — pinned by
-  `TestDurationLiteral`.
-- SQLite error normalization (owner decision 2026-10-02, doc 23 §5.1):
-  ncruces reports an expired/cancelled ctx as `sqlite3.INTERRUPT`, so
-  EVERY SQLite method (not just @timeout ones) funnels every driver
-  error through `runtime.CtxErr` (codegen `failExec` +
-  `Options.NormalizeCtxErr`; `:many`'s terminal `rows.Err()` inline;
-  `:maybe-one` no-rows check stays first). Decided on `ctx.Err()`
-  because runtime/generated code must never import a driver; the
-  observer gets the normalized error. pgx/MySQL output unchanged;
-  SQLite output is NOT byte-identical to pre-23 (accepted).
+  `TestDurationLiteral`. ncruces/go-sqlite3 reports expiry as
+  `sqlite3.INTERRUPT`, not `context.DeadlineExceeded`; pgx/MySQL wrap
+  the context error. Errors are passed through unchanged (doc 23 §5).
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
