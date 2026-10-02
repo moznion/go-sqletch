@@ -24,9 +24,13 @@ import (
 // predicates are considered (a subquery's columns would need scope
 // resolution this facade does not model), with one side a bare column
 // and the other a bare parameter (PostgreSQL also accepts one cast of
-// it, which is what the oracle's inferred type reflects).
+// it; the comparison is then judged at the CAST's type, resolved via
+// typeByName, because the oracle infers one type per parameter from its
+// first use and a cast elsewhere does not change it — an unresolvable
+// cast type is silent).
 func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
-	tree dialect.Tree, cat *cache.Catalog, paramTypes map[string]dialect.TypeRef) []diagnostics.Diagnostic {
+	tree dialect.Tree, cat *cache.Catalog, paramTypes map[string]dialect.TypeRef,
+	typeByName func(string) (dialect.TypeRef, bool)) []diagnostics.Diagnostic {
 
 	if cat == nil || len(rs) == 0 || tree.HasSetOperation() {
 		return nil // no verdict at all, so no unused-@allow verdict either
@@ -60,7 +64,7 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 				if !isColRef(col) {
 					continue
 				}
-				params := paramOperands(val, kind == "IN", dialectName == "postgres")
+				params := paramOperands(r.SQL, val, kind == "IN", dialectName == "postgres")
 				if len(params) == 0 {
 					continue
 				}
@@ -68,8 +72,15 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 				if column == nil {
 					continue
 				}
-				for _, p := range params {
+				for _, op := range params {
+					p := op.param
 					pt, ok := paramTypes[p]
+					if op.cast != "" {
+						pt, ok = dialect.TypeRef{}, false
+						if typeByName != nil {
+							pt, ok = typeByName(op.cast)
+						}
+					}
 					if !ok {
 						continue
 					}
@@ -95,18 +106,25 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 	return c.finish([]diagnostics.Code{diagnostics.CodePerfTypeMismatch})
 }
 
+// paramOperand is one placeholder of a value operand; cast is the
+// source text of the type it is cast to ("" when bare).
+type paramOperand struct {
+	param, cast string
+}
+
 // paramOperands returns the parameters of a value operand that is a
 // bare placeholder (or, for IN, a parenthesized list of them). With
 // allowCast, one `::type` / CAST(… AS type) around the placeholder is
-// accepted. Any other shape returns nil.
-func paramOperands(ops []ptok, inList, allowCast bool) []string {
+// accepted. Any other shape returns nil. sql is the rendering the
+// tokens index into.
+func paramOperands(sql string, ops []ptok, inList, allowCast bool) []paramOperand {
 	if inList {
 		if len(ops) < 3 || ops[0].Kind != dialect.KindLParen || matchingParen(ops, 0) != len(ops)-1 {
 			return nil
 		}
-		var out []string
+		var out []paramOperand
 		for _, arg := range splitArgs(ops[1 : len(ops)-1]) {
-			p := paramOperands(arg, false, allowCast)
+			p := paramOperands(sql, arg, false, allowCast)
 			if p == nil {
 				return nil
 			}
@@ -115,7 +133,7 @@ func paramOperands(ops []ptok, inList, allowCast bool) []string {
 		return out
 	}
 	if len(ops) == 1 && ops[0].param != "" {
-		return []string{ops[0].param}
+		return []paramOperand{{param: ops[0].param}}
 	}
 	if !allowCast || len(ops) < 3 {
 		return nil
@@ -126,14 +144,19 @@ func paramOperands(ops []ptok, inList, allowCast bool) []string {
 				return nil
 			}
 		}
-		return []string{ops[0].param}
+		return []paramOperand{{param: ops[0].param, cast: tokenText(sql, ops[2:])}}
 	}
 	if ops[0].isIdent("CAST") && len(ops) >= 6 && ops[1].Kind == dialect.KindLParen &&
 		matchingParen(ops, 1) == len(ops)-1 && ops[2].param != "" && ops[3].isIdent("AS") &&
 		isTypeSpec(ops[4:len(ops)-1]) {
-		return []string{ops[2].param}
+		return []paramOperand{{param: ops[2].param, cast: tokenText(sql, ops[4:len(ops)-1])}}
 	}
 	return nil
+}
+
+// tokenText is the source text spanning a non-empty token run.
+func tokenText(sql string, ops []ptok) string {
+	return sql[ops[0].Start:ops[len(ops)-1].End]
 }
 
 // resolveColumn binds a bare column reference against the top-level

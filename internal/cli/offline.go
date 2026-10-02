@@ -665,6 +665,6 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 	}
 	// SQLETCH132 (design 24): needs column types and the final
 	// parameter types, so it runs last, in this shared pass.
-	diags = append(diags, rules.CheckPerfTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes)...)
+	diags = append(diags, rules.CheckPerfTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes, drv.typeByName)...)
 	return paramTypes, diags, nil
 }

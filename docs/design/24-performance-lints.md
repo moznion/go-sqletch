@@ -113,9 +113,12 @@ time.
 ### 3.4 SQLETCH130 / SQLETCH131 — unbounded results, OFFSET paging
 
 - **130** fires once, at the query header, when the query is `:many`,
-  its statement is a SELECT (a depth-0 `SELECT` and no depth-0
-  `INSERT`/`UPDATE`/`DELETE`/`REPLACE` — DML `RETURNING` is bounded by
-  what it modifies), and **any** verification rendering lacks a depth-0
+  its statement is a SELECT (the statement's own verb — the first
+  depth-0 `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`REPLACE`/`VALUES`/`TABLE`,
+  past any `WITH` list — is `SELECT`; DML `RETURNING` is bounded by
+  what it modifies; a depth-0 `UPDATE` in `FOR [NO KEY] UPDATE` or a
+  `replace(…)` call does not make a SELECT DML, and an unbounded
+  row-locking SELECT is the costliest case), and **any** verification rendering lacks a depth-0
   `LIMIT` (other than `LIMIT ALL`) or `FETCH FIRST|NEXT`. A LIMIT that
   only some renderings carry still warns: the other shapes are
   reachable. (No slot admits a guarded LIMIT today; checking every
@@ -138,8 +141,12 @@ columns would need scope resolution the facade does not model), set
 operations are skipped (SQLite's `Relations()` is the first core's),
 and the operands must be a bare column vs. a bare placeholder (or an
 `IN` list of them). PostgreSQL also accepts one `::type` /
-`CAST(… AS type)` around the placeholder — the oracle's inferred
-parameter type IS that cast type; a double cast is skipped. MySQL takes
+`CAST(… AS type)` around the placeholder, and then judges the pair at
+the CAST's type (resolved like a `-- @param` type name; unresolvable ⇒
+silent), not the parameter's inferred type: PostgreSQL infers one type
+per parameter from its first use, so in `price = :v AND id = :v::int4`
+`$1` is numeric yet `id = $1::int4` is index-safe. A double cast is
+skipped. MySQL takes
 bare placeholders only: there the annotation types the bind, but an
 explicit cast would decide the comparison.
 

@@ -263,6 +263,19 @@ func TestPerf_ManyWithoutLimit(t *testing.T) {
 		{"delete returning", "sqlite", "-- name: Q :many\nDELETE FROM users RETURNING id\n", false},
 		{"mysql limit", "mysql", "-- name: Q :many\nSELECT id FROM users LIMIT :off, :lim\n", false},
 		{"sqlite no limit", "sqlite", "-- name: Q :many\nSELECT id FROM users\n", true},
+		// The statement's own verb decides DML, never a depth-0 keyword
+		// elsewhere: a locking clause or a replace() call is still a
+		// SELECT (and an unbounded row-locking SELECT is the costliest).
+		{"pg for update", "postgres", "-- name: Q :many\nSELECT id FROM jobs WHERE state = 'queued' FOR UPDATE SKIP LOCKED\n", true},
+		{"pg for no key update", "postgres", "-- name: Q :many\nSELECT id FROM jobs FOR NO KEY UPDATE\n", true},
+		{"pg for update limited", "postgres", "-- name: Q :many\nSELECT id FROM jobs LIMIT 10 FOR UPDATE SKIP LOCKED\n", false},
+		{"mysql for update", "mysql", "-- name: Q :many\nSELECT id FROM jobs FOR UPDATE\n", true},
+		{"mysql replace call", "mysql", "-- name: Q :many\nSELECT replace(name, 'a', 'b') AS n FROM users\n", true},
+		{"sqlite replace call", "sqlite", "-- name: Q :many\nSELECT replace(name, 'a', 'b') AS n FROM users\n", true},
+		{"cte then update returning", "postgres", "-- name: Q :many\nWITH x AS (SELECT id FROM users) UPDATE users SET a = 1 FROM x WHERE users.id = x.id RETURNING users.id\n", false},
+		{"cte columns then select", "postgres", "-- name: Q :many\nWITH x (i) AS (SELECT id FROM users) SELECT i FROM x\n", true},
+		{"modifying cte then select", "postgres", "-- name: Q :many\nWITH d AS (DELETE FROM users RETURNING id) SELECT id FROM d\n", true},
+		{"insert select", "postgres", "-- name: Q :many\nINSERT INTO a (id) SELECT id FROM b RETURNING id\n", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

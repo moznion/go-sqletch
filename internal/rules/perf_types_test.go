@@ -88,7 +88,10 @@ func perfTypes(t *testing.T, dialectName, src string, params map[string]dialect.
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CheckPerfTypes(profile, dialectName, q, rs, tree, typesCatalog(t, dialectName), params)
+	typeByName := map[string]func(string) (dialect.TypeRef, bool){
+		"postgres": postgres.TypeMap{}.TypeByName, "mysql": mysql.TypeMap{}.TypeByName, "sqlite": sqlite.TypeMap{}.TypeByName,
+	}[dialectName]
+	return CheckPerfTypes(profile, dialectName, q, rs, tree, typesCatalog(t, dialectName), params, typeByName)
 }
 
 func TestPerfTypes_Postgres(t *testing.T) {
@@ -118,6 +121,16 @@ func TestPerfTypes_Postgres(t *testing.T) {
 		{"double cast", "u.id = :p::numeric::bigint", numeric, nil},
 		{"wrapped column", "abs(u.id) = :p", numeric, nil},
 		{"subquery scope", "u.id IN (SELECT o.id FROM orgs AS o WHERE o.id = :p)", numeric, nil},
+
+		// With a cast, the comparison is against the CAST's type, not the
+		// parameter's inferred one ($1 is typed once, by its first use):
+		// `price = :p AND id = :p::int4` infers numeric, yet `id = $1::int4`
+		// is int8 vs int4 — index-safe.
+		{"cast to int over numeric param", "u.id = :p::int4", numeric, nil},
+		{"CAST to int over numeric param", "u.id = CAST(:p AS integer)", numeric, nil},
+		{"cast to numeric over int param", "u.id = :p::numeric", int8, []string{"u.id = :p::numeric"}},
+		{"cast to multiword type", "u.age < :p::double precision", int8, []string{"u.age < :p::double precision"}},
+		{"cast to unknown type", "u.id = :p::no_such_type", numeric, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

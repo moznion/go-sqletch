@@ -608,17 +608,27 @@ func reportWrapped(c *perfCollector, q *template.QueryTemplate, r ast.Rendering,
 
 // ---- SQLETCH130 / 131 ----------------------------------------------------
 
+// statementVerb is the leading keyword of the statement itself, past
+// any WITH list (CTE bodies sit deeper, so the first depth-0 verb is
+// the main statement's). Only this position decides "is DML": a
+// depth-0 UPDATE in `FOR UPDATE` or a `replace(…)` call is not one.
+func statementVerb(toks []ptok) string {
+	for _, t := range toks {
+		if t.depth == 0 && t.isIdent("SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE", "VALUES", "TABLE") {
+			return t.upper
+		}
+	}
+	return ""
+}
+
 func lintTail(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks []ptok) {
-	isSelect, dml, limited := false, false, false
+	verb := statementVerb(toks)
+	limited := false
 	for i, t := range toks {
 		if t.depth != 0 {
 			continue
 		}
 		switch {
-		case t.isIdent("SELECT"):
-			isSelect = true
-		case t.isIdent("INSERT", "UPDATE", "DELETE", "REPLACE"):
-			dml = true
 		case t.isIdent("LIMIT"):
 			if i+1 >= len(toks) || !toks[i+1].isIdent("ALL") {
 				limited = true
@@ -629,7 +639,7 @@ func lintTail(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks
 			}
 		}
 	}
-	if q.Annotation == template.AnnotationMany && isSelect && !dml && !limited {
+	if q.Annotation == template.AnnotationMany && verb == "SELECT" && !limited {
 		c.add(diagnostics.Warnf(diagnostics.CodePerfManyNoLimit, q.HeaderSpan,
 			"this :many query can run without a LIMIT: its result (and the slice the generated method builds) grows with the table").
 			WithHint("add `LIMIT :limit` (keyset-paginate with an @if-present cursor), or `-- @allow %s` for a result bounded by the data model", diagnostics.CodePerfManyNoLimit))
