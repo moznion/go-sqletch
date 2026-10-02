@@ -77,7 +77,10 @@ SQLETCH318 are reserved for the concurrent `@timeout` work).
   `ON DUPLICATE KEY` open none.
 - **HAVING is excluded** (a decision beyond D3's wording, 2026-10-02):
   HAVING filters groups after aggregation, where no index applies, so a
-  "function on the column" there is not an index finding.
+  "function on the column" there is not an index finding. An
+  aggregate's `FILTER (WHERE …)` (PostgreSQL/SQLite) is excluded for
+  the same reason — it filters rows already fetched — for both 128 and
+  129.
 - **Spans and determinism.** Findings map through `Rendering.Map`
   back to template bytes; a placeholder maps to its `:name`, and any
   other synthesized token (a policy-woven conjunct, a construct

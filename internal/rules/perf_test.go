@@ -134,6 +134,30 @@ LIMIT 10
 	}
 }
 
+// An aggregate's FILTER (WHERE …) runs over rows the query already
+// fetched — no index can serve it, exactly like HAVING — so neither
+// SQLETCH128 nor 129 fires there; the statement's own WHERE after it
+// still does.
+func TestPerf_AggregateFilterIsNotAPredicate(t *testing.T) {
+	for _, d := range []string{"postgres", "sqlite"} {
+		t.Run(d, func(t *testing.T) {
+			src := `-- name: Q :many
+SELECT count(*) FILTER (WHERE lower(u.email) = 'a' AND u.name LIKE '%x') AS n
+FROM users AS u
+WHERE lower(u.name) = :n
+LIMIT 10
+`
+			diags := perfLint(t, d, src)
+			if got := spanTexts(src, diags, diagnostics.CodePerfWrappedColumn); !slices.Equal(got, []string{"lower(u.name)"}) {
+				t.Errorf("SQLETCH128 got %q", got)
+			}
+			if got := spanTexts(src, diags, diagnostics.CodePerfLeadingLike); len(got) != 0 {
+				t.Errorf("SQLETCH129 got %q", got)
+			}
+		})
+	}
+}
+
 // A subquery's own WHERE is a predicate position; its operand position
 // (`IN (SELECT …)`) is not a boolean group.
 func TestPerf_WrappedColumnInSubquery(t *testing.T) {
@@ -358,6 +382,27 @@ func TestPerf_OffsetKeywordColumnPositions(t *testing.T) {
 		{"from table", "mysql", "SELECT id FROM offset WHERE id = :id"},
 		{"join table", "sqlite", "SELECT t.id FROM t JOIN offset ON offset.id = t.id"},
 		{"returning", "sqlite", "DELETE FROM t WHERE id = :id RETURNING offset"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :many\n" + c.src + "\n"
+			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfOffsetPaging); len(got) != 0 {
+				t.Errorf("got %q", got)
+			}
+		})
+	}
+}
+
+// A projection alias spelled `offset` without AS (non-reserved on
+// MySQL/SQLite) is not the clause: its "operand" would run into the
+// FROM, so the operand ends at the next clause keyword and is empty.
+func TestPerf_OffsetBareAlias(t *testing.T) {
+	cases := []struct{ name, dialect, src string }{
+		{"before from", "mysql", "SELECT u.id offset FROM users u LIMIT 1"},
+		{"before from sqlite", "sqlite", "SELECT u.id offset FROM users u LIMIT 1"},
+		{"before comma", "mysql", "SELECT u.id offset, u.name FROM users u LIMIT 1"},
+		{"no from", "sqlite", "SELECT 1 offset"},
+		{"before union", "mysql", "SELECT u.id offset FROM users u UNION SELECT 2 LIMIT 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

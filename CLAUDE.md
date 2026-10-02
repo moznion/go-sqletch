@@ -473,7 +473,8 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   never noise; findings in synthesized (woven) text are dropped. Each
   pass judges unused @nolint only for the codes it owns (132 belongs to
   the resolved pass, so an LSP cache miss never calls it stale).
-- HAVING is not a SQLETCH128 position; SQLETCH132 inspects only the
+- HAVING and aggregate `FILTER (WHERE …)` are not SQLETCH128/129
+  positions; SQLETCH132 inspects only the
   top-level statement's WHERE/ON, skips set operations, and has NO
   SQLite pairs (a bound param takes the column's affinity). Its
   whitelist is per-dialect (PG int vs numeric/float; MySQL string vs

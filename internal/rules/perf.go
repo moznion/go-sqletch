@@ -251,12 +251,13 @@ var boolOpeners = []string{"WHERE", "ON", "AND", "OR", "NOT"}
 
 func predicateContexts(toks []ptok) predCtx {
 	pc := predCtx{pred: make([]bool, len(toks)), top: make([]bool, len(toks))}
-	var active, top []bool
+	var active, top, filter []bool
 	var cases []int
 	grow := func(d int) {
 		for len(active) <= d {
 			active = append(active, false)
 			top = append(top, false)
+			filter = append(filter, false)
 			cases = append(cases, 0)
 		}
 	}
@@ -270,7 +271,13 @@ func predicateContexts(toks []ptok) predCtx {
 			active[d+1] = inner
 			top[d+1] = inner && top[d]
 			cases[d+1] = 0
+			// An aggregate's FILTER (WHERE …) filters rows already
+			// fetched — like HAVING, no index can serve it.
+			filter[d+1] = i > 0 && toks[i-1].isIdent("FILTER")
 		case t.isIdent("WHERE"):
+			if filter[d] {
+				break
+			}
 			active[d], top[d] = true, d == 0
 		case t.isIdent("ON"):
 			// ON CONFLICT / ON DUPLICATE KEY open no predicate.
@@ -647,8 +654,15 @@ func lintTail(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks
 	lintOffset(c, q, r, toks)
 }
 
-// tailEnders end an OFFSET/LIMIT operand at depth 0.
-var tailEnders = []string{"ROW", "ROWS", "FETCH", "LIMIT", "OFFSET", "FOR", "LOCK", "UNION", "INTERSECT", "EXCEPT"}
+// tailEnders end an OFFSET/LIMIT operand at depth 0. Clause keywords
+// are listed too: a real operand never contains one at its own depth,
+// and an `offset` that is really a bare projection alias (MySQL/SQLite,
+// `SELECT id offset FROM t`) then has an empty operand instead of
+// swallowing the rest of the statement.
+var tailEnders = []string{
+	"ROW", "ROWS", "FETCH", "LIMIT", "OFFSET", "FOR", "LOCK", "UNION", "INTERSECT", "EXCEPT",
+	"FROM", "WHERE", "GROUP", "HAVING", "ORDER", "WINDOW", "RETURNING", "INTO", "JOIN",
+}
 
 // nonClausePredecessors are tokens after which `offset` is a column
 // or table name, not the clause (it is non-reserved on MySQL/SQLite):
