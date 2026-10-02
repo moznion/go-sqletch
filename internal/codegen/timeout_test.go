@@ -42,7 +42,11 @@ func genTimeout(t *testing.T, style runtime.Style, def time.Duration, src string
 		in.Columns = []dialect.ColumnDesc{{Name: "id", Type: typ}}
 		in.Nullable = []bool{false}
 	}
-	files, diags := Generate(Options{Package: "gen", Style: style, DefaultTimeout: def}, tm, []QueryInput{in})
+	opts := Options{Package: "gen", Style: style, DefaultTimeout: def}
+	if style == runtime.StyleQuestion {
+		opts.Explain = runtime.ExplainMySQL // design 22: required for the shared style
+	}
+	files, diags := Generate(opts, tm, []QueryInput{in})
 	if len(diags) != 0 {
 		t.Fatalf("generate: %+v", diags)
 	}

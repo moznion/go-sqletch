@@ -27,6 +27,10 @@ type driver struct {
 	// (SQLETCH213). Only Tier 1 can disagree, so Tier 2 leaves it nil.
 	writableName func(uint32) (string, bool)
 	style        runtime.Style
+	// explain is the EXPLAIN vocabulary of the generated Explain<Query>
+	// methods (design 22); MySQL and SQLite share a placeholder style,
+	// so it cannot be derived from style.
+	explain runtime.ExplainDialect
 	// expandIn: @in is arity-expanded (a shape dimension) rather than a
 	// single array bind.
 	expandIn bool
@@ -97,6 +101,7 @@ func driverFor(cfg config.Config) driver {
 			typemap:             sqlite.TypeMap{},
 			typeByName:          sqlite.TypeMap{}.TypeByName,
 			style:               runtime.StyleQuestion,
+			explain:             runtime.ExplainSQLite,
 			expandIn:            true,
 			annotationsRequired: true,
 			columnHintsRequired: true,
@@ -122,6 +127,7 @@ func driverFor(cfg config.Config) driver {
 			typemap:             mysql.TypeMap{},
 			typeByName:          mysql.TypeMap{}.TypeByName,
 			style:               runtime.StyleQuestion,
+			explain:             runtime.ExplainMySQL,
 			expandIn:            true,
 			annotationsRequired: true,
 			acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
@@ -152,6 +158,7 @@ func driverFor(cfg config.Config) driver {
 		typeByName:   postgres.TypeMap{}.TypeByName,
 		writableName: postgres.TypeMap{}.WritableName,
 		style:        runtime.StyleDollar,
+		explain:      runtime.ExplainPostgres,
 		acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
 			conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
 				DSN:              cfg.Database.DSN,

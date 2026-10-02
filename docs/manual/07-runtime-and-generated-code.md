@@ -99,6 +99,52 @@ connection is closed anyway; a cancel can race the statement finishing
 forward cancel requests; inside a transaction the transaction is
 aborted either way.
 
+## EXPLAIN from code
+
+Every query method has an `Explain<Query>` sibling with the same
+arguments plus `runtime.ExplainOptions`. It EXPLAINs the statement the
+query method would send for those arguments, against whatever database
+the `Queries` value points at — useful for the plan a real value
+produces on a production-like database, which `sqletch explain
+--analyze` (dev database, all parameters NULL) cannot show:
+
+```go
+plan, err := q.ExplainSearchUsers(ctx, gen.SearchUsersParams{...}, runtime.ExplainOptions{})
+fmt.Println(plan.Output)   // the plan text
+fmt.Println(plan.SQL)      // byte-identical to what q.SearchUsers sends
+
+plan, err = q.ExplainSearchUsers(ctx, arg, runtime.ExplainOptions{
+	Analyze: true,                 // execute and report actual rows/timings
+	Format:  runtime.ExplainJSON,  // the engine's JSON plan
+})
+```
+
+| Dialect | Text | JSON | `Analyze` |
+|---|---|---|---|
+| PostgreSQL | `EXPLAIN` | `EXPLAIN (FORMAT JSON)` | `EXPLAIN (ANALYZE[, FORMAT JSON])` |
+| MySQL | `EXPLAIN FORMAT=TREE` | `EXPLAIN FORMAT=JSON` | `EXPLAIN ANALYZE[ FORMAT=JSON]` |
+| SQLite | `EXPLAIN QUERY PLAN` | the same rows as a JSON array | `runtime.ErrExplainUnsupported` |
+
+- **`Analyze` never commits.** The statement runs inside a transaction
+  that is rolled back — a savepoint when the `Queries` value is already
+  bound to a transaction (`WithTx`), so your transaction stays usable.
+  A `DBTX` that can begin neither (a custom wrapper without
+  `Begin`/`BeginTx`) gets `runtime.ErrExplainNoTx`. Rollback cannot
+  undo non-transactional effects: sequence advances, MyISAM tables,
+  side effects of functions the statement calls.
+- The same pre-SQL errors as the query method apply (zero required
+  `@choose`, zero required tree, …).
+- `Plan.ShapeKey` is the key `OnQuery` reports. `Explain<Query>` does
+  not fire `OnQuery` or the observer's exec/reject events; it reads
+  the composed-SQL cache like any call.
+- MySQL quirks the server owns: `FORMAT=TREE` prints
+  `<not executable by iterator executor>` for single-table
+  `UPDATE`/`DELETE` (use JSON), and 8.4 refuses `EXPLAIN ANALYZE
+  FORMAT=JSON` unless `explain_json_format_version=2`. sqletch returns
+  the server's error unchanged.
+- The `Explain` methods are not in `Querier`, so existing mocks keep
+  compiling. A query named `Explain<another query>` is SQLETCH310.
+
 ## Nullability
 
 A row field is an `optional.Option[T]` when the column can be NULL in
@@ -116,10 +162,12 @@ editing generated code.
 doc, "API contract (v1)"):
 
 - **For you**: `Tree`, `And`/`Or`, the generated predicate
-  constructors and `<Query>Unscoped()`, `TreeCaps`, and the sentinel
-  errors above. Filter trees are values — build them in HTTP handlers
-  or use-case layers and pass them down; the repository stays the only
-  place that knows SQL.
+  constructors and `<Query>Unscoped()`, `TreeCaps`, the sentinel
+  errors above, and the EXPLAIN types (`ExplainOptions`,
+  `ExplainFormat`, `Plan`, `ErrExplainUnsupported`,
+  `ErrExplainNoTx`). Filter trees are values — build them in HTTP
+  handlers or use-case layers and pass them down; the repository stays
+  the only place that knows SQL.
 - **For generated code**: fragment tables, composers, caches. Public
   only because your generated package lives outside sqletch's module.
   Don't construct these by hand; after upgrading sqletch, re-run

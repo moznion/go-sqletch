@@ -515,6 +515,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			Style:    drv.style,
 			// Codegen-only (design 23): never part of the fingerprint.
 			DefaultTimeout: cfg.QueryTimeout.DefaultDuration,
+			Explain:        drv.explain,
 		}, drv.typemap, inputsByTarget[ti])
 		res.Diags = append(res.Diags, diags...)
 		if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {

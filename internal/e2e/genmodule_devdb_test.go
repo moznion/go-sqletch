@@ -191,9 +191,11 @@ const e2eMain = `package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -522,6 +524,88 @@ func main() {
 		"SearchUsers enumerable count")
 	expect(gen.ShapeSpace["FilterUsers"].Unbounded, "@filter-tree marks its query unbounded")
 
+	// Design 22: Explain<Query>. Plan.SQL is byte-identical to what the
+	// query method sends for the same arguments (seen through OnQuery).
+	var lastSQL string
+	q.OnQuery(func(_, sql string) { lastSQL = sql })
+	searchArg := gen.SearchUsersParams{Status: sqletch.Present("active"), Sort: gen.SearchUsersSortEmailAsc, Limit: 10}
+	_, err = q.SearchUsers(ctx, searchArg)
+	die(err)
+	lastSQL, executedSQL := "", lastSQL
+	plan, err := q.ExplainSearchUsers(ctx, searchArg, sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(lastSQL == "", "explain does not fire the OnQuery hook")
+	expect(plan.SQL == executedSQL, "explained SQL is byte-identical to the executed SQL")
+	expect(plan.Statement == "EXPLAIN "+plan.SQL, "text explain prefix")
+	expect(plan.Query == "SearchUsers" && plan.ShapeKey != "" && !plan.Analyzed, "plan identifies query and shape")
+	expect(strings.Contains(plan.Output, "Scan on users"), "text plan names the scan: "+plan.Output)
+	jplan, err := q.ExplainSearchUsers(ctx, searchArg, sqletchruntime.ExplainOptions{Format: sqletchruntime.ExplainJSON})
+	die(err)
+	var jdoc []map[string]any
+	expect(json.Unmarshal([]byte(jplan.Output), &jdoc) == nil && len(jdoc) == 1 && jdoc[0]["Plan"] != nil,
+		"JSON plan parses: "+jplan.Output)
+	_, err = q.ExplainSearchUsers(ctx, gen.SearchUsersParams{Limit: 1, Sort: gen.SearchUsersSort(99)}, sqletchruntime.ExplainOptions{})
+	expect(err != nil, "explain keeps the @choose rejection")
+
+	// @filter-tree!: the tree stays a required argument and its key
+	// segment reaches Plan.ShapeKey; the zero tree is still refused.
+	tplan, err := q.ExplainFilterUsers(ctx, gen.And(gen.FilterUsersTenant(1), gen.FilterUsersStatusEq("active")),
+		gen.FilterUsersParams{Limit: 100}, sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(strings.Contains(tplan.ShapeKey, ";t="), "tree shape key: "+tplan.ShapeKey)
+	_, err = q.ExplainFilterUsers(ctx, sqletchruntime.Tree{}, gen.FilterUsersParams{Limit: 1}, sqletchruntime.ExplainOptions{})
+	expect(errors.Is(err, sqletchruntime.ErrFilterRequired), "explain keeps the zero-tree rejection")
+
+	// ANALYZE executes inside a rolled-back transaction: actual timings
+	// in the plan, nothing written afterwards — UPDATE and INSERT alike.
+	countUsers := func() int64 {
+		var n int64
+		die(conn.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&n))
+		return n
+	}
+	before, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 1})
+	die(err)
+	users := countUsers()
+	aplan, err := q.ExplainUpdateUserProfile(ctx,
+		gen.UpdateUserProfileParams{ID: 1, NewEmail: sqletch.Present("analyzed@example.com")},
+		sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	expect(aplan.Analyzed && strings.Contains(aplan.Output, "actual time"), "analyze reports actuals: "+aplan.Output)
+	expect(aplan.Statement == "EXPLAIN (ANALYZE) "+aplan.SQL, "analyze prefix")
+	_, err = q.ExplainCreateUser(ctx, gen.CreateUserParams{Email: "ghost@example.com", Status: "active", TenantID: 1},
+		sqletchruntime.ExplainOptions{Analyze: true, Format: sqletchruntime.ExplainJSON})
+	die(err)
+	after, err := q.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 1})
+	die(err)
+	expect(after.Email == before.Email, "explain analyze rolled the UPDATE back")
+	expect(countUsers() == users, "explain analyze rolled the INSERT back")
+
+	// Inside a caller's transaction the ANALYZE scope is a savepoint:
+	// rolled back on its own, the caller's tx stays usable and keeps
+	// its own earlier write.
+	tx, err := conn.Begin(ctx)
+	die(err)
+	qtx := q.WithTx(tx)
+	_, err = qtx.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{ID: 2, Nickname: sqletch.Present(optional.Some("in-tx"))})
+	die(err)
+	_, err = qtx.ExplainUpdateUserProfile(ctx,
+		gen.UpdateUserProfileParams{ID: 2, Nickname: sqletch.Present(optional.Some("savepoint"))},
+		sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	inTx, err := qtx.GetUserProfile(ctx, gen.GetUserProfileParams{ID: 2})
+	die(err)
+	expect(inTx.Nickname.TakeOr("") == "in-tx", "savepoint undid only the explained write")
+	die(tx.Rollback(ctx))
+
+	// A DBTX that cannot begin a transaction never runs ANALYZE.
+	_, err = gen.New(noBegin{conn}).ExplainSearchUsers(ctx, searchArg, sqletchruntime.ExplainOptions{Analyze: true})
+	expect(errors.Is(err, sqletchruntime.ErrExplainNoTx), "ANALYZE without a transaction is refused")
+	_, err = gen.New(noBegin{conn}).ExplainSearchUsers(ctx, searchArg, sqletchruntime.ExplainOptions{})
+	die(err)
+
 	fmt.Println("E2E-OK")
 }
+
+// noBegin hides the connection's Begin: only the DBTX methods remain.
+type noBegin struct{ gen.DBTX }
 `

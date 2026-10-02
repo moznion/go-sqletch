@@ -587,6 +587,31 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   → `sqlite3.INTERRUPT` and NOT the ctx error (asserted both ways so a
   driver upgrade is noticed). Portable check: `ctx.Err() != nil`.
 
+## Known decisions: runtime EXPLAIN (doc 22)
+
+- Owner decisions 2026-10-02: explicit `Explain<Query>(…, opts
+  runtime.ExplainOptions) (runtime.Plan, error)` per query (no
+  auto-explain hook); text|JSON closed choice; ANALYZE supported;
+  always generated (no knob). Not in `Querier` (mock compatibility).
+- `codegen.writePreamble` is the ONE writer of shape-key derivation,
+  composition and bind resolution for BOTH the query method and its
+  Explain sibling — that is the byte-identity guarantee for
+  `Plan.SQL`. Never fork it; `TestGenerate_ExplainPreambleIdentity`
+  pins it per preamble kind.
+- The EXPLAIN prefix is a constant from `runtime.ExplainStatement`'s
+  closed table — never caller text. ANALYZE wraps EVERY statement (not
+  just DML; a SELECT can call side-effecting functions) in a
+  rolled-back tx, a savepoint inside a caller's tx (pgx `Tx.Begin`;
+  database/sql `SAVEPOINT sqletch_explain`); no tx ⇒ `ErrExplainNoTx`.
+  SQLite: ANALYZE ⇒ `ErrExplainUnsupported` before any DB work.
+- `codegen.Options.Explain` must be set for StyleQuestion (MySQL and
+  SQLite share it); zero is only inferred as PostgreSQL for
+  StyleDollar. `opts` is reserved in `argIdent`; `explain`/`explainTx`
+  in `queriesMethodNames`; `Foo`+`ExplainFoo` queries ⇒ SQLETCH310.
+- MySQL 8.4 server behaviors are passed through, not second-guessed:
+  TREE prints `<not executable by iterator executor>` for single-table
+  UPDATE/DELETE; `EXPLAIN ANALYZE FORMAT=JSON` is ERROR 1235 by default.
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

@@ -62,3 +62,16 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	q.observeExec(ctx, "ListAuditLogs", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainListAuditLogs EXPLAINs the statement ListAuditLogs would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainListAuditLogs(ctx context.Context, arg ListAuditLogsParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if arg.AfterID.IsPresent() {
+		key.Guards |= 1 << 0
+	}
+	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Limit})
+	return q.explain(ctx, "ListAuditLogs", key.String(), opts, sqlText, args)
+}

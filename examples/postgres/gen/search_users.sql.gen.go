@@ -100,3 +100,30 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	q.observeExec(ctx, "SearchUsers", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainSearchUsers EXPLAINs the statement SearchUsers would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainSearchUsers(ctx context.Context, arg SearchUsersParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if arg.OrganizationID.IsPresent() {
+		key.Guards |= 1 << 0
+	}
+	if arg.Status.IsPresent() {
+		key.Guards |= 1 << 1
+	}
+	if arg.EmailPrefix.IsPresent() {
+		key.Guards |= 1 << 2
+	}
+	if arg.CreatedAfter.IsPresent() {
+		key.Guards |= 1 << 3
+	}
+	ord0, err := runtime.ChooseOrdinal(int(arg.Sort), 3, true)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("SearchUsers: %w", err)
+	}
+	key.Choices = []uint8{ord0}
+	sqlText, argIdx := q.cache.Get("SearchUsers", searchUsersFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.OrganizationID.Ptr(), arg.Status.Ptr(), arg.EmailPrefix.Ptr(), arg.CreatedAfter.Ptr(), arg.Limit})
+	return q.explain(ctx, "SearchUsers", key.String(), opts, sqlText, args)
+}

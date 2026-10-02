@@ -51,3 +51,13 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	q.observeExec(ctx, "AllAuditActions", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainAllAuditActions EXPLAINs the statement AllAuditActions would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainAllAuditActions(ctx context.Context, arg AllAuditActionsParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, argIdx := q.cache.Get("AllAuditActions", allAuditActionsFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{})
+	return q.explain(ctx, "AllAuditActions", key.String(), opts, sqlText, args)
+}

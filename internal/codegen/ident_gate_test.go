@@ -276,14 +276,29 @@ t.tenant_id = :scope_tenant_id
 		t.Fatalf("generate: %+v", diags)
 	}
 
-	dir := t.TempDir()
-	genDir := filepath.Join(dir, "gen")
-	if err := os.MkdirAll(genDir, 0o755); err != nil {
-		t.Fatal(err)
+	buildGenerated(t, map[string]map[string][]byte{"gen": files})
+}
+
+// buildGenerated materializes each package (directory name -> files) in
+// a scratch module that requires this repository and runs `go build`.
+func buildGenerated(t *testing.T, pkgs map[string]map[string][]byte) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("compile test skipped in -short")
 	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(genDir, name), content, 0o644); err != nil {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available")
+	}
+	dir := t.TempDir()
+	for pkg, files := range pkgs {
+		genDir := filepath.Join(dir, pkg)
+		if err := os.MkdirAll(genDir, 0o755); err != nil {
 			t.Fatal(err)
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(genDir, name), content, 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	repoRoot, err := filepath.Abs("../..")

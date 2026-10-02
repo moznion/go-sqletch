@@ -164,7 +164,7 @@ func TestGenerate_QuestionStyle(t *testing.T) {
 	}
 	idRef, _ := tm.TypeByName("bigint")
 	emailRef, _ := tm.TypeByName("varchar")
-	files, ds := Generate(Options{Package: "gen", Style: runtime.StyleQuestion}, tm, []QueryInput{{
+	files, ds := Generate(Options{Package: "gen", Style: runtime.StyleQuestion, Explain: runtime.ExplainMySQL}, tm, []QueryInput{{
 		Q:          q,
 		Frags:      BuildFrags(mysql.Profile{}, q),
 		ParamTypes: types,
