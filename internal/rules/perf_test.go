@@ -62,7 +62,7 @@ func assertWarnings(t *testing.T, diags []diagnostics.Diagnostic) {
 	}
 }
 
-// ---- SQLETCH128: function/cast on the column side --------------------
+// ---- SQLETCHL001: function/cast on the column side --------------------
 
 func TestPerf_WrappedColumn(t *testing.T) {
 	cases := []struct {
@@ -168,7 +168,7 @@ func TestPerf_WrappedColumnCastTypeExtent(t *testing.T) {
 
 // An aggregate's FILTER (WHERE …) runs over rows the query already
 // fetched — no index can serve it, exactly like HAVING — so neither
-// SQLETCH128 nor 129 fires there; the statement's own WHERE after it
+// SQLETCHL001 nor L002 fires there; the statement's own WHERE after it
 // still does.
 func TestPerf_AggregateFilterIsNotAPredicate(t *testing.T) {
 	for _, d := range []string{"postgres", "sqlite"} {
@@ -181,10 +181,10 @@ LIMIT 10
 `
 			diags := perfLint(t, d, src)
 			if got := spanTexts(src, diags, diagnostics.CodePerfWrappedColumn); !slices.Equal(got, []string{"lower(u.name)"}) {
-				t.Errorf("SQLETCH128 got %q", got)
+				t.Errorf("SQLETCHL001 got %q", got)
 			}
 			if got := spanTexts(src, diags, diagnostics.CodePerfLeadingLike); len(got) != 0 {
-				t.Errorf("SQLETCH129 got %q", got)
+				t.Errorf("SQLETCHL002 got %q", got)
 			}
 		})
 	}
@@ -263,7 +263,7 @@ func TestPerf_WrappedColumnWithIn(t *testing.T) {
 	}
 }
 
-// ---- SQLETCH129: leading-wildcard LIKE --------------------------------
+// ---- SQLETCHL002: leading-wildcard LIKE --------------------------------
 
 func TestPerf_LeadingWildcardLike(t *testing.T) {
 	cases := []struct {
@@ -303,7 +303,7 @@ func TestPerf_LeadingWildcardLike(t *testing.T) {
 	}
 }
 
-// ---- SQLETCH130: :many without LIMIT -----------------------------------
+// ---- SQLETCHL003: :many without LIMIT -----------------------------------
 
 func TestPerf_ManyWithoutLimit(t *testing.T) {
 	cases := []struct {
@@ -353,7 +353,7 @@ func TestPerf_ManyWithoutLimit(t *testing.T) {
 	}
 }
 
-// ---- SQLETCH131: OFFSET pagination -----------------------------------
+// ---- SQLETCHL004: OFFSET pagination -----------------------------------
 
 func TestPerf_OffsetPagination(t *testing.T) {
 	cases := []struct {
@@ -399,7 +399,7 @@ func TestPerf_OffsetColumnIsNotTheClause(t *testing.T) {
 }
 
 // Every keyword position that takes an operand (or a relation name)
-// keeps a bare `offset` a column/table: a false SQLETCH131 there could
+// keeps a bare `offset` a column/table: a false SQLETCHL004 there could
 // only be silenced by an @nolint that would also hide real OFFSET
 // paging, and design 24 §6 promises keyword columns only ever cost a
 // MISSED warning. Before any LIMIT, so the predecessor rule decides.
@@ -490,11 +490,11 @@ func TestPerf_OffsetOperandShape(t *testing.T) {
 	}
 }
 
-// ---- @nolint and SQLETCH133 -------------------------------------------
+// ---- @nolint and SQLETCHL006 -------------------------------------------
 
 func TestPerf_NoLintSuppresses(t *testing.T) {
 	src := `-- name: Q :many
--- @nolint SQLETCH128, SQLETCH130 (expression index users_lower_email_idx)
+-- @nolint SQLETCHL001, SQLETCHL003 (expression index users_lower_email_idx)
 SELECT id FROM users WHERE lower(email) = :email
 `
 	if diags := perfLint(t, "postgres", src); len(diags) != 0 {
@@ -504,7 +504,7 @@ SELECT id FROM users WHERE lower(email) = :email
 
 func TestPerf_NoLintIsPerQuery(t *testing.T) {
 	src := `-- name: A :many
--- @nolint SQLETCH130
+-- @nolint SQLETCHL003
 SELECT id FROM users;
 -- name: B :many
 SELECT id FROM users;
@@ -530,21 +530,21 @@ SELECT id FROM users;
 // stale suppression would otherwise hide the next regression.
 func TestPerf_NoLintUnused(t *testing.T) {
 	src := `-- name: Q :many
--- @nolint SQLETCH129
+-- @nolint SQLETCHL002
 SELECT id FROM users LIMIT 10
 `
 	diags := perfLint(t, "postgres", src)
 	got := spanTexts(src, diags, diagnostics.CodePerfNoLintUnused)
-	if !slices.Equal(got, []string{"-- @nolint SQLETCH129"}) {
+	if !slices.Equal(got, []string{"-- @nolint SQLETCHL002"}) {
 		t.Fatalf("got %q (%+v)", got, diags)
 	}
 	assertWarnings(t, diags)
 }
 
-// SQLETCH132 needs the catalog: the catalog-free pass never calls an
+// SQLETCHL005 needs the catalog: the catalog-free pass never calls an
 // @nolint of it unused (that verdict belongs to CheckPerfTypes).
 func TestPerf_NoLintOfTypeLintNotJudgedOffline(t *testing.T) {
-	src := "-- name: Q :many\n-- @nolint SQLETCH132\nSELECT id FROM users LIMIT 1\n"
+	src := "-- name: Q :many\n-- @nolint SQLETCHL005\nSELECT id FROM users LIMIT 1\n"
 	if diags := perfLint(t, "postgres", src); len(diags) != 0 {
 		t.Errorf("got %+v", diags)
 	}

@@ -49,7 +49,7 @@ var (
 	// with an optional trailing `(reason)` (design 24 §4).
 	nolintRe     = regexp.MustCompile(`^--\s*@nolint(?:\s|:|\(|$)`)
 	nolintBareRe = regexp.MustCompile(`^--\s*@nolint\s*(?:\(.*\)\s*)?$`)
-	nolintFormRe = regexp.MustCompile(`^--\s*@nolint\s+(SQLETCH[0-9]{3}(?:\s*,\s*SQLETCH[0-9]{3})*)\s*(?:\((.*\S.*)\)\s*)?$`)
+	nolintFormRe = regexp.MustCompile(`^--\s*@nolint\s+(SQLETCHL?[0-9]{3}(?:\s*,\s*SQLETCHL?[0-9]{3})*)\s*(?:\((.*\S.*)\)\s*)?$`)
 )
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

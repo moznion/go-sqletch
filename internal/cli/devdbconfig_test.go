@@ -89,7 +89,7 @@ func writeSQLiteProject(t *testing.T, dir, serverVersion, dsn string) string {
 	mustWrite("db/schema.sql", "CREATE TABLE users (id INTEGER PRIMARY KEY, status TEXT NOT NULL);\n")
 	mustWrite("queries/q.sql", `-- name: ListUsers :many
 -- @param status: text
-SELECT u.id FROM users AS u WHERE u.status = :status LIMIT 100;
+SELECT u.id FROM users AS u WHERE u.status = :status;
 `)
 	mustWrite("sqletch.yaml", `version: 1
 dialect: sqlite

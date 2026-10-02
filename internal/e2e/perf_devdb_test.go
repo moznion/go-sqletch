@@ -36,7 +36,7 @@ type perfTypeCase struct {
 
 // perfCheckFlagged runs `sqletch check --format json` on a project with
 // one query file per case and returns the case names carrying
-// SQLETCH132 — the lint as a user sees it, through the oracle's types.
+// SQLETCHL005 — the lint as a user sees it, through the oracle's types.
 func perfCheckFlagged(t *testing.T, ctx context.Context, dialect, version, dsn, schema string, cases []perfTypeCase, table string) map[string]bool {
 	t.Helper()
 	dir := t.TempDir()
@@ -64,8 +64,10 @@ targets:
 cache:
   path: .sqletch/cache
 `)
+	// Lints are opt-in; enable them the way `check --lint` does.
+	lint := true
 	var out, errW bytes.Buffer
-	code := cli.Check(ctx, filepath.Join(dir, "sqletch.yaml"), false, true, cli.RunOptions{AllowDestructive: true}, &out, &errW)
+	code := cli.Check(ctx, filepath.Join(dir, "sqletch.yaml"), false, true, cli.RunOptions{AllowDestructive: true, Lint: &lint}, &out, &errW)
 	if code != cli.ExitOK {
 		t.Fatalf("check must pass (performance lints are warnings): exit %d\n%s%s", code, out.String(), errW.String())
 	}
@@ -81,7 +83,7 @@ cache:
 			continue
 		}
 		if d["severity"] != "warning" {
-			t.Errorf("SQLETCH132 must be a warning: %v", d)
+			t.Errorf("SQLETCHL005 must be a warning: %v", d)
 		}
 		file, _ := d["file"].(string)
 		flagged[strings.TrimSuffix(filepath.Base(file), ".sql")] = true
@@ -150,7 +152,7 @@ CREATE INDEX p_f ON p (f);
 			t.Errorf("%s: whitelist entry contradicts the planner (flagged=%v, index used=%v):\n%s", c.name, c.flagged, usesIndex, plan.String())
 		}
 		if flagged[c.name] != c.flagged {
-			t.Errorf("%s: SQLETCH132 reported=%v, want %v", c.name, flagged[c.name], c.flagged)
+			t.Errorf("%s: SQLETCHL005 reported=%v, want %v", c.name, flagged[c.name], c.flagged)
 		}
 	}
 }
@@ -215,7 +217,7 @@ func TestPerfTypeMismatchMySQL(t *testing.T) {
 			t.Errorf("%s: whitelist entry contradicts the optimizer (flagged=%v, access type=%q)", c.name, c.flagged, accessType)
 		}
 		if flagged[c.name] != c.flagged {
-			t.Errorf("%s: SQLETCH132 reported=%v, want %v", c.name, flagged[c.name], c.flagged)
+			t.Errorf("%s: SQLETCHL005 reported=%v, want %v", c.name, flagged[c.name], c.flagged)
 		}
 	}
 }
@@ -258,7 +260,7 @@ func TestPerfTypeMismatchSQLite(t *testing.T) {
 			t.Errorf("%s: expected an index search, got:\n%s", c.name, plan.String())
 		}
 		if flagged[c.name] {
-			t.Errorf("%s: SQLETCH132 must never fire on SQLite", c.name)
+			t.Errorf("%s: SQLETCHL005 must never fire on SQLite", c.name)
 		}
 	}
 }

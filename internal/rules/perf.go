@@ -26,11 +26,11 @@ import (
 // template bytes. Findings anchored in synthesized text (policy-woven
 // conjuncts) are dropped — the author did not write them.
 
-// CheckPerf runs the catalog-free performance lints — SQLETCH128
-// (function/cast on the column side), 129 (leading-wildcard LIKE), 130
-// (:many without LIMIT) and 131 (OFFSET pagination) — over every
+// CheckPerf runs the catalog-free performance lints — SQLETCHL001
+// (function/cast on the column side), L002 (leading-wildcard LIKE), L003
+// (:many without LIMIT) and L004 (OFFSET pagination) — over every
 // verification rendering, applies the query's `-- @nolint` directives,
-// and reports SQLETCH133 for an @nolint of one of these codes that
+// and reports SQLETCHL006 for an @nolint of one of these codes that
 // suppressed nothing.
 func CheckPerf(profile dialect.LexerProfile, q *template.QueryTemplate, rs []ast.Rendering) []diagnostics.Diagnostic {
 	c := newPerfCollector(q)
@@ -81,9 +81,9 @@ func (c *perfCollector) add(d diagnostics.Diagnostic) {
 }
 
 // finish applies the @nolint directives for the codes this pass owns,
-// reports unused ones (SQLETCH133), and returns the result in span
+// reports unused ones (SQLETCHL006), and returns the result in span
 // order. Only owned codes are judged: an @nolint of a code another pass
-// decides is that pass's business (SQLETCH132 needs the catalog, which
+// decides is that pass's business (SQLETCHL005 needs the catalog, which
 // an offline pass may not have).
 func (c *perfCollector) finish(owned []diagnostics.Code) []diagnostics.Diagnostic {
 	fired := map[diagnostics.Code]bool{}
@@ -627,7 +627,7 @@ func quotedLiteralBody(text string) (string, bool) {
 	return "", false
 }
 
-// ---- SQLETCH128 / 129 ----------------------------------------------------
+// ---- SQLETCHL001 / L002 ----------------------------------------------------
 
 func lintPredicates(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks []ptok, pc predCtx) {
 	for i := range toks {
@@ -665,7 +665,7 @@ func reportWrapped(c *perfCollector, q *template.QueryTemplate, r ast.Rendering,
 		WithHint("compare the bare column and transform the parameter instead (e.g. `col >= :day_start AND col < :day_end`); if an expression index on exactly this expression exists, `-- @nolint %s`", diagnostics.CodePerfWrappedColumn))
 }
 
-// ---- SQLETCH130 / 131 ----------------------------------------------------
+// ---- SQLETCHL003 / L004 ----------------------------------------------------
 
 // statementVerb is the leading keyword of the statement itself, past
 // any WITH list (CTE bodies sit deeper, so the first depth-0 verb is
@@ -747,7 +747,7 @@ func tailOperand(toks []ptok, from int) []ptok {
 // (`(:page - 1) * :size`, `:o::int`), and holds at least one
 // placeholder. Any other shape — a constant, a subquery, or tokens that
 // show `offset` was never the clause (a table alias before LEFT JOIN, …)
-// — is not reported: a wrong SQLETCH131 could only be silenced by an
+// — is not reported: a wrong SQLETCHL004 could only be silenced by an
 // @nolint that would also hide real paging (design 24 §6).
 func isPagingOffset(ops []ptok) bool {
 	param, inType := false, false

@@ -188,21 +188,21 @@ func TestPerfTypes_SQLiteNeverFlags(t *testing.T) {
 	}
 }
 
-// @nolint SQLETCH132 suppresses it; an @nolint that suppresses nothing is
-// judged HERE (the catalog-free pass leaves SQLETCH132 alone).
+// @nolint SQLETCHL005 suppresses it; an @nolint that suppresses nothing is
+// judged HERE (the catalog-free pass leaves SQLETCHL005 alone).
 func TestPerfTypes_NoLint(t *testing.T) {
 	numeric := map[string]dialect.TypeRef{"p": {OID: pgNumeric, Name: "numeric"}}
-	src := "-- name: Q :one\n-- @nolint SQLETCH132 (legacy float ids)\nSELECT u.email FROM users AS u WHERE u.id = :p::numeric\n"
+	src := "-- name: Q :one\n-- @nolint SQLETCHL005 (legacy float ids)\nSELECT u.email FROM users AS u WHERE u.id = :p::numeric\n"
 	if diags := perfTypes(t, "postgres", src, numeric); len(diags) != 0 {
 		t.Errorf("suppressed: %+v", diags)
 	}
-	src = "-- name: Q :one\n-- @nolint SQLETCH132\nSELECT u.email FROM users AS u WHERE u.id = :p\n"
+	src = "-- name: Q :one\n-- @nolint SQLETCHL005\nSELECT u.email FROM users AS u WHERE u.id = :p\n"
 	diags := perfTypes(t, "postgres", src, map[string]dialect.TypeRef{"p": {OID: pgInt8, Name: "int8"}})
-	if got := spanTexts(src, diags, diagnostics.CodePerfNoLintUnused); !slices.Equal(got, []string{"-- @nolint SQLETCH132"}) {
+	if got := spanTexts(src, diags, diagnostics.CodePerfNoLintUnused); !slices.Equal(got, []string{"-- @nolint SQLETCHL005"}) {
 		t.Errorf("got %q", got)
 	}
 	// ...and an @nolint of a catalog-free code is not judged here.
-	src = "-- name: Q :one\n-- @nolint SQLETCH128\nSELECT u.email FROM users AS u WHERE u.id = :p\n"
+	src = "-- name: Q :one\n-- @nolint SQLETCHL001\nSELECT u.email FROM users AS u WHERE u.id = :p\n"
 	if diags := perfTypes(t, "postgres", src, map[string]dialect.TypeRef{"p": {OID: pgInt8}}); len(diags) != 0 {
 		t.Errorf("got %+v", diags)
 	}

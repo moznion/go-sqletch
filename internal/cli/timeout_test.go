@@ -13,7 +13,7 @@ import (
 func TestOfflineChecker_BadTimeout(t *testing.T) {
 	cfg := writeOfflineProject(t, map[string]string{
 		"queries/a.sql": "-- name: FindT :many\n-- @timeout 0s\nSELECT t.id FROM t;\n",
-		"queries/b.sql": "-- name: FindU :many\n-- @timeout 500ms\nSELECT u.id FROM u LIMIT 10;\n",
+		"queries/b.sql": "-- name: FindU :many\n-- @timeout 500ms\nSELECT u.id FROM u;\n",
 	})
 	res, err := NewOfflineChecker(cfg).Check(nil)
 	if err != nil {

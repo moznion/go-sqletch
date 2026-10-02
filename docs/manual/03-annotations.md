@@ -111,12 +111,12 @@ cold `generate`).
 
 ```sql
 -- name: ActionCounts :many
--- @nolint SQLETCH130 (one row per distinct action)
+-- @nolint SQLETCHL003 (one row per distinct action)
 SELECT action, count(*) FROM audit_logs GROUP BY action;
 ```
 
-Suppresses [performance lints](08-diagnostics.md#performance-lints-warnings)
-(SQLETCH128–132) for this one query, in every shape. The trailing
+Suppresses [performance lints](08-diagnostics.md#performance-lints-sqletchlnnn-opt-in-warnings)
+(SQLETCHL001–L005) for this one query, in every shape. The trailing
 reason is optional but recommended — it is what a reviewer reads.
 
 - Only performance-lint codes may be named. A structural, oracle, or
@@ -124,9 +124,9 @@ reason is optional but recommended — it is what a reviewer reads.
   SQLETCH016, and the directive then suppresses nothing at all.
 - Unlike golangci-lint's `//nolint`, the codes are mandatory (a bare
   `-- @nolint` would hide every lint added later) and follow a space,
-  not a colon: `-- @nolint:SQLETCH130` is SQLETCH016 too.
+  not a colon: `-- @nolint:SQLETCHL003` is SQLETCH016 too.
 - An `@nolint` whose lint does not fire on the query is a warning
-  (SQLETCH133): delete it, so the lint can catch the next regression.
+  (SQLETCHL006): delete it, so the lint can catch the next regression.
 - Like every annotation it follows the `-- name:` header and stays in
   the skeleton verbatim (adding one changes the query's rendered SQL,
   so the next `generate` re-verifies it).

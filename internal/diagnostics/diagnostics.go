@@ -99,20 +99,22 @@ const (
 	CodePolicyUnannotated Code = "SQLETCH127" // require_annotation: the query neither applies nor opts out
 )
 
-// Performance-lint codes (docs/design/24-performance-lints.md). A
-// separate axis from soundness: every one is a WARNING, never fails a
-// run, and is the only kind of code a `-- @nolint` directive may name.
+// Performance-lint codes (docs/design/24-performance-lints.md), in
+// their own SQLETCHLnnn space: a separate, OPT-IN axis from soundness
+// (`lint: true` in sqletch.yaml, or --lint). Every one is a WARNING,
+// never fails a run, and is the only kind of code a `-- @nolint`
+// directive may name.
 const (
-	CodePerfWrappedColumn Code = "SQLETCH128" // function/cast applied to the column side of a WHERE/ON comparison
-	CodePerfLeadingLike   Code = "SQLETCH129" // LIKE/ILIKE pattern starts with a wildcard
-	CodePerfManyNoLimit   Code = "SQLETCH130" // :many query with a reachable shape that has no LIMIT
-	CodePerfOffsetPaging  Code = "SQLETCH131" // OFFSET pagination with a non-constant offset
-	CodePerfTypeMismatch  Code = "SQLETCH132" // column compared with a parameter of a type that forces a column-side conversion
-	CodePerfNoLintUnused  Code = "SQLETCH133" // `-- @nolint` names a lint that does not fire on this query
+	CodePerfWrappedColumn Code = "SQLETCHL001" // function/cast applied to the column side of a WHERE/ON comparison
+	CodePerfLeadingLike   Code = "SQLETCHL002" // LIKE/ILIKE pattern starts with a wildcard
+	CodePerfManyNoLimit   Code = "SQLETCHL003" // :many query with a reachable shape that has no LIMIT
+	CodePerfOffsetPaging  Code = "SQLETCHL004" // OFFSET pagination with a non-constant offset
+	CodePerfTypeMismatch  Code = "SQLETCHL005" // column compared with a parameter of a type that forces a column-side conversion
+	CodePerfNoLintUnused  Code = "SQLETCHL006" // `-- @nolint` names a lint that does not fire on this query
 )
 
 // PerfLintCodes are the codes a `-- @nolint` directive may suppress, in
-// code order. SQLETCH133 (an unused @nolint) is deliberately absent: it
+// code order. SQLETCHL006 (an unused @nolint) is deliberately absent: it
 // reports on the directive itself, so suppressing it would let a stale
 // suppression silence its own staleness report.
 var PerfLintCodes = []Code{

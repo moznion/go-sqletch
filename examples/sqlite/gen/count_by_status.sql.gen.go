@@ -19,7 +19,7 @@ type CountByStatusRow struct {
 }
 
 var countByStatusFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\n-- @param tenant_id: integer\n-- @column n: integer\n-- @nolint SQLETCH130 (one row per status)\nSELECT u.status, count(*) AS n\nFROM users AS u\nWHERE u.tenant_id = :tenant_id\nGROUP BY u.status\nORDER BY u.status;\n\n", ParamSpans: []runtime.Span{{Start: 162, End: 172}}, ParamIdx: []int16{0}},
+	{Kind: runtime.Skel, Text: "\n-- @param tenant_id: integer\n-- @column n: integer\n-- @nolint SQLETCHL003 (one row per status)\nSELECT u.status, count(*) AS n\nFROM users AS u\nWHERE u.tenant_id = :tenant_id\nGROUP BY u.status\nORDER BY u.status;\n\n", ParamSpans: []runtime.Span{{Start: 163, End: 173}}, ParamIdx: []int16{0}},
 }
 
 func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([]CountByStatusRow, error) {

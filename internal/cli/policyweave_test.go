@@ -40,7 +40,7 @@ func TestOffline_PolicyWeaves(t *testing.T) {
 	cfg := writeOfflineProject(t, map[string]string{
 		"sqletch.yaml":       policyProjectYAML,
 		"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
-		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE status = :status LIMIT 10;\n",
+		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE status = :status;\n",
 	})
 	c := NewOfflineChecker(cfg)
 	res, err := c.Check(nil)
@@ -90,7 +90,7 @@ func TestOffline_PolicyWeavesSetOperationBranches(t *testing.T) {
 			cfg := writeOfflineProject(t, map[string]string{
 				"sqletch.yaml":       yaml,
 				"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);\nCREATE TABLE u (id bigint NOT NULL);",
-				"queries/orders.sql": "-- name: ListOrders :many\n-- @param status: text\n" + q + " LIMIT 10;\n",
+				"queries/orders.sql": "-- name: ListOrders :many\n-- @param status: text\n" + q + ";\n",
 			})
 			c := NewOfflineChecker(cfg)
 			res, err := c.Check(nil)
@@ -105,8 +105,8 @@ func TestOffline_PolicyWeavesSetOperationBranches(t *testing.T) {
 			if len(rs) == 0 {
 				t.Fatal("no renderings memoized")
 			}
-			if got := rs[0].SQL; !strings.Contains(got, tc.want+" LIMIT 10;") {
-				t.Errorf("woven rendering:\n got: %s\nwant: %s LIMIT 10;", got, tc.want)
+			if got := rs[0].SQL; !strings.Contains(got, tc.want+";") {
+				t.Errorf("woven rendering:\n got: %s\nwant: %s;", got, tc.want)
 			}
 		})
 	}
@@ -208,7 +208,7 @@ func TestResolvedChecks_PolicyEnforcement(t *testing.T) {
 			Columns: []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}, SrcRel: 101, SrcAtt: 1}},
 		}
 	}
-	_, d, err := resolvedChecks(drv, "postgres", pols, file.Queries[0], rs, descs, hintCatalog())
+	_, d, err := resolvedChecks(drv, "postgres", pols, file.Queries[0], rs, descs, hintCatalog(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestWovenTemplates_IsTheSharedAnalyzeSeam(t *testing.T) {
 	cfg := writeOfflineProject(t, map[string]string{
 		"sqletch.yaml":       policyProjectYAML,
 		"db/schema.sql":      "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
-		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE status = :status LIMIT 10;\n",
+		"queries/orders.sql": "-- name: ListOrders :many\nSELECT id FROM orders WHERE status = :status;\n",
 	})
 	var errW bytes.Buffer
 	drv := driverFor(cfg)

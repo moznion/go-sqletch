@@ -38,7 +38,7 @@ func TestOffline_RequireAnnotationSatisfied(t *testing.T) {
 		"sqletch.yaml":  requireAnnotationYAML,
 		"db/schema.sql": "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
 		"queries/orders.sql": "-- name: ListOrders :many\n-- @policy-apply: tenant_scope\n" +
-			"SELECT id FROM orders WHERE status = :status LIMIT 10;\n",
+			"SELECT id FROM orders WHERE status = :status;\n",
 	})
 	c := NewOfflineChecker(cfg)
 	res, err := c.Check(nil)
@@ -74,7 +74,7 @@ func TestOffline_RequireAnnotationOptOutSatisfies(t *testing.T) {
 		"sqletch.yaml":  requireAnnotationYAML,
 		"db/schema.sql": "CREATE TABLE orders (id bigint NOT NULL, tenant_id bigint NOT NULL, status text);",
 		"queries/orders.sql": "-- name: ListOrders :many\n-- @policy-optout: tenant_scope (ops dashboard)\n" +
-			"SELECT id FROM orders WHERE status = :status LIMIT 10;\n",
+			"SELECT id FROM orders WHERE status = :status;\n",
 	})
 	res, err := NewOfflineChecker(cfg).Check(nil)
 	if err != nil {

@@ -1357,26 +1357,32 @@ non-sqletch clients).
 Because every reachable fragment lives in one of a query's verification
 renderings, sqletch can point at query shapes that defeat indexes or
 grow without bound in *every* shape, not just the ones a test happened
-to run (design 24). These lints are a **separate axis from soundness**:
+to run (design 24). These lints are a **separate axis from soundness**,
+with their own code space (`SQLETCHLnnn`):
 
+-   They are **opt-in**: they run only when `lint: true` is set in
+    `sqletch.yaml` or `--lint` is passed to `generate`/`check`
+    (`--lint=false` turns them off for one run); the editor follows the
+    config. `-- @nolint` directives are validated (SQLETCH016) whether
+    or not lints run, so a template's validity never depends on config.
 -   Every performance lint is a **warning**. It never fails `generate`
     or `check`, never changes a rendering, a shape, the cache, or the
     fingerprint, and never stands in for a structural rule.
 -   The lints are **whitelists**: each flags only the unambiguous form
     and under-reports everything else.
 -   The set: a function or cast on the column side of a WHERE/ON
-    comparison (SQLETCH128), a `LIKE` pattern starting with a wildcard
-    (SQLETCH129), a `:many` SELECT with a reachable shape that has no
-    `LIMIT` (SQLETCH130), OFFSET pagination with a non-constant offset
-    (SQLETCH131), and a parameter whose type makes the engine convert
-    the *column* side of a comparison (SQLETCH132, catalog-dependent,
+    comparison (SQLETCHL001), a `LIKE` pattern starting with a wildcard
+    (SQLETCHL002), a `:many` SELECT with a reachable shape that has no
+    `LIMIT` (SQLETCHL003), OFFSET pagination with a non-constant offset
+    (SQLETCHL004), and a parameter whose type makes the engine convert
+    the *column* side of a comparison (SQLETCHL005, catalog-dependent,
     per-dialect whitelist).
 
 A query suppresses a lint with a per-query directive:
 
 ``` sql
 -- name: ActionCounts :many
--- @nolint SQLETCH130 (one row per distinct action)
+-- @nolint SQLETCHL003 (one row per distinct action)
 SELECT action, count(*) FROM audit_logs GROUP BY action;
 ```
 
@@ -1385,7 +1391,7 @@ structural, oracle, or configuration code — or an unknown code, or
 writing the directive malformed — is an error (SQLETCH016): soundness
 diagnostics are not per-query decisions, and a suppression that
 suppresses nothing must not pass silently. An `@nolint` whose lint does
-not fire on the query is itself a warning (SQLETCH133), so a stale
+not fire on the query is itself a warning (SQLETCHL006), so a stale
 suppression cannot hide that lint's next regression.
 
 ------------------------------------------------------------------------

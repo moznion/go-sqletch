@@ -37,7 +37,6 @@ WHERE TRUE
 @if-present(x)
   AND t.x = :x
 @endif
-LIMIT 10
 ;
 ~
 
@@ -158,7 +157,7 @@ func TestGoSourceMultipleConsts(t *testing.T) {
 //sqletch:query
 const aSQL = ~
 -- name: QA :many
-SELECT t.id FROM t LIMIT 10;
+SELECT t.id FROM t;
 ~
 
 func between() {}
@@ -166,7 +165,7 @@ func between() {}
 //sqletch:query
 const bSQL = ~
 -- name: QB :many
-SELECT u.id FROM u LIMIT 10;
+SELECT u.id FROM u;
 ~
 `
 	cfg := writeOfflineProject(t, goProject(t, two))
@@ -203,7 +202,7 @@ targets:
       path: gen
 `
 	files["queries/other.sql"] = `-- name: FindU :many
-SELECT u.id FROM u LIMIT 10;
+SELECT u.id FROM u;
 `
 	cfg := writeOfflineProject(t, files)
 	res, err := NewOfflineChecker(cfg).Check(nil)

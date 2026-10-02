@@ -10,12 +10,12 @@ import (
 	"github.com/moznion/go-sqletch/internal/template"
 )
 
-// CheckPerfTypes runs SQLETCH132 (design 24 §3.5): a column compared
+// CheckPerfTypes runs SQLETCHL005 (design 24 §3.5): a column compared
 // with a parameter whose type makes the engine convert the COLUMN side,
 // which takes an index on the column out of play. It needs the catalog
 // (column types) and the resolved parameter types, so it runs in the
 // catalog-dependent pass (cli.resolvedChecks) and owns the
-// unused-@nolint verdict for SQLETCH132.
+// unused-@nolint verdict for SQLETCHL005.
 //
 // It is a per-dialect WHITELIST of pairs known to defeat the index;
 // every other pair — including every pair on SQLite, where a comparison

@@ -64,7 +64,7 @@ func compilePolicies(drv driver, cfg config.Config) ([]policy.Policy, []diagnost
 // The bound is verification.max_shapes: the rendering count never
 // exceeds the shape space, so a template inside the verification budget
 // is never refused here. A non-positive budget disables the check.
-func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate, maxRenderings int) (policy.Result, []ast.Rendering, []diagnostics.Diagnostic, error) {
+func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate, maxRenderings int, lint bool) (policy.Result, []ast.Rendering, []diagnostics.Diagnostic, error) {
 	diags := rules.CheckLexical(drv.profile, q)
 	wres := policy.Weave(drv.profile, drv.frontend, pols, q)
 	diags = append(diags, wres.Diags...)
@@ -81,8 +81,12 @@ func scanChecks(drv driver, pols []policy.Policy, q *template.QueryTemplate, max
 		return wres, nil, diags, err
 	}
 	diags = append(diags, rules.CheckR1(drv.profile, drv.frontend, wres.Query, rs)...)
-	// Performance lints (design 24): warnings over every rendering, so
-	// both the pipeline and the LSP report them from this one seam.
-	diags = append(diags, rules.CheckPerf(drv.profile, wres.Query, rs)...)
+	// Performance lints (design 24): opt-in warnings over every
+	// rendering, so both the pipeline and the LSP report them from this
+	// one seam. `@nolint` is still parsed and validated by the scanner
+	// when they are off (SQLETCH016 does not depend on config).
+	if lint {
+		diags = append(diags, rules.CheckPerf(drv.profile, wres.Query, rs)...)
+	}
 	return wres, rs, diags, nil
 }

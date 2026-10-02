@@ -1,7 +1,8 @@
 # sqletch Design — 24: Performance lints
 
-**Status: ACCEPTED — owner decisions D1–D3 settled 2026-10-02;
-implemented.** This document adds a warning-only lint lane for query
+**Status: ACCEPTED — owner decisions D1–D3 settled 2026-10-02, D4–D5
+on 2026-10-03; implemented.** This document adds an opt-in,
+warning-only lint lane for query
 shapes that defeat indexes or grow without bound. Nothing here touches
 the verification model: no rule R1–R9 changes, no rendering changes, no
 cache or fingerprint input changes, and no lint can fail a run.
@@ -36,28 +37,43 @@ lint needs and a syntax-only linter never has.
   side of a comparison; leading-wildcard `LIKE`; `:many` without
   `LIMIT` (plus OFFSET pagination, separate code); parameter-vs-column
   type mismatch that forces a column-side conversion.
+- **D4 — Opt-in (2026-10-03).** Lints run only when enabled:
+  `lint: true` in sqletch.yaml, or `--lint` on `generate`/`check`. The
+  flag overrides the config either way for one invocation
+  (`--lint=false` turns them off; absent = the config decides). The LSP
+  has no flags and follows the config. With lints off, `@nolint` is
+  still parsed and validated by the scanner — SQLETCH016 is a template
+  error and must not depend on config — but no lint, and no
+  SQLETCHL006, is reported. The key is not a cache or fingerprint input.
+- **D5 — Own code space (2026-10-03).** Lints use `SQLETCHLnnn`
+  (L001–L006), not the `SQLETCHnnn` rule space: the prefix says "lint,
+  warning, opt-in" at a glance, and the rule numbering stays free of
+  them. The first implementation used SQLETCH128–133; `@nolint
+  SQLETCH130` is now SQLETCH016 (not a lint code).
 
 ## 3. Codes
 
 | Code | Pass | What |
 | --- | --- | --- |
 | SQLETCH016 | scanner | malformed `@nolint`, or it names a non-performance / unknown code (error) |
-| SQLETCH128 | scan (`cli.scanChecks`) | function/cast applied to the column side of a WHERE / JOIN ON comparison |
-| SQLETCH129 | scan | `LIKE`/`ILIKE` pattern provably starting with `%` or `_` |
-| SQLETCH130 | scan | `:many` SELECT with a reachable rendering that has no `LIMIT` / `FETCH FIRST` |
-| SQLETCH131 | scan | OFFSET pagination with a non-constant offset |
-| SQLETCH132 | resolved (`cli.resolvedChecks`) | column compared with a parameter whose type converts the column |
-| SQLETCH133 | both | an `@nolint` that suppressed nothing (warning) |
+| SQLETCHL001 | scan (`cli.scanChecks`) | function/cast applied to the column side of a WHERE / JOIN ON comparison |
+| SQLETCHL002 | scan | `LIKE`/`ILIKE` pattern provably starting with `%` or `_` |
+| SQLETCHL003 | scan | `:many` SELECT with a reachable rendering that has no `LIMIT` / `FETCH FIRST` |
+| SQLETCHL004 | scan | OFFSET pagination with a non-constant offset |
+| SQLETCHL005 | resolved (`cli.resolvedChecks`) | column compared with a parameter whose type converts the column |
+| SQLETCHL006 | both | an `@nolint` that suppressed nothing (warning) |
 
-The proposed codes were verified free on 2026-10-02 (SQLETCH017 and
-SQLETCH318 are reserved for the concurrent `@timeout` work).
+SQLETCH016 (verified free 2026-10-02; SQLETCH017/318 belong to the
+`@timeout` work) stays in the rule space because it is a template
+error, raised with lints on or off.
 
 ### 3.1 Shared mechanics
 
-- **Where they run.** 128–131 run in `cli.scanChecks` right after R1,
+- **Where they run.** When enabled (D4; `scanChecks`/`resolvedChecks`
+  take the effective switch), L001–L004 run in `cli.scanChecks` right after R1,
   over the woven renderings, so the pipeline and the LSP get them from
   the one shared seam (and the LSP memoizes them with the rest of the
-  per-file phase). 132 needs the catalog and the final parameter types
+  per-file phase). L005 needs the catalog and the final parameter types
   and runs last in `cli.resolvedChecks`, again shared by `pipeline.Run`
   and `OfflineChecker`.
 - **Lexical whitelist.** The analysis is token-based over each
@@ -79,7 +95,7 @@ SQLETCH318 are reserved for the concurrent `@timeout` work).
   HAVING filters groups after aggregation, where no index applies, so a
   "function on the column" there is not an index finding. An
   aggregate's `FILTER (WHERE …)` (PostgreSQL/SQLite) is excluded for
-  the same reason — it filters rows already fetched — for both 128 and
+  the same reason — it filters rows already fetched — for both L001 and
   129.
 - **Spans and determinism.** Findings map through `Rendering.Map`
   back to template bytes; a placeholder maps to its `:name`, and any
@@ -88,7 +104,7 @@ SQLETCH318 are reserved for the concurrent `@timeout` work).
   author did not write that text. A finding seen in several renderings
   is reported once per (code, span); output is sorted by span.
 
-### 3.2 SQLETCH128 — function/cast on the column side
+### 3.2 SQLETCHL001 — function/cast on the column side
 
 Flagged: a comparison (`= <> != < > <= >=`, `LIKE`, `ILIKE`, `IN (…)`,
 `BETWEEN`) in a predicate position where one operand is
@@ -112,7 +128,7 @@ planner's), arithmetic on the column, negated forms, anything inside
 `CASE`. Expression indexes are deliberately **not modeled**: the hint
 says to `@nolint` when one exists.
 
-### 3.3 SQLETCH129 — leading-wildcard LIKE
+### 3.3 SQLETCHL002 — leading-wildcard LIKE
 
 Flagged: `col LIKE p` / `ILIKE` (not `NOT LIKE`), `col` a bare column,
 where `p` provably starts with a wildcard: a string literal whose
@@ -122,9 +138,9 @@ of a concatenation (`'%' || :q`), or `CONCAT`'s first argument. A bare
 time. Only quote-delimited literals are read (`'…'`, MySQL `"…"`,
 `E'…'`): a dollar-quoted `$$…$$` / `$tag$…$tag$` pattern is not judged.
 
-### 3.4 SQLETCH130 / SQLETCH131 — unbounded results, OFFSET paging
+### 3.4 SQLETCHL003 / SQLETCHL004 — unbounded results, OFFSET paging
 
-- **130** fires once, at the query header, when the query is `:many`,
+- **L003** fires once, at the query header, when the query is `:many`,
   its statement is a SELECT (the statement's own verb — the first
   depth-0 `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`REPLACE`/`VALUES`/`TABLE`,
   past any `WITH` list — is `SELECT`; DML `RETURNING` is bounded by
@@ -136,7 +152,7 @@ time. Only quote-delimited literals are read (`'…'`, MySQL `"…"`,
   reachable. (No slot admits a guarded LIMIT today; checking every
   rendering keeps this true if one ever does.) A subquery's LIMIT does
   not bound the outer result. `:one`/`:maybe-one` never warn.
-- **131** fires on a depth-0 `OFFSET <expr>` and on MySQL/SQLite's
+- **L004** fires on a depth-0 `OFFSET <expr>` and on MySQL/SQLite's
   `LIMIT <offset>, <count>` when the offset is a caller-driven paging
   offset: an operand built ONLY from placeholders, numbers,
   arithmetic, parentheses and casts, holding at least one placeholder
@@ -150,7 +166,7 @@ time. Only quote-delimited literals are read (`'…'`, MySQL `"…"`,
   `LEFT JOIN` has the "operand" `LEFT`). Over-skipping only ever costs
   a missed warning.
 
-### 3.5 SQLETCH132 — parameter-vs-column type mismatch
+### 3.5 SQLETCHL005 — parameter-vs-column type mismatch
 
 Inputs: the maximal tree's top-level relations resolved against the
 catalog (the R3 resolver), and the parameter types `resolvedChecks`
@@ -193,7 +209,7 @@ it free of a driver import; `TestPerfTypes_MySQLFlagsAgree` pins them.
 
 ```sql
 -- name: FindByEmail :many
--- @nolint SQLETCH128, SQLETCH130 (expression index users_lower_email_idx; ≤ 5 rows per address)
+-- @nolint SQLETCHL001, SQLETCHL003 (expression index users_lower_email_idx; ≤ 5 rows per address)
 SELECT id FROM users WHERE lower(email) = :email;
 ```
 
@@ -213,22 +229,22 @@ SELECT id FROM users WHERE lower(email) = :email;
 - Scope: the whole query (every rendering). It stays in the skeleton
   verbatim like every directive (so adding one re-keys that query's
   oracle entries — the rendered SQL changed).
-- **SQLETCH133 (unused @nolint), decision 2026-10-02:** an `@nolint`
+- **SQLETCHL006 (unused @nolint), decision 2026-10-02:** an `@nolint`
   whose code does not fire on the query is a warning at the directive,
   because a stale suppression would hide that lint's next regression.
   Each pass judges only the codes it owns: the scan pass judges
-  128–131, the resolved pass judges 132 — so a run that cannot reach
+  L001–L004, the resolved pass judges L005 — so a run that cannot reach
   the catalog-dependent pass (an LSP cache miss) never calls a
-  SQLETCH132 nolint stale. On SQLite, where SQLETCH132 never fires, an
-  `@nolint SQLETCH132` is always reported unused. SQLETCH133 itself
+  SQLETCHL005 nolint stale. On SQLite, where SQLETCHL005 never fires, an
+  `@nolint SQLETCHL005` is always reported unused. SQLETCHL006 itself
   cannot be allowed (a stale suppression must not silence its own
   staleness report).
 
 ## 5. Examples
 
-`examples/` stays warning-free: `AllAuditActions` (PostgreSQL) and
+`examples/` enables lints (`lint: true`) and stays warning-free: `AllAuditActions` (PostgreSQL) and
 `CountByStatus` (SQLite) are GROUP BY results bounded by a vocabulary
-and carry a justified `@nolint SQLETCH130`; `UserAuditActions` gained
+and carry a justified `@nolint SQLETCHL003`; `UserAuditActions` gained
 `LIMIT :limit` (its result is genuinely unbounded).
 
 ## 6. Known limits / follow-ups

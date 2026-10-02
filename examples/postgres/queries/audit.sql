@@ -25,8 +25,8 @@ SELECT count(*) AS total FROM audit_logs;
 -- of a query_timeout.default set in sqletch.yaml instead).
 -- @timeout 30s
 -- One row per distinct action, so the result is bounded by the action
--- vocabulary, not the table: a reviewed exemption from SQLETCH130.
--- @nolint SQLETCH130 (one row per distinct action)
+-- vocabulary, not the table: a reviewed exemption from SQLETCHL003.
+-- @nolint SQLETCHL003 (one row per distinct action)
 SELECT a.action, count(*) AS occurrences
 FROM audit_logs AS a
 GROUP BY a.action

@@ -115,7 +115,7 @@ internal/rules      P2/3/4  CheckR1 (probe-based node completeness),
                         CheckLexical (R6, R9), CheckResolved (R3
                         resolution-based, R2 star, planner table),
                         CheckTypeAgreement/ResolveParamTypes (P1 types),
-                        CheckPerf/CheckPerfTypes (doc 24 warning lints)
+                        CheckPerf/CheckPerfTypes (doc 24 opt-in lints)
 internal/policy     —   cross-query policy weaving (doc 14, spec
                         §Cross-Query Policies): Weave runs between
                         CheckLexical (unwoven) and Renderings (woven)
@@ -175,7 +175,8 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   inputs (renderings, cache JSON, generated Go, composed SQL). Never
   range over a map into output without sorting.
 - **Diagnostics carry stable codes** (`SQLETCH0xx` scanner, `1xx`
-  rules, `2xx` oracle, `3xx` codegen/config) and template-file spans
+  rules, `2xx` oracle, `3xx` codegen/config; opt-in performance lints
+  are `SQLETCHLnnn`) and template-file spans
   via the source map; messages state the rule *and its rationale*,
   hints show the compliant rewrite.
 - **Hashes are an index, never identity**: cache entries store full
@@ -459,28 +460,37 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 ## Known decisions: performance lints (doc 24)
 
-- Owner decisions 2026-10-02: SQLETCH128–132 are WARNINGS, a separate
+- Owner decisions 2026-10-02: SQLETCHL001–L005 are WARNINGS, a separate
   axis from soundness — never fail a run, never touch renderings,
   shapes, cache, or fingerprint. `-- @nolint CODE[, CODE…] (reason)`
   suppresses per query; it may name ONLY `diagnostics.PerfLintCodes`
   (anything else / malformed = SQLETCH016 error, all-or-nothing). An
-  @nolint that suppresses nothing = SQLETCH133 warning. Renamed from
+  @nolint that suppresses nothing = SQLETCHL006 warning. Renamed from
   `@allow` (same day, owner decision); deliberately NOT golangci grammar:
   no bare suppress-all form, no `:CODE` spelling (both SQLETCH016).
+- Owner decisions 2026-10-03: lints are OPT-IN — `lint: true` in
+  sqletch.yaml, or `--lint` / `--lint=false` on generate/check (flag
+  overrides config; `RunOptions.Lint *bool`, nil = config). The LSP
+  follows the config. `scanChecks`/`resolvedChecks` take the effective
+  switch — gate there, never in the rules. `@nolint` is parsed and
+  validated (SQLETCH016) with lints OFF too: template validity must not
+  depend on config. Lint codes live in their own `SQLETCHLnnn` space
+  (L001–L006); the old SQLETCH128–133 spellings are SQLETCH016.
 - Lexical WHITELIST over every verification rendering
   (`rules.CheckPerf` in `cli.scanChecks`; `rules.CheckPerfTypes` last
   in `cli.resolvedChecks` — both shared with the LSP). Under-report,
   never noise; findings in synthesized (woven) text are dropped. Each
-  pass judges unused @nolint only for the codes it owns (132 belongs to
+  pass judges unused @nolint only for the codes it owns (L005 belongs to
   the resolved pass, so an LSP cache miss never calls it stale).
-- HAVING and aggregate `FILTER (WHERE …)` are not SQLETCH128/129
-  positions; SQLETCH132 inspects only the
+- HAVING and aggregate `FILTER (WHERE …)` are not SQLETCHL001/L002
+  positions; SQLETCHL005 inspects only the
   top-level statement's WHERE/ON, skips set operations, and has NO
   SQLite pairs (a bound param takes the column's affinity). Its
   whitelist is per-dialect (PG int vs numeric/float; MySQL string vs
   number) — add a pair only with evidence the index is lost.
-- `:many` test fixtures need a LIMIT (or `@nolint SQLETCH130`) to stay
-  diagnostic-free; examples/ is kept warning-free.
+- Tests that enable lints need `:many` fixtures with a LIMIT (or
+  `@nolint SQLETCHL003`); examples/ sets `lint: true` and is kept
+  warning-free.
 
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 

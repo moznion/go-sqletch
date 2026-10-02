@@ -375,7 +375,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if !hit {
 					continue
 				}
-				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, c.pols, wq, rs, descs, cat)
+				_, d, err := resolvedChecks(c.drv, c.cfg.Dialect, c.pols, wq, rs, descs, cat, c.cfg.Lint)
 				if err != nil {
 					continue // internal re-parse failure; the CLI will surface it
 				}
@@ -423,7 +423,7 @@ func (c *OfflineChecker) analyzeFile(path string, src []byte) *fileMemo {
 		m.rends = map[string][]ast.Rendering{}
 		m.wovenq = map[string]*template.QueryTemplate{}
 		for _, q := range file.Queries {
-			wres, rs, d, err := scanChecks(c.drv, c.pols, q, c.cfg.Verification.MaxShapes)
+			wres, rs, d, err := scanChecks(c.drv, c.pols, q, c.cfg.Verification.MaxShapes, c.cfg.Lint)
 			m.diags = append(m.diags, d...)
 			if err != nil {
 				m.diags = append(m.diags, diagnostics.Errorf(diagnostics.CodeRenderingParse,
@@ -512,7 +512,7 @@ func loadDescs(store *cache.Store, fp, slug, query string, rs []ast.Rendering) (
 // enforcement. Offline once the descs are in hand. q must be the
 // WOVEN template.
 func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *template.QueryTemplate, rs []ast.Rendering,
-	descs []dialect.Desc, cat *cache.Catalog) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
+	descs []dialect.Desc, cat *cache.Catalog, lint bool) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
 
 	tree, err := drv.frontend.Parse(rs[0].SQL)
 	if err != nil {
@@ -663,8 +663,10 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 			break
 		}
 	}
-	// SQLETCH132 (design 24): needs column types and the final
+	// SQLETCHL005 (design 24): needs column types and the final
 	// parameter types, so it runs last, in this shared pass.
-	diags = append(diags, rules.CheckPerfTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes, drv.typeByName)...)
+	if lint {
+		diags = append(diags, rules.CheckPerfTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes, drv.typeByName)...)
+	}
 	return paramTypes, diags, nil
 }
