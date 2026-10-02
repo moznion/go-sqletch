@@ -740,7 +740,7 @@ func argIdent(param, queryName string) string {
 	switch name {
 	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds",
 		"sqlText", "argIdx", "items", "rows", "i", "row",
-		"execStart", "res", "n", "rerr", "tag":
+		"execStart", "res", "n", "rerr", "tag", "cancel":
 		return name + "Arg"
 	}
 	if reservedLocal.MatchString(name) || importPkgIdents[name] {

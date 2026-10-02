@@ -162,6 +162,36 @@ t.tenant_id = :scope_tenant_id
 	}
 }
 
+// The deadline declares `cancel` in the method's outermost scope, so a
+// required argument spelled `cancel` (here a @filter-tree! parameter)
+// must be renamed — otherwise `ctx, cancel := …` declares no new
+// variable and the consumer's module fails to compile.
+func TestGenerate_TimeoutCancelArgCompiles(t *testing.T) {
+	q := scanOne(t, `-- name: Pick :many
+-- @timeout 3s
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree!(cancel)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`)
+	files, diags := Generate(Options{Package: "gen"}, postgres.TypeMap{}, []QueryInput{{
+		Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+		Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+		Nullable:   []bool{false},
+		ParamTypes: map[string]dialect.TypeRef{"scope_tenant_id": {OID: 20}},
+	}})
+	if len(diags) != 0 {
+		t.Fatalf("generate: %+v", diags)
+	}
+	src := string(files["pick.sql.gen.go"])
+	if !strings.Contains(src, "cancelArg runtime.Tree") || !strings.Contains(src, timeoutWrap+"3*time.Second)\n") {
+		t.Fatalf("expected cancelArg and the deadline\n----\n%s", src)
+	}
+	buildGenerated(t, files)
+}
+
 // The literal is the largest unit that divides the duration exactly,
 // so it reads like the directive and is a pure function of the value.
 func TestDurationLiteral(t *testing.T) {
