@@ -2,6 +2,7 @@ package lint
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -45,6 +46,7 @@ func CheckTypes(profile dialect.LexerProfile, dialectName string, q *template.Qu
 			if !ok {
 				continue
 			}
+			ctes := cteNames(toks)
 			pc := predicateContexts(toks)
 			for i := range toks {
 				if !pc.top[i] {
@@ -69,7 +71,7 @@ func CheckTypes(profile dialect.LexerProfile, dialectName string, q *template.Qu
 				if len(params) == 0 {
 					continue
 				}
-				column := resolveColumn(res, col)
+				column := resolveColumn(res, ctes, col)
 				if column == nil {
 					continue
 				}
@@ -162,16 +164,55 @@ func tokenText(sql string, ops []ptok) string {
 
 // resolveColumn binds a bare column reference (`col` or `q.col`)
 // against the top-level relations through the R3 resolver. nil when
-// unresolved.
-func resolveColumn(res *rules.ColumnResolver, col []ptok) *cache.Column {
+// unresolved, and nil when it resolves through a relation named like a
+// statement-level CTE: the CTE shadows the base table, so the catalog's
+// types are not the compared column's (under-report, never guess).
+func resolveColumn(res *rules.ColumnResolver, ctes []string, col []ptok) *cache.Column {
 	name := identText(col[len(col)-1])
+	var c *cache.Column
+	var rel string
 	switch len(col) {
 	case 1:
-		return res.Column("", name)
+		c, rel = res.Column("", name)
 	case 3:
-		return res.Column(identText(col[0]), name)
+		c, rel = res.Column(identText(col[0]), name)
+	default:
+		return nil
 	}
-	return nil
+	for _, cte := range ctes {
+		if strings.EqualFold(cte, rel) {
+			return nil
+		}
+	}
+	return c
+}
+
+// cteNames returns the names a leading statement-level WITH defines:
+// the identifier after WITH / RECURSIVE and after each depth-0 comma,
+// up to the main statement's verb. Only these can shadow a top-level
+// relation (a CTE inside a subquery scopes that subquery alone).
+func cteNames(toks []ptok) []string {
+	if len(toks) == 0 || !toks[0].isIdent("WITH") {
+		return nil
+	}
+	var out []string
+	expect := true
+	for _, t := range toks[1:] {
+		if t.depth != 0 {
+			continue
+		}
+		switch {
+		case t.isIdent("SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE", "VALUES", "TABLE"):
+			return out
+		case t.isIdent("RECURSIVE") && len(out) == 0:
+		case t.Kind == dialect.KindComma:
+			expect = true
+		case expect && (t.Kind == dialect.KindIdent || t.Kind == dialect.KindQuotedIdent):
+			out = append(out, identText(t))
+			expect = false
+		}
+	}
+	return out
 }
 
 // identText returns an identifier's name, unquoting a quoted one.

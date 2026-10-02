@@ -269,7 +269,9 @@ float4 vs float8, date vs timestamp, varchar vs text), and MySQL's
 reverse direction (a numeric column vs a string value converts the
 value). On PostgreSQL a cast on the parameter is judged at the cast's
 type (`id = :v::int4` is safe even if `:v` is numeric elsewhere).
-Subqueries and set operations (`UNION` …) are not inspected.
+Subqueries and set operations (`UNION` …) are not inspected, nor is a
+column of a `WITH` query that shares a table's name (its types are not
+the table's).
 
 **When it runs.** This lint needs column and parameter types, so it
 runs in the catalog-dependent pass: on every `generate`/`check`, and in

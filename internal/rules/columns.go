@@ -22,22 +22,25 @@ func NewColumnResolver(profile dialect.LexerProfile, q *template.QueryTemplate, 
 	return &ColumnResolver{res: newResolver(profile, q, maxR, maxTree, cat)}
 }
 
-// Column returns the catalog column `qualifier.name`. An empty
-// qualifier means an unqualified reference, which must match exactly
-// one relation's catalog columns. nil when unresolved.
-func (c *ColumnResolver) Column(qualifier, name string) *cache.Column {
+// Column returns the catalog column `qualifier.name` and the name of
+// the relation (its Table, as written) it resolved through, so a caller
+// can refuse a relation the catalog cannot vouch for (a CTE sharing a
+// base table's name). An empty qualifier means an unqualified
+// reference, which must match exactly one relation's catalog columns.
+// col is nil when unresolved.
+func (c *ColumnResolver) Column(qualifier, name string) (col *cache.Column, relation string) {
 	var rel *relInfo
 	if qualifier == "" {
 		cands := c.res.columnCandidates(name)
 		if len(cands) != 1 {
-			return nil
+			return nil, ""
 		}
 		rel = cands[0]
 	} else {
 		rel = c.res.byName[c.res.fold(qualifier)]
 	}
 	if rel == nil || rel.table == nil {
-		return nil
+		return nil, ""
 	}
-	return c.res.col(rel.table, name)
+	return c.res.col(rel.table, name), rel.Table
 }

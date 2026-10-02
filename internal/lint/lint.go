@@ -729,6 +729,10 @@ var nonClausePredecessors = []string{
 	"BETWEEN", "LIKE", "ILIKE", "GLOB", "REGEXP", "RLIKE", "MATCH", "ESCAPE", "IS", "IN", "CASE",
 	"INTERVAL", "BINARY", "DIV", "MOD", "XOR", "ALL", "ANY", "SOME",
 	"FROM", "JOIN", "UPDATE", "INTO", "USING", "RETURNING",
+	// MySQL SELECT/DML modifiers sit between the verb and the first
+	// operand.
+	"DISTINCTROW", "HIGH_PRIORITY", "LOW_PRIORITY", "STRAIGHT_JOIN", "SQL_SMALL_RESULT", "SQL_BIG_RESULT",
+	"SQL_BUFFER_RESULT", "SQL_CACHE", "SQL_NO_CACHE", "SQL_CALC_FOUND_ROWS", "DELAYED", "IGNORE", "QUICK",
 }
 
 func tailOperand(toks []ptok, from int) []ptok {

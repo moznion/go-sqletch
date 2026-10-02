@@ -419,6 +419,13 @@ func TestPerf_OffsetKeywordColumnPositions(t *testing.T) {
 		{"from table", "mysql", "SELECT id FROM offset WHERE id = :id"},
 		{"join table", "sqlite", "SELECT t.id FROM t JOIN offset ON offset.id = t.id"},
 		{"returning", "sqlite", "DELETE FROM t WHERE id = :id RETURNING offset"},
+		// MySQL SELECT modifiers precede the projection.
+		{"sql_no_cache", "mysql", "SELECT SQL_NO_CACHE offset + :x FROM t LIMIT 1"},
+		{"high_priority", "mysql", "SELECT HIGH_PRIORITY offset + :x FROM t LIMIT 1"},
+		{"straight_join modifier", "mysql", "SELECT STRAIGHT_JOIN offset + :x FROM t LIMIT 1"},
+		{"calc_found_rows", "mysql", "SELECT SQL_CALC_FOUND_ROWS offset + :x FROM t LIMIT 1"},
+		{"small result", "mysql", "SELECT SQL_SMALL_RESULT offset + :x FROM t LIMIT 1"},
+		{"distinctrow", "mysql", "SELECT DISTINCTROW offset + :x FROM t LIMIT 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -172,7 +172,10 @@ Inputs: the maximal tree's top-level relations resolved against the
 catalog (the R3 resolver), and the parameter types `resolvedChecks`
 settled (oracle-inferred on Tier 1, `-- @param` on Tier 2). Only the
 TOP-LEVEL statement's WHERE/ON predicates are inspected (a subquery's
-columns would need scope resolution the facade does not model), set
+columns would need scope resolution the facade does not model), a
+relation named like a statement-level CTE is skipped (the CTE shadows
+the base table, so the catalog's types are not the compared column's;
+the R3 resolver alone would hand back the base table's), set
 operations are skipped (SQLite's `Relations()` is the first core's),
 and the operands must be a bare column vs. a bare placeholder (or an
 `IN` list of them). PostgreSQL also accepts one `::type` /

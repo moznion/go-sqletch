@@ -28,10 +28,10 @@ SELECT u.id FROM users AS u JOIN orgs ON orgs.id = u.org_id WHERE u.status = :s
 		qualifier, name string
 		want            string // "" = unresolved
 	}{
-		{"u", "email", "email"},
-		{"orgs", "name", "name"},
-		{"", "status", "status"}, // only users has it
-		{"", "id", ""},           // users and orgs both have it: ambiguous
+		{"u", "email", "email@users"},
+		{"orgs", "name", "name@orgs"},
+		{"", "status", "status@users"}, // only users has it
+		{"", "id", ""},                 // users and orgs both have it: ambiguous
 		{"", "nope", ""},
 		{"x", "id", ""},     // unknown qualifier
 		{"users", "id", ""}, // aliased: the table name is not in scope
@@ -39,8 +39,8 @@ SELECT u.id FROM users AS u JOIN orgs ON orgs.id = u.org_id WHERE u.status = :s
 	}
 	for _, c := range cases {
 		got := ""
-		if col := res.Column(c.qualifier, c.name); col != nil {
-			got = col.Name
+		if col, rel := res.Column(c.qualifier, c.name); col != nil {
+			got = col.Name + "@" + rel
 		}
 		if got != c.want {
 			t.Errorf("Column(%q, %q) = %q, want %q", c.qualifier, c.name, got, c.want)

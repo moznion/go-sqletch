@@ -145,6 +145,35 @@ func TestPerfTypes_Postgres(t *testing.T) {
 	}
 }
 
+// A statement-level CTE that shares a base table's name shadows it: the
+// columns compared are the CTE's, whose types the catalog does not
+// know, so nothing is flagged (the resolver would otherwise hand back
+// the base table's types). A CTE with another name leaves base-table
+// columns judged as usual.
+func TestPerfTypes_CTEShadowsTable(t *testing.T) {
+	numeric := dialect.TypeRef{OID: pgNumeric, Name: "numeric"}
+	cases := []struct {
+		name, src string
+		want      []string
+	}{
+		{"shadowing cte, qualified", "WITH users AS (SELECT 1.5::numeric AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric", nil},
+		{"shadowing cte, unqualified", "WITH users AS (SELECT 1.5::numeric AS age) SELECT age FROM users WHERE age = :p::numeric", nil},
+		{"shadowing cte with column list", "WITH users (age) AS (SELECT 1.5::numeric) SELECT u.age FROM users u WHERE u.age = :p::numeric", nil},
+		{"recursive, second cte shadows", "WITH RECURSIVE x AS (SELECT 1 AS n), users AS (SELECT 1.5 AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric", nil},
+		{"quoted shadowing name", `WITH "users" AS (SELECT 1.5::numeric AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric`, nil},
+		{"other cte name", "WITH recent AS (SELECT 1 AS n) SELECT u.email FROM users AS u WHERE u.id = :p::numeric", []string{"u.id = :p::numeric"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :one\n" + c.src + "\n"
+			got := spanTexts(src, perfTypes(t, "postgres", src, map[string]dialect.TypeRef{"p": numeric}), diagnostics.CodePerfTypeMismatch)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestPerfTypes_MySQL(t *testing.T) {
 	bigint, decimal, varchar := mysqlType(t, "bigint"), mysqlType(t, "decimal"), mysqlType(t, "varchar")
 	cases := []struct {
