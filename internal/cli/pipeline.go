@@ -506,6 +506,8 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			Package:  t.Package,
 			TreeCaps: runtime.TreeCaps{MaxNodes: cfg.TreeCaps.MaxNodes, MaxDepth: cfg.TreeCaps.MaxDepth},
 			Style:    drv.style,
+			// Codegen-only (design 23): never part of the fingerprint.
+			DefaultTimeout: cfg.QueryTimeout.DefaultDuration,
 		}, drv.typemap, inputsByTarget[ti])
 		res.Diags = append(res.Diags, diags...)
 		if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {

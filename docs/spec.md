@@ -388,6 +388,13 @@ never dynamic): `:one` (exactly one row; `sql.ErrNoRows` when absent),
 absence is a value, not an error), `:many` (slice), `:exec` (no
 result), `:execrows` (affected count).
 
+Per-query directives follow the header as `-- @…` comments and, like
+the header, stay in the skeleton verbatim: `-- @param` / `-- @column`
+(types, Phase 3), `-- @policy-optout` / `-- @policy-apply` (Cross-Query
+Policies), and `-- @timeout <duration>|none` — a runtime deadline for
+the generated method (see Runtime Model § Query timeouts). None of
+them is ever dynamic.
+
 ## Constructs
 
 ### `@if-present(param, …)` … `@endif`
@@ -1525,6 +1532,25 @@ server-side prepared statements — by delegating to the driver's own
 per-connection statement cache, which is the only place connection
 affinity and deallocation can live — is designed but not shipped; see
 Beyond v1.0.
+
+## Query timeouts
+
+A query may bound its generated method with a deadline:
+`-- @timeout <duration>` (a positive Go duration), or the run-wide
+`query_timeout.default` in sqletch.yaml, which every query without a
+directive inherits and `-- @timeout none` opts out of. The generated
+method derives `context.WithTimeout(ctx, d)` after composition and
+before the driver call, and cancels it on return, so the deadline
+covers execution, row iteration, and scanning; a caller's shorter
+deadline wins by context semantics. Expiry is reported by the driver,
+unchanged (per-driver behavior: design 23 §5).
+
+The mechanism is client-side only — no `statement_timeout`,
+`MAX_EXECUTION_TIME`, or other server-side setting is emitted — so a
+deadline changes no rendering, no shape, and no verification: it is a
+codegen input and never enters the cache fingerprint. Malformed
+directives (SQLETCH017) and config values (SQLETCH318) are errors,
+never a silent "no deadline". Design: docs/design/23-query-timeout.md.
 
 ## Strict static expansion (optional mode)
 

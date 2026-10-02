@@ -18,7 +18,7 @@ type AllAuditActionsRow struct {
 }
 
 var allAuditActionsFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n"},
+	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n"},
 }
 
 func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams) ([]AllAuditActionsRow, error) {
@@ -26,6 +26,9 @@ func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams
 	sqlText, argIdx := q.cache.Get("AllAuditActions", allAuditActionsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{})
 	q.hook(key, sqlText)
+	// Deadline from `-- @timeout 30s` (design 23).
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	var execStart time.Time
 	if q.obs.Load() != nil {
 		execStart = time.Now()

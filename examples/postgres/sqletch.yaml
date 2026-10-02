@@ -14,6 +14,10 @@ targets:
       path: gen
 cache:
   path: .sqletch/cache
+# Optional: a deadline for every generated method whose query has no
+# `-- @timeout` directive (queries/audit.sql shows the per-query form).
+# query_timeout:
+#   default: 5s
 policies:
   - name: tenant_scope
     tables: [audit_logs]

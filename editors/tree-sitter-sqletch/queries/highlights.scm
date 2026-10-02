@@ -21,6 +21,7 @@
 (query_name) @function
 (annotation) @keyword.modifier
 (type_name) @type
+(timeout_value) @number
 
 (parameter) @variable.parameter
 (param_ref) @variable.parameter

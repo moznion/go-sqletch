@@ -38,6 +38,7 @@ func FuzzScan(f *testing.F) {
 	f.Add("-- name: A :one\nSELECT 1;")
 	f.Add("-- name: B :many\nSELECT 1 FROM t WHERE TRUE\n@if-present(x)\n  AND t.x = :x\n@endif\n;")
 	f.Add("@if-present(")
+	f.Add("-- name: T :many\n-- @timeout 1.5s\n-- @timeout none\nSELECT 1;\n-- @timeout -9223372036854775808ns\n-- name: U :one\nSELECT 2;")
 	f.Add("-- name: C :many\n@choose(s)@case(a)ORDER BY 1@end;")
 	f.Add("SELECT 'unterminated")
 	f.Add("-- name: D :many\nSELECT $tag$ @endif $tag$ @> :p;")

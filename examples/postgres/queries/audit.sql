@@ -20,6 +20,10 @@ SELECT count(*) AS total FROM audit_logs;
 -- name: AllAuditActions :many
 -- Crossing tenants is a deliberate, reviewable exemption.
 -- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)
+-- A cross-tenant aggregate can run long; the generated method bounds
+-- it with a context deadline (`-- @timeout none` would opt a query out
+-- of a query_timeout.default set in sqletch.yaml instead).
+-- @timeout 30s
 SELECT a.action, count(*) AS occurrences
 FROM audit_logs AS a
 GROUP BY a.action

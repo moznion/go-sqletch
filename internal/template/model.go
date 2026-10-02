@@ -4,6 +4,8 @@
 package template
 
 import (
+	"time"
+
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
@@ -277,6 +279,19 @@ type QueryTemplate struct {
 	// affirmative half of a policy's `require_annotation` (design 14
 	// §12). They never change what is woven.
 	PolicyApplies []PolicyApply
+	// Timeout is the query's `-- @timeout` directive (design 23), nil
+	// when absent. It never affects rendering or verification: codegen
+	// alone consumes it, wrapping the generated method's context.
+	Timeout *TimeoutDirective
+}
+
+// TimeoutDirective is one parsed `-- @timeout <duration>|none`. None
+// opts the query out of the config-level query_timeout.default;
+// otherwise Duration is positive.
+type TimeoutDirective struct {
+	Duration time.Duration
+	None     bool
+	Span     diagnostics.Span
 }
 
 // PolicyOptOut is one `-- @policy-optout` annotation: a deliberate,
