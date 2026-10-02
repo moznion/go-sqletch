@@ -134,6 +134,33 @@ LIMIT 10
 	}
 }
 
+// A cast's type name ends where the type grammar does: an identifier
+// after it (AT TIME ZONE's zone column, …) is a column again, so the
+// value side is not column-free and nothing is flagged. Multi-word
+// type names still count as one type.
+func TestPerf_WrappedColumnCastTypeExtent(t *testing.T) {
+	cases := []struct {
+		name, where string
+		want        []string
+	}{
+		{"at time zone column", "lower(u.email) = :t::timestamp AT TIME ZONE u.tz", nil},
+		{"at time zone bare column", "lower(u.email) = :t::timestamp AT TIME ZONE tz", nil},
+		{"at time zone literal", "lower(u.email) = :t::timestamp AT TIME ZONE 'UTC'", []string{"lower(u.email)"}},
+		{"multiword cast", "lower(u.email) = :t::double precision", []string{"lower(u.email)"}},
+		{"multiword CAST", "lower(u.email) = CAST(:t AS timestamp with time zone)", []string{"lower(u.email)"}},
+		{"varying", "lower(u.email) = :t::character varying", []string{"lower(u.email)"}},
+		{"array type", "lower(u.email) = ANY(:t::text[])", []string{"lower(u.email)"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :one\nSELECT u.id FROM users AS u WHERE " + c.where + "\n"
+			if got := spanTexts(src, perfLint(t, "postgres", src), diagnostics.CodePerfWrappedColumn); !slices.Equal(got, c.want) {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // An aggregate's FILTER (WHERE …) runs over rows the query already
 // fetched — no index can serve it, exactly like HAVING — so neither
 // SQLETCH128 nor 129 fires there; the statement's own WHERE after it
@@ -409,6 +436,45 @@ func TestPerf_OffsetBareAlias(t *testing.T) {
 			src := "-- name: Q :many\n" + c.src + "\n"
 			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfOffsetPaging); len(got) != 0 {
 				t.Errorf("got %q", got)
+			}
+		})
+	}
+}
+
+// The OFFSET operand is accepted only in the shapes a paging offset
+// takes — placeholders, numbers, arithmetic, parentheses, a cast — and
+// it must hold a placeholder (a constant offset is not paging by a
+// caller). Anything else means `offset` was not the clause (a table
+// alias before a JOIN keyword, …): silence, never a wrong warning.
+func TestPerf_OffsetOperandShape(t *testing.T) {
+	quiet := []struct{ name, dialect, src string }{
+		{"alias before left join", "mysql", "SELECT u.id FROM users offset LEFT JOIN t ON t.id = offset.id LIMIT 10"},
+		{"alias before inner join", "sqlite", "SELECT u.id FROM users offset INNER JOIN t ON t.id = offset.id LIMIT 10"},
+		{"alias before cross join", "mysql", "SELECT u.id FROM users offset CROSS JOIN t LIMIT 10"},
+		{"alias before natural join", "sqlite", "SELECT u.id FROM users offset NATURAL JOIN t LIMIT 10"},
+		{"alias before straight_join", "mysql", "SELECT u.id FROM users offset STRAIGHT_JOIN t ON t.id = offset.id LIMIT 10"},
+		{"constant expression", "postgres", "SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 10 * 2"},
+		{"subquery offset", "postgres", "SELECT id FROM users ORDER BY id LIMIT 10 OFFSET (SELECT n FROM cfg)"},
+	}
+	for _, c := range quiet {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :many\n" + c.src + "\n"
+			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfOffsetPaging); len(got) != 0 {
+				t.Errorf("got %q", got)
+			}
+		})
+	}
+	loud := []struct{ name, dialect, tail, want string }{
+		{"pg cast", "postgres", "LIMIT 10 OFFSET :o::int", "OFFSET :o::int"},
+		{"pg cast multiword", "postgres", "LIMIT 10 OFFSET :o::double precision", "OFFSET :o::double precision"},
+		{"negated arithmetic", "postgres", "LIMIT :n OFFSET -1 + :o", "OFFSET -1 + :o"},
+		{"mysql comma expression", "mysql", "LIMIT :p * 10, 10", ":p * 10"},
+	}
+	for _, c := range loud {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :many\nSELECT id FROM users ORDER BY id " + c.tail + "\n"
+			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfOffsetPaging); !slices.Equal(got, []string{c.want}) {
+				t.Errorf("got %q, want %q", got, c.want)
 			}
 		})
 	}

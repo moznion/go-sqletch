@@ -100,7 +100,10 @@ Flagged: a comparison (`= <> != < > <= >=`, `LIKE`, `ILIKE`, `IN (…)`,
 - `CAST(col AS type)`,
 
 and the other operand is **column-free**: placeholders, literals,
-operators, calls over those, typed literals, `INTERVAL` units. Only the
+operators, calls over those, typed literals, `INTERVAL` units, casts
+(a type name ends where the type grammar does: only the words of a
+multi-word type continue it, so the zone column in `:t::timestamp AT
+TIME ZONE tz` is still a column). Only the
 wrapped side may be a column for `IN`/`BETWEEN`/`LIKE`. Not flagged:
 both sides referencing columns (a join condition's index story is the
 planner's), arithmetic on the column, negated forms, anything inside
@@ -131,11 +134,18 @@ time.
   rendering keeps this true if one ever does.) A subquery's LIMIT does
   not bound the outer result. `:one`/`:maybe-one` never warn.
 - **131** fires on a depth-0 `OFFSET <expr>` and on MySQL/SQLite's
-  `LIMIT <offset>, <count>` when the offset is not a single numeric
-  literal. `offset` is non-reserved on MySQL/SQLite, so a column of
-  that name is not the clause: the keyword counts only after a depth-0
-  `LIMIT`, or when it does not follow a token that introduces an
-  expression (`SELECT`, `BY`, `WHERE`, `AND`, `,`, `(`, an operator, …).
+  `LIMIT <offset>, <count>` when the offset is a caller-driven paging
+  offset: an operand built ONLY from placeholders, numbers,
+  arithmetic, parentheses and casts, holding at least one placeholder
+  (`(:page - 1) * :size`, `:o::int`). A constant, a subquery, or any
+  other token is silence. `offset` is non-reserved on MySQL/SQLite, so
+  a column, table, or alias of that name is not the clause: the
+  keyword counts only after a depth-0 `LIMIT`, or when it does not
+  follow a token that introduces an operand or relation (`SELECT`,
+  `BY`, `WHERE`, `BETWEEN`, `FROM`, `,`, `(`, an operator, …), and the
+  operand whitelist closes the rest of the class (a table alias before
+  `LEFT JOIN` has the "operand" `LEFT`). Over-skipping only ever costs
+  a missed warning.
 
 ### 3.5 SQLETCH132 — parameter-vs-column type mismatch
 
@@ -187,7 +197,8 @@ SELECT id FROM users WHERE lower(email) = :email;
 - Form: `-- @nolint SQLETCHnnn[, SQLETCHnnn…]` with an optional
   trailing `(reason)` (optional like `@policy-apply`'s: the directive is
   visible in review either way; a reason is encouraged). Any
-  `@nolint`-shaped comment (`-- @nolint`, `-- @nolint:`, `-- @nolint X`) is
+  `@nolint`-shaped comment (`-- @nolint`, `-- @nolint:`, `-- @nolint(…`,
+  `-- @nolint X`) is
   the directive, so a malformed one is SQLETCH016 rather than a
   silently ignored comment; `-- @nolintX` is not the directive.
 - Deliberately NOT golangci-lint's grammar: there is no bare

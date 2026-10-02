@@ -43,10 +43,11 @@ var (
 	applyRe     = regexp.MustCompile(`^--\s*@policy-apply\b`)
 	applyFormRe = regexp.MustCompile(`^--\s*@policy-apply:\s*([a-z][a-z0-9_]*)\s*(?:\((.+)\)\s*)?$`)
 	// nolintRe/nolintFormRe split `-- @nolint` the same way: any
-	// @nolint-shaped comment is the directive (so a malformed one is an
-	// error rather than an ignored comment), the form is a comma list of
-	// codes with an optional trailing `(reason)` (design 24 §4).
-	nolintRe     = regexp.MustCompile(`^--\s*@nolint(?:\s|:|$)`)
+	// @nolint-shaped comment (`@nolint`, `@nolint:`, `@nolint(`,
+	// `@nolint X`) is the directive (so a malformed one is an error
+	// rather than an ignored comment), the form is a comma list of codes
+	// with an optional trailing `(reason)` (design 24 §4).
+	nolintRe     = regexp.MustCompile(`^--\s*@nolint(?:\s|:|\(|$)`)
 	nolintBareRe = regexp.MustCompile(`^--\s*@nolint\s*(?:\(.*\)\s*)?$`)
 	nolintFormRe = regexp.MustCompile(`^--\s*@nolint\s+(SQLETCH[0-9]{3}(?:\s*,\s*SQLETCH[0-9]{3})*)\s*(?:\((.*\S.*)\)\s*)?$`)
 )

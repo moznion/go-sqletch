@@ -357,6 +357,14 @@ func operands(toks []ptok, i int) (left, right []ptok) {
 
 // ---- operand shapes ------------------------------------------------------
 
+// typeNameContinuations are the words that continue a type name after
+// its first word (`double precision`, `character varying`,
+// `timestamp with time zone`, `interval day to second`).
+var typeNameContinuations = []string{
+	"PRECISION", "VARYING", "CHARACTER", "CHAR", "WITH", "WITHOUT", "TIME", "ZONE",
+	"YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "TO", "UNSIGNED", "SIGNED",
+}
+
 // literalWords are identifiers that denote values, never columns.
 var literalWords = []string{
 	"NULL", "TRUE", "FALSE", "UNKNOWN", "DEFAULT", "CURRENT_DATE", "CURRENT_TIME",
@@ -510,18 +518,34 @@ func isColumnFree(ops []ptok) bool {
 	if len(ops) == 0 {
 		return false
 	}
-	typeMode, interval := false, false
+	// typeMode: 0 = not in a type name, 1 = expecting its first word
+	// (after `::` or CAST's AS), 2 = after it, where only the words of
+	// a multi-word type name continue it (`double precision`). Any
+	// other identifier ends the type and is judged normally — so
+	// `::timestamp AT TIME ZONE tz` still sees the column tz.
+	typeMode, interval, skip := 0, false, 0
 	for k, t := range ops {
+		if skip > 0 {
+			skip--
+			continue
+		}
 		switch t.Kind {
 		case dialect.KindIdent, dialect.KindQuotedIdent:
 			next := ptok{}
 			if k+1 < len(ops) {
 				next = ops[k+1]
 			}
+			if typeMode == 2 && !t.isIdent(typeNameContinuations...) {
+				typeMode = 0
+			}
 			switch {
-			case typeMode:
+			case typeMode == 1:
+				typeMode = 2
+			case typeMode == 2:
+			case t.isIdent("AT") && k+2 < len(ops) && ops[k+1].isIdent("TIME") && ops[k+2].isIdent("ZONE"):
+				skip = 2 // the AT TIME ZONE operator; its zone operand is judged next
 			case t.isIdent("AS"):
-				typeMode = true
+				typeMode = 1
 			case next.Kind == dialect.KindLParen && !t.isIdent("SELECT"):
 				// a function name
 			case next.Kind == dialect.KindString:
@@ -535,13 +559,13 @@ func isColumnFree(ops []ptok) bool {
 				return false
 			}
 		case dialect.KindCast:
-			typeMode = true
+			typeMode = 1
 			continue
 		case dialect.KindString, dialect.KindNumber, dialect.KindPositionalParam,
 			dialect.KindOperator, dialect.KindLParen, dialect.KindComma:
-			typeMode = false
+			typeMode = 0
 		case dialect.KindRParen:
-			typeMode = false
+			typeMode = 0
 		case dialect.KindOther:
 			if t.Text != "[" && t.Text != "]" {
 				return false
@@ -689,8 +713,32 @@ func tailOperand(toks []ptok, from int) []ptok {
 	return toks[from:k]
 }
 
-func isConstantOffset(ops []ptok) bool {
-	return len(ops) == 1 && ops[0].Kind == dialect.KindNumber
+// isPagingOffset reports whether an OFFSET (or MySQL/SQLite
+// `LIMIT off, n`) operand is a caller-driven paging offset: it is built
+// only from placeholders, numbers, arithmetic, parentheses and casts
+// (`(:page - 1) * :size`, `:o::int`), and holds at least one
+// placeholder. Any other shape — a constant, a subquery, or tokens that
+// show `offset` was never the clause (a table alias before LEFT JOIN, …)
+// — is not reported: a wrong SQLETCH131 could only be silenced by an
+// @nolint that would also hide real paging (design 24 §6).
+func isPagingOffset(ops []ptok) bool {
+	param, inType := false, false
+	for _, t := range ops {
+		switch {
+		case t.param != "":
+			param, inType = true, false
+		case t.Kind == dialect.KindCast:
+			inType = true
+		case inType && t.Kind == dialect.KindIdent:
+			// the cast's type name (possibly multi-word)
+		case t.Kind == dialect.KindNumber, t.Kind == dialect.KindOperator,
+			t.Kind == dialect.KindLParen, t.Kind == dialect.KindRParen:
+			inType = false
+		default:
+			return false
+		}
+	}
+	return param
 }
 
 func lintOffset(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks []ptok) {
@@ -704,7 +752,7 @@ func lintOffset(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, to
 			seenLimit = true
 			first := tailOperand(toks, i+1)
 			end := i + 1 + len(first)
-			if end < len(toks) && toks[end].Kind == dialect.KindComma && !isConstantOffset(first) {
+			if end < len(toks) && toks[end].Kind == dialect.KindComma && isPagingOffset(first) {
 				// MySQL/SQLite `LIMIT offset, count`.
 				reportOffset(c, q, r, first)
 			}
@@ -725,7 +773,7 @@ func lintOffset(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, to
 				continue
 			}
 			ops := tailOperand(toks, i+1)
-			if len(ops) == 0 || isConstantOffset(ops) {
+			if !isPagingOffset(ops) {
 				continue
 			}
 			reportOffset(c, q, r, toks[i:i+1+len(ops)])

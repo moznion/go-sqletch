@@ -103,6 +103,8 @@ func TestScan_NoLintGolangciHabits(t *testing.T) {
 	cases := map[string]string{
 		"bare":             "-- @nolint\n",
 		"bare with reason": "-- @nolint (generated report)\n",
+		"glued reason":     "-- @nolint(generated report)\n",
+		"glued code":       "-- @nolint(SQLETCH130)\n",
 		"colon":            "-- @nolint:SQLETCH130\n",
 		"colon list":       "-- @nolint:SQLETCH128,SQLETCH130 // reason\n",
 	}
