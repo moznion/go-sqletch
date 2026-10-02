@@ -73,6 +73,7 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
+		err = runtime.CtxErr(ctx, err)
 		q.observeExec(ctx, "SearchUsers", key, execStart, -1, err)
 		return nil, err
 	}
@@ -82,12 +83,14 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Sea
 		var i SearchUsersRow
 		var nul0 *string
 		if err := rows.Scan(&i.ID, &i.Email, &i.Status, &nul0); err != nil {
+			err = runtime.CtxErr(ctx, err)
 			q.observeExec(ctx, "SearchUsers", key, execStart, -1, err)
 			return nil, err
 		}
 		i.Nickname = optional.FromNillable(nul0)
 		items = append(items, i)
 	}
-	q.observeExec(ctx, "SearchUsers", key, execStart, int64(len(items)), rows.Err())
-	return items, rows.Err()
+	err = runtime.CtxErr(ctx, rows.Err())
+	q.observeExec(ctx, "SearchUsers", key, execStart, int64(len(items)), err)
+	return items, err
 }

@@ -63,6 +63,11 @@ type Options struct {
 	// DefaultTimeout is query_timeout.default (design 23): the deadline
 	// of every method whose query has no `-- @timeout`. 0 = none.
 	DefaultTimeout time.Duration
+	// NormalizeCtxErr funnels every driver error of every method through
+	// runtime.CtxErr (design 23 §5): set for SQLite, whose driver reports
+	// an expired context as SQLITE_INTERRUPT rather than the context's
+	// error. Off, the output is unchanged.
+	NormalizeCtxErr bool
 }
 
 // Generate emits the full package: db.gen.go, querier.gen.go, and one
@@ -95,7 +100,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 
 	for _, in := range sorted {
 		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
-			defTimeout: opts.DefaultTimeout, sigImports: map[string]bool{}}
+			defTimeout: opts.DefaultTimeout, normCtxErr: opts.NormalizeCtxErr, sigImports: map[string]bool{}}
 		src, sig, ds := g.emit(typeNames, policyTypes)
 		for imp := range g.sigImports {
 			sigImports[imp] = true
@@ -184,6 +189,7 @@ type queryGen struct {
 	pkg        string
 	caps       runtime.TreeCaps
 	defTimeout time.Duration
+	normCtxErr bool
 	style      runtime.Style
 	imports    map[string]bool
 	b          strings.Builder
@@ -1209,27 +1215,45 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		}
 		return fmt.Sprintf("%sq.observeExec(ctx, %q, key, execStart, %s, %s)\n", indent, q.Name, rows, errExpr)
 	}
+	// failExec is the one funnel every driver-error branch goes through.
+	// Under NormalizeCtxErr (SQLite, design 23 §5) it first rewrites the
+	// error variable with runtime.CtxErr, so the observer and the caller
+	// both see the normalized error. The :many terminal rows.Err() is
+	// the one driver error that is not a branch; it is normalized inline.
+	failExec := func(indent, errVar string) string {
+		norm := ""
+		if g.normCtxErr {
+			norm = fmt.Sprintf("%s%s = runtime.CtxErr(ctx, %s)\n", indent, errVar, errVar)
+		}
+		return norm + observe(indent, "-1", errVar)
+	}
 	switch q.Annotation {
 	case template.AnnotationMany:
 		fmt.Fprintf(w, "\trows, err := q.db.%s(ctx, sqlText, args...)\n", query)
-		fmt.Fprintf(w, "\tif err != nil {\n%s\t\t%s\n\t}\n", observe("\t\t", "-1", "err"), errRet("err"))
+		fmt.Fprintf(w, "\tif err != nil {\n%s\t\t%s\n\t}\n", failExec("\t\t", "err"), errRet("err"))
 		fmt.Fprint(w, "\tdefer rows.Close()\n")
 		fmt.Fprintf(w, "\tvar items []%s\n", rowName)
 		fmt.Fprint(w, "\tfor rows.Next() {\n")
 		fmt.Fprintf(w, "\t\tvar i %s\n", rowName)
 		fmt.Fprint(w, declTemps("\t\t"))
 		fmt.Fprintf(w, "\t\tif err := rows.Scan(%s); err != nil {\n%s\t\t\treturn nil, err\n\t\t}\n",
-			scanList(), observe("\t\t\t", "-1", "err"))
+			scanList(), failExec("\t\t\t", "err"))
 		fmt.Fprint(w, assignTemps("\t\t"))
 		fmt.Fprint(w, "\t\titems = append(items, i)\n\t}\n")
-		fmt.Fprint(w, observe("\t", "int64(len(items))", "rows.Err()"))
-		fmt.Fprint(w, "\treturn items, rows.Err()\n")
+		if g.normCtxErr {
+			fmt.Fprint(w, "\terr = runtime.CtxErr(ctx, rows.Err())\n")
+			fmt.Fprint(w, observe("\t", "int64(len(items))", "err"))
+			fmt.Fprint(w, "\treturn items, err\n")
+		} else {
+			fmt.Fprint(w, observe("\t", "int64(len(items))", "rows.Err()"))
+			fmt.Fprint(w, "\treturn items, rows.Err()\n")
+		}
 	case template.AnnotationOne:
 		fmt.Fprintf(w, "\trow := q.db.%s(ctx, sqlText, args...)\n", queryRow)
 		fmt.Fprint(w, "\tvar i "+rowName+"\n")
 		fmt.Fprint(w, declTemps("\t"))
 		fmt.Fprintf(w, "\tif err := row.Scan(%s); err != nil {\n%s\t\treturn zero, err\n\t}\n",
-			scanList(), observe("\t\t", "-1", "err"))
+			scanList(), failExec("\t\t", "err"))
 		fmt.Fprint(w, assignTemps("\t"))
 		fmt.Fprint(w, observe("\t", "1", "nil"))
 		fmt.Fprint(w, "\treturn i, nil\n")
@@ -1246,21 +1270,21 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		// error: the exec event reports rows 0 with a nil error.
 		fmt.Fprintf(w, "\t\tif errors.Is(err, %s) {\n%s\t\t\treturn zero, nil\n\t\t}\n",
 			noRows, observe("\t\t\t", "0", "nil"))
-		fmt.Fprintf(w, "%s\t\treturn zero, err\n\t}\n", observe("\t\t", "-1", "err"))
+		fmt.Fprintf(w, "%s\t\treturn zero, err\n\t}\n", failExec("\t\t", "err"))
 		fmt.Fprint(w, assignTemps("\t"))
 		fmt.Fprint(w, observe("\t", "1", "nil"))
 		fmt.Fprint(w, "\treturn optional.Some(i), nil\n")
 	case template.AnnotationExecRows:
 		if g.style == runtime.StyleQuestion {
 			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
-			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", failExec("\t\t", "err"))
 			fmt.Fprintf(w, "\tn, rerr := res.RowsAffected()\n\tif rerr != nil {\n%s\t\treturn 0, rerr\n\t}\n",
-				observe("\t\t", "-1", "rerr"))
+				failExec("\t\t", "rerr"))
 			fmt.Fprint(w, observe("\t", "n", "nil"))
 			fmt.Fprint(w, "\treturn n, nil\n")
 		} else {
 			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
-			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn 0, err\n\t}\n", failExec("\t\t", "err"))
 			fmt.Fprint(w, "\tn := tag.RowsAffected()\n")
 			fmt.Fprint(w, observe("\t", "n", "nil"))
 			fmt.Fprint(w, "\treturn n, nil\n")
@@ -1270,11 +1294,11 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 			// res.RowsAffected can round-trip on exotic drivers, so the
 			// helper consults it only when an observer is installed.
 			fmt.Fprint(w, "\tres, err := q.db.ExecContext(ctx, sqlText, args...)\n")
-			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", failExec("\t\t", "err"))
 			fmt.Fprintf(w, "\tq.observeExecResult(ctx, %q, key, execStart, res)\n", q.Name)
 		} else {
 			fmt.Fprint(w, "\ttag, err := q.db.Exec(ctx, sqlText, args...)\n")
-			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", observe("\t\t", "-1", "err"))
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t\treturn err\n\t}\n", failExec("\t\t", "err"))
 			fmt.Fprint(w, observe("\t", "tag.RowsAffected()", "nil"))
 		}
 		fmt.Fprint(w, "\treturn nil\n")

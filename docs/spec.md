@@ -1542,7 +1542,10 @@ directive inherits and `-- @timeout none` opts out of. The generated
 method derives `context.WithTimeout(ctx, d)` after composition and
 before the driver call, and cancels it on return, so the deadline
 covers execution, row iteration, and scanning; a caller's shorter
-deadline wins by context semantics. Expiry is reported by the driver.
+deadline wins by context semantics. Expiry satisfies
+`errors.Is(err, context.DeadlineExceeded)` on every dialect (SQLite's
+interrupt error is normalized by `runtime.CtxErr`, keeping the
+driver's error).
 
 The mechanism is client-side only — no `statement_timeout`,
 `MAX_EXECUTION_TIME`, or other server-side setting is emitted — so a

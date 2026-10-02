@@ -48,6 +48,7 @@ func (q *Queries) FindUserByEmail(ctx context.Context, arg FindUserByEmailParams
 			q.observeExec(ctx, "FindUserByEmail", key, execStart, 0, nil)
 			return zero, nil
 		}
+		err = runtime.CtxErr(ctx, err)
 		q.observeExec(ctx, "FindUserByEmail", key, execStart, -1, err)
 		return zero, err
 	}

@@ -93,7 +93,10 @@ it until the rows are scanned, so a statement that outlasts the
 deadline is interrupted by the driver and the call fails. The value is
 a positive Go duration (`500ms`, `2s`, `1m30s`). A caller's own
 shorter deadline still wins — the generated deadline only ever
-tightens.
+tightens. On expiry the call fails with an error satisfying
+`errors.Is(err, context.DeadlineExceeded)` on every dialect (SQLite's
+driver error is normalized — see
+[the runtime chapter](07-runtime-and-generated-code.md#what-happens-on-a-call)).
 
 `-- @timeout none` opts the query out of `query_timeout.default` (see
 [the config reference](05-config.md#field-notes)); without a default

@@ -37,6 +37,7 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
+		err = runtime.CtxErr(ctx, err)
 		q.observeExec(ctx, "CountByStatus", key, execStart, -1, err)
 		return nil, err
 	}
@@ -45,11 +46,13 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	for rows.Next() {
 		var i CountByStatusRow
 		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			err = runtime.CtxErr(ctx, err)
 			q.observeExec(ctx, "CountByStatus", key, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	q.observeExec(ctx, "CountByStatus", key, execStart, int64(len(items)), rows.Err())
-	return items, rows.Err()
+	err = runtime.CtxErr(ctx, rows.Err())
+	q.observeExec(ctx, "CountByStatus", key, execStart, int64(len(items)), err)
+	return items, err
 }

@@ -42,10 +42,12 @@ type timeoutDialect struct {
 	// returning the generated Queries and a raw exec function.
 	imports []string
 	open    string
-	// deadline, when set, is Go source for `func deadline(error) bool`
-	// replacing the default errors.Is(err, context.DeadlineExceeded) —
-	// for drivers that report an expired context in their own terms.
-	deadline string
+	// driverCtxErr, when set, is a Go boolean expression over `err` that
+	// must ALSO hold for every context failure — the driver's own error
+	// that the generated code must preserve while normalizing (SQLite's
+	// sqlite3.INTERRUPT, design 23 §5). Every dialect must satisfy
+	// errors.Is(err, context.DeadlineExceeded / context.Canceled).
+	driverCtxErr string
 	// unit is the "amount" that makes the slow statement take a short
 	// while (it is doubled until a run exceeds the default timeout);
 	// huge makes it outlast every deadline in the suite.
@@ -136,14 +138,11 @@ func TestQueryTimeoutSQLite(t *testing.T) {
 			`_ "github.com/ncruces/go-sqlite3/driver"`},
 		open: sqlOpen("sqlite3", "dsn"),
 		// ncruces/go-sqlite3 stops the statement on context expiry via
-		// sqlite3_interrupt and reports SQLITE_INTERRUPT, not the
-		// context's error (design 23 §5 documents this).
-		deadline: `
-func deadline(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sqlite3.INTERRUPT)
-}
-`,
-		amountType: "int64", unit: "100000", huge: "1000000000000",
+		// sqlite3_interrupt and reports SQLITE_INTERRUPT; the generated
+		// code adds the context error (runtime.CtxErr) and must keep
+		// the driver's (design 23 §5).
+		driverCtxErr: "errors.Is(err, sqlite3.INTERRUPT)",
+		amountType:   "int64", unit: "100000", huge: "1000000000000",
 	})
 }
 
@@ -244,11 +243,15 @@ query_timeout:
 
 	main := timeoutMain
 	main = strings.Replace(main, "//IMPORTS", "\t"+strings.Join(d.imports, "\n\t"), 1)
-	deadline := d.deadline
-	if deadline == "" {
-		deadline = "\nfunc deadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) }\n"
+	driverErr := d.driverCtxErr
+	if driverErr == "" {
+		driverErr = "true"
 	}
-	main = strings.Replace(main, "//OPEN", d.open+deadline, 1)
+	main = strings.Replace(main, "//OPEN", d.open+`
+func deadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) && (`+driverErr+`) }
+
+func canceled(err error) bool { return errors.Is(err, context.Canceled) && (`+driverErr+`) }
+`, 1)
 	main = strings.NewReplacer("AMOUNT_T", d.amountType, "UNIT", d.unit, "HUGE", d.huge,
 		"DEFAULT_MS", timeoutDefault.String()).Replace(main)
 	writeFile(t, dir, "main.go", main)
@@ -298,14 +301,15 @@ func expect(cond bool, format string, args ...any) {
 	}
 }
 //OPEN
-// obs counts exec events that carried an error: a deadline is an
-// execution failure and must be observed like any other (design 18).
-type obs struct{ execErrs int }
+// obs records exec events that carried an error: a deadline is an
+// execution failure and must be observed like any other (design 18),
+// and the observer must see the same normalized error the caller does.
+type obs struct{ execErrs []error }
 
 func (o *obs) ObserveCompose(string, sqletchruntime.ShapeKey, bool) {}
 func (o *obs) ObserveExec(_ context.Context, _, _ string, _ time.Duration, _ int64, err error) {
 	if err != nil {
-		o.execErrs++
+		o.execErrs = append(o.execErrs, err)
 	}
 }
 func (o *obs) ObserveReject(context.Context, string, error) {}
@@ -346,6 +350,15 @@ func main() {
 	expect(deadline(err), "SlowLong: want DeadlineExceeded, got %v", err)
 	expect(took < 5*time.Second, "SlowLong: took %v under the caller's 200ms deadline", took)
 
+	// 3b. A caller cancelling mid-statement reads as context.Canceled.
+	cctx, ccancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(200*time.Millisecond, ccancel)
+	took, err = timed(func() error { _, err := q.SlowNone(cctx, gen.SlowNoneParams{Amount: huge}); return err })
+	timer.Stop()
+	ccancel()
+	expect(canceled(err), "SlowNone cancelled: want Canceled, got %v", err)
+	expect(took < 5*time.Second, "SlowNone cancelled: took %v after a 200ms cancel", took)
+
 	// 4. @timeout none opts out of the default: grow the work until one
 	// successful run outlasts the default by a margin.
 	amount := amountT(UNIT)
@@ -367,8 +380,13 @@ func main() {
 	die(err)
 	expect(n >= 0, "Touch: rows affected %d", n)
 
-	// Three deadline failures, each observed as an exec error.
-	expect(ob.execErrs == 3, "observer saw %d exec errors, want 3", ob.execErrs)
+	// Three deadline failures and one cancel, each observed as an exec
+	// error — normalized exactly as the caller saw it.
+	expect(len(ob.execErrs) == 4, "observer saw %d exec errors, want 4: %v", len(ob.execErrs), ob.execErrs)
+	for i, e := range ob.execErrs[:3] {
+		expect(deadline(e), "observed error %d not normalized: %v", i, e)
+	}
+	expect(canceled(ob.execErrs[3]), "observed cancel not normalized: %v", ob.execErrs[3])
 	fmt.Println("TIMEOUT-OK")
 }
 `

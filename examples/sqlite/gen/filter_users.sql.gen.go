@@ -66,6 +66,7 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	}
 	rows, err := q.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
+		err = runtime.CtxErr(ctx, err)
 		q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, -1, err)
 		return nil, err
 	}
@@ -74,11 +75,13 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	for rows.Next() {
 		var i FilterUsersRow
 		if err := rows.Scan(&i.ID, &i.Email); err != nil {
+			err = runtime.CtxErr(ctx, err)
 			q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, -1, err)
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, int64(len(items)), rows.Err())
-	return items, rows.Err()
+	err = runtime.CtxErr(ctx, rows.Err())
+	q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, int64(len(items)), err)
+	return items, err
 }
