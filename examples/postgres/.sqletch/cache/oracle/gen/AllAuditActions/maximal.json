@@ -1,7 +1,7 @@
 {
   "format": 2,
   "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
-  "rendered_sql": "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\n-- One row per distinct action, so the result is bounded by the action\n-- vocabulary, not the table: a reviewed exemption from SQLETCH130.\n-- @allow SQLETCH130 (one row per distinct action)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n",
+  "rendered_sql": "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\n-- One row per distinct action, so the result is bounded by the action\n-- vocabulary, not the table: a reviewed exemption from SQLETCH130.\n-- @nolint SQLETCH130 (one row per distinct action)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n",
   "params": null,
   "columns": [
     {

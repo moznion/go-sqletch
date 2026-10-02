@@ -461,22 +461,24 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 - Owner decisions 2026-10-02: SQLETCH128–132 are WARNINGS, a separate
   axis from soundness — never fail a run, never touch renderings,
-  shapes, cache, or fingerprint. `-- @allow CODE[, CODE…] (reason)`
+  shapes, cache, or fingerprint. `-- @nolint CODE[, CODE…] (reason)`
   suppresses per query; it may name ONLY `diagnostics.PerfLintCodes`
   (anything else / malformed = SQLETCH016 error, all-or-nothing). An
-  @allow that suppresses nothing = SQLETCH133 warning.
+  @nolint that suppresses nothing = SQLETCH133 warning. Renamed from
+  `@allow` (same day, owner decision); deliberately NOT golangci grammar:
+  no bare suppress-all form, no `:CODE` spelling (both SQLETCH016).
 - Lexical WHITELIST over every verification rendering
   (`rules.CheckPerf` in `cli.scanChecks`; `rules.CheckPerfTypes` last
   in `cli.resolvedChecks` — both shared with the LSP). Under-report,
   never noise; findings in synthesized (woven) text are dropped. Each
-  pass judges unused @allow only for the codes it owns (132 belongs to
+  pass judges unused @nolint only for the codes it owns (132 belongs to
   the resolved pass, so an LSP cache miss never calls it stale).
 - HAVING is not a SQLETCH128 position; SQLETCH132 inspects only the
   top-level statement's WHERE/ON, skips set operations, and has NO
   SQLite pairs (a bound param takes the column's affinity). Its
   whitelist is per-dialect (PG int vs numeric/float; MySQL string vs
   number) — add a pair only with evidence the index is lost.
-- `:many` test fixtures need a LIMIT (or `@allow SQLETCH130`) to stay
+- `:many` test fixtures need a LIMIT (or `@nolint SQLETCH130`) to stay
   diagnostic-free; examples/ is kept warning-free.
 
 ## Server environment drift (SQLETCH203, doc 04 §3.1)

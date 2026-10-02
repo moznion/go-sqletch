@@ -15,7 +15,7 @@ import (
 // which takes an index on the column out of play. It needs the catalog
 // (column types) and the resolved parameter types, so it runs in the
 // catalog-dependent pass (cli.resolvedChecks) and owns the
-// unused-@allow verdict for SQLETCH132.
+// unused-@nolint verdict for SQLETCH132.
 //
 // It is a per-dialect WHITELIST of pairs known to defeat the index;
 // every other pair — including every pair on SQLite, where a comparison
@@ -33,7 +33,7 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 	typeByName func(string) (dialect.TypeRef, bool)) []diagnostics.Diagnostic {
 
 	if cat == nil || len(rs) == 0 || tree.HasSetOperation() {
-		return nil // no verdict at all, so no unused-@allow verdict either
+		return nil // no verdict at all, so no unused-@nolint verdict either
 	}
 	c := newPerfCollector(q)
 	mismatch := typeMismatchRule(dialectName)
@@ -97,7 +97,7 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 					c.add(diagnostics.Warnf(diagnostics.CodePerfTypeMismatch, span,
 						"column %q (%s) is compared with parameter %q (%s): %s, so an index on the column cannot be used",
 						column.Name, column.TypeName, p, pt.Name, why).
-						WithHint("bind the parameter at the column's type (drop the cast, or fix its `-- @param %s:` annotation); `-- @allow %s` if the conversion is intended", p, diagnostics.CodePerfTypeMismatch))
+						WithHint("bind the parameter at the column's type (drop the cast, or fix its `-- @param %s:` annotation); `-- @nolint %s` if the conversion is intended", p, diagnostics.CodePerfTypeMismatch))
 					break
 				}
 			}

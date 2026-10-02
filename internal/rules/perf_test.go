@@ -334,11 +334,11 @@ func TestPerf_OffsetColumnIsNotTheClause(t *testing.T) {
 	}
 }
 
-// ---- @allow and SQLETCH133 -------------------------------------------
+// ---- @nolint and SQLETCH133 -------------------------------------------
 
-func TestPerf_AllowSuppresses(t *testing.T) {
+func TestPerf_NoLintSuppresses(t *testing.T) {
 	src := `-- name: Q :many
--- @allow SQLETCH128, SQLETCH130 (expression index users_lower_email_idx)
+-- @nolint SQLETCH128, SQLETCH130 (expression index users_lower_email_idx)
 SELECT id FROM users WHERE lower(email) = :email
 `
 	if diags := perfLint(t, "postgres", src); len(diags) != 0 {
@@ -346,9 +346,9 @@ SELECT id FROM users WHERE lower(email) = :email
 	}
 }
 
-func TestPerf_AllowIsPerQuery(t *testing.T) {
+func TestPerf_NoLintIsPerQuery(t *testing.T) {
 	src := `-- name: A :many
--- @allow SQLETCH130
+-- @nolint SQLETCH130
 SELECT id FROM users;
 -- name: B :many
 SELECT id FROM users;
@@ -370,25 +370,25 @@ SELECT id FROM users;
 	}
 }
 
-// An @allow that suppresses nothing is a warning at the directive: a
+// An @nolint that suppresses nothing is a warning at the directive: a
 // stale suppression would otherwise hide the next regression.
-func TestPerf_AllowUnused(t *testing.T) {
+func TestPerf_NoLintUnused(t *testing.T) {
 	src := `-- name: Q :many
--- @allow SQLETCH129
+-- @nolint SQLETCH129
 SELECT id FROM users LIMIT 10
 `
 	diags := perfLint(t, "postgres", src)
-	got := spanTexts(src, diags, diagnostics.CodePerfAllowUnused)
-	if !slices.Equal(got, []string{"-- @allow SQLETCH129"}) {
+	got := spanTexts(src, diags, diagnostics.CodePerfNoLintUnused)
+	if !slices.Equal(got, []string{"-- @nolint SQLETCH129"}) {
 		t.Fatalf("got %q (%+v)", got, diags)
 	}
 	assertWarnings(t, diags)
 }
 
 // SQLETCH132 needs the catalog: the catalog-free pass never calls an
-// @allow of it unused (that verdict belongs to CheckPerfTypes).
-func TestPerf_AllowOfTypeLintNotJudgedOffline(t *testing.T) {
-	src := "-- name: Q :many\n-- @allow SQLETCH132\nSELECT id FROM users LIMIT 1\n"
+// @nolint of it unused (that verdict belongs to CheckPerfTypes).
+func TestPerf_NoLintOfTypeLintNotJudgedOffline(t *testing.T) {
+	src := "-- name: Q :many\n-- @nolint SQLETCH132\nSELECT id FROM users LIMIT 1\n"
 	if diags := perfLint(t, "postgres", src); len(diags) != 0 {
 		t.Errorf("got %+v", diags)
 	}
@@ -417,7 +417,7 @@ ORDER BY u.id LIMIT :l OFFSET :o
 
 // The examples are kept warning-free (design 24 §5): a new example
 // that trips a performance lint must fix it or carry a justified
-// @allow.
+// @nolint.
 func TestPerf_ExamplesAreClean(t *testing.T) {
 	for name, profile := range perfProfiles {
 		paths, err := filepath.Glob(filepath.Join("..", "..", "examples", name, "queries", "*.sql"))

@@ -26,7 +26,7 @@ SELECT count(*) AS total FROM audit_logs;
 -- @timeout 30s
 -- One row per distinct action, so the result is bounded by the action
 -- vocabulary, not the table: a reviewed exemption from SQLETCH130.
--- @allow SQLETCH130 (one row per distinct action)
+-- @nolint SQLETCH130 (one row per distinct action)
 SELECT a.action, count(*) AS occurrences
 FROM audit_logs AS a
 GROUP BY a.action

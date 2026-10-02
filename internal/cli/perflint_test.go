@@ -16,17 +16,17 @@ const perfLintQueries = `-- name: Wrapped :many
 SELECT t.id FROM t WHERE lower(t.x) = :x;
 
 -- name: Allowed :many
--- @allow SQLETCH128, SQLETCH130 (expression index t_lower_x_idx; tiny table)
+-- @nolint SQLETCH128, SQLETCH130 (expression index t_lower_x_idx; tiny table)
 SELECT t.id FROM t WHERE lower(t.x) = :x;
 
 -- name: Stale :one
--- @allow SQLETCH129
+-- @nolint SQLETCH129
 SELECT t.id FROM t WHERE t.id = :id;
 `
 
 // The catalog-free lints run in the shared scan seam, so the offline
-// checker (the LSP's analysis) reports them — as warnings, with @allow
-// honored per query and a stale @allow reported at its directive.
+// checker (the LSP's analysis) reports them — as warnings, with @nolint
+// honored per query and a stale @nolint reported at its directive.
 func TestOffline_PerfLints(t *testing.T) {
 	cfg := writeOfflineProject(t, map[string]string{"queries/p.sql": perfLintQueries})
 	res, err := NewOfflineChecker(cfg).Check(nil)
@@ -45,7 +45,7 @@ func TestOffline_PerfLints(t *testing.T) {
 	want := []string{
 		"SQLETCH130@-- name: Wrapped :many",
 		"SQLETCH128@lower(t.x)",
-		"SQLETCH133@-- @allow SQLETCH129",
+		"SQLETCH133@-- @nolint SQLETCH129",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
@@ -61,15 +61,15 @@ func TestOffline_PerfLints(t *testing.T) {
 	}
 }
 
-// A bad @allow is an error (SQLETCH016) — it would otherwise be a
+// A bad @nolint is an error (SQLETCH016) — it would otherwise be a
 // suppression that silently suppresses nothing.
-func TestOffline_BadAllowIsAnError(t *testing.T) {
-	cfg := writeOfflineProject(t, map[string]string{"queries/p.sql": "-- name: Q :one\n-- @allow SQLETCH115\nSELECT t.id FROM t;\n"})
+func TestOffline_BadNoLintIsAnError(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{"queries/p.sql": "-- name: Q :one\n-- @nolint SQLETCH115\nSELECT t.id FROM t;\n"})
 	res, err := NewOfflineChecker(cfg).Check(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := findCode(res.Diags[cfg.Abs("queries/p.sql")], diagnostics.CodeBadAllow)
+	d := findCode(res.Diags[cfg.Abs("queries/p.sql")], diagnostics.CodeBadNoLint)
 	if d == nil || d.Severity != diagnostics.Error {
 		t.Fatalf("got %+v", res.Diags)
 	}
@@ -86,7 +86,7 @@ func TestResolvedChecks_PerfTypeMismatch(t *testing.T) {
 		t.Fatalf("got %+v", diags)
 	}
 	_, diags = runResolvedChecks(t, "postgres",
-		"-- name: Q :one\n-- @allow SQLETCH132\nSELECT id FROM users WHERE id = :p::numeric;\n", numeric)
+		"-- name: Q :one\n-- @nolint SQLETCH132\nSELECT id FROM users WHERE id = :p::numeric;\n", numeric)
 	if len(diags) != 0 {
 		t.Errorf("suppressed: %+v", diags)
 	}

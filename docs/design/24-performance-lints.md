@@ -24,11 +24,14 @@ lint needs and a syntax-only linter never has.
 - **D1 — Warnings, a separate axis.** Every performance lint is a
   `Warning`. `generate`/`check` exit status never depends on them.
   They are not soundness findings and never weaken or replace one.
-- **D2 — Per-query suppression via `-- @allow`.** One or more codes,
+- **D2 — Per-query suppression via `-- @nolint`.** One or more codes,
   per query, buffered and attached exactly like `-- @param` /
-  `-- @policy-optout`. `@allow` may name **only performance-lint
+  `-- @policy-optout`. `@nolint` may name **only performance-lint
   codes**; any other code, an unknown code, or a malformed directive is
-  an ERROR (SQLETCH016).
+  an ERROR (SQLETCH016). (Spelled `@allow` until a second owner
+  decision the same day renamed it `@nolint`, after golangci-lint's
+  `//nolint`, which the Go audience already reads as "suppress a
+  lint"; the semantics did not change.)
 - **D3 — Initial lint set (all four):** function/cast on the column
   side of a comparison; leading-wildcard `LIKE`; `:many` without
   `LIMIT` (plus OFFSET pagination, separate code); parameter-vs-column
@@ -38,13 +41,13 @@ lint needs and a syntax-only linter never has.
 
 | Code | Pass | What |
 | --- | --- | --- |
-| SQLETCH016 | scanner | malformed `@allow`, or it names a non-performance / unknown code (error) |
+| SQLETCH016 | scanner | malformed `@nolint`, or it names a non-performance / unknown code (error) |
 | SQLETCH128 | scan (`cli.scanChecks`) | function/cast applied to the column side of a WHERE / JOIN ON comparison |
 | SQLETCH129 | scan | `LIKE`/`ILIKE` pattern provably starting with `%` or `_` |
 | SQLETCH130 | scan | `:many` SELECT with a reachable rendering that has no `LIMIT` / `FETCH FIRST` |
 | SQLETCH131 | scan | OFFSET pagination with a non-constant offset |
 | SQLETCH132 | resolved (`cli.resolvedChecks`) | column compared with a parameter whose type converts the column |
-| SQLETCH133 | both | an `@allow` that suppressed nothing (warning) |
+| SQLETCH133 | both | an `@nolint` that suppressed nothing (warning) |
 
 The proposed codes were verified free on 2026-10-02 (SQLETCH017 and
 SQLETCH318 are reserved for the concurrent `@timeout` work).
@@ -64,7 +67,7 @@ SQLETCH318 are reserved for the concurrent `@timeout` work).
   direction: each lint flags only the unambiguous form and
   **under-reports** everything else. A missed lint costs nothing the
   database was not already charging; a noisy lint trains authors to
-  sprinkle `@allow`.
+  sprinkle `@nolint`.
 - **Predicate positions.** A token is in a predicate position when it
   sits directly in a `WHERE` or `JOIN … ON` clause (any depth, so a
   subquery's own WHERE counts), or inside a parenthesized boolean group
@@ -99,7 +102,7 @@ wrapped side may be a column for `IN`/`BETWEEN`/`LIKE`. Not flagged:
 both sides referencing columns (a join condition's index story is the
 planner's), arithmetic on the column, negated forms, anything inside
 `CASE`. Expression indexes are deliberately **not modeled**: the hint
-says to `@allow` when one exists.
+says to `@nolint` when one exists.
 
 ### 3.3 SQLETCH129 — leading-wildcard LIKE
 
@@ -170,33 +173,37 @@ whitelist rule, so none is flagged; revisit with a counterexample.
 The MySQL wire-code flag bits are repeated in `internal/rules` to keep
 it free of a driver import; `TestPerfTypes_MySQLFlagsAgree` pins them.
 
-## 4. `-- @allow`
+## 4. `-- @nolint`
 
 ```sql
 -- name: FindByEmail :many
--- @allow SQLETCH128, SQLETCH130 (expression index users_lower_email_idx; ≤ 5 rows per address)
+-- @nolint SQLETCH128, SQLETCH130 (expression index users_lower_email_idx; ≤ 5 rows per address)
 SELECT id FROM users WHERE lower(email) = :email;
 ```
 
-- Form: `-- @allow SQLETCHnnn[, SQLETCHnnn…]` with an optional
+- Form: `-- @nolint SQLETCHnnn[, SQLETCHnnn…]` with an optional
   trailing `(reason)` (optional like `@policy-apply`'s: the directive is
   visible in review either way; a reason is encouraged). Any
-  `@allow`-shaped comment (`-- @allow`, `-- @allow:`, `-- @allow X`) is
+  `@nolint`-shaped comment (`-- @nolint`, `-- @nolint:`, `-- @nolint X`) is
   the directive, so a malformed one is SQLETCH016 rather than a
-  silently ignored comment; `-- @allowX` is not the directive.
+  silently ignored comment; `-- @nolintX` is not the directive.
+- Deliberately NOT golangci-lint's grammar: there is no bare
+  suppress-all form (it would also hide every lint added later), and
+  codes follow a space, not `:`. Both habits are SQLETCH016 with a
+  message spelling the sqletch form.
 - All-or-nothing: a directive naming any non-performance or unknown
   code records **none** of its codes.
 - Scope: the whole query (every rendering). It stays in the skeleton
   verbatim like every directive (so adding one re-keys that query's
   oracle entries — the rendered SQL changed).
-- **SQLETCH133 (unused @allow), decision 2026-10-02:** an `@allow`
+- **SQLETCH133 (unused @nolint), decision 2026-10-02:** an `@nolint`
   whose code does not fire on the query is a warning at the directive,
   because a stale suppression would hide that lint's next regression.
   Each pass judges only the codes it owns: the scan pass judges
   128–131, the resolved pass judges 132 — so a run that cannot reach
   the catalog-dependent pass (an LSP cache miss) never calls a
-  SQLETCH132 allow stale. On SQLite, where SQLETCH132 never fires, an
-  `@allow SQLETCH132` is always reported unused. SQLETCH133 itself
+  SQLETCH132 nolint stale. On SQLite, where SQLETCH132 never fires, an
+  `@nolint SQLETCH132` is always reported unused. SQLETCH133 itself
   cannot be allowed (a stale suppression must not silence its own
   staleness report).
 
@@ -204,7 +211,7 @@ SELECT id FROM users WHERE lower(email) = :email;
 
 `examples/` stays warning-free: `AllAuditActions` (PostgreSQL) and
 `CountByStatus` (SQLite) are GROUP BY results bounded by a vocabulary
-and carry a justified `@allow SQLETCH130`; `UserAuditActions` gained
+and carry a justified `@nolint SQLETCH130`; `UserAuditActions` gained
 `LIMIT :limit` (its result is genuinely unbounded).
 
 ## 6. Known limits / follow-ups
@@ -212,7 +219,7 @@ and carry a justified `@allow SQLETCH130`; `UserAuditActions` gained
 - Lexical keyword handling: a non-reserved keyword used as a column
   name (`group`, `offset`, …) in a predicate can end the predicate
   early — a missed warning, never a wrong one.
-- The editor grammars (doc 11) do not highlight `@allow` specially; it
+- The editor grammars (doc 11) do not highlight `@nolint` specially; it
   renders as a comment.
 - Expression-index awareness (and index awareness in general, design
   conversation "A1") needs indexes in the catalog — a cache format

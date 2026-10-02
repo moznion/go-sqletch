@@ -1376,15 +1376,15 @@ A query suppresses a lint with a per-query directive:
 
 ``` sql
 -- name: ActionCounts :many
--- @allow SQLETCH130 (one row per distinct action)
+-- @nolint SQLETCH130 (one row per distinct action)
 SELECT action, count(*) FROM audit_logs GROUP BY action;
 ```
 
-`-- @allow` may name **only performance-lint codes**. Naming a
+`-- @nolint` may name **only performance-lint codes**. Naming a
 structural, oracle, or configuration code — or an unknown code, or
 writing the directive malformed — is an error (SQLETCH016): soundness
 diagnostics are not per-query decisions, and a suppression that
-suppresses nothing must not pass silently. An `@allow` whose lint does
+suppresses nothing must not pass silently. An `@nolint` whose lint does
 not fire on the query is itself a warning (SQLETCH133), so a stale
 suppression cannot hide that lint's next regression.
 
@@ -1783,7 +1783,7 @@ correct:
 -   Rule violations (R1–R9) explain the rule *and its rationale*, and
     suggest the compliant rewrite (see Rejected Examples).
 -   Performance lints are warnings and say what the database will do
-    instead of using an index, with the rewrite (or the `@allow`) as
+    instead of using an index, with the rewrite (or the `@nolint`) as
     the hint (see Performance Lints).
 
 ------------------------------------------------------------------------

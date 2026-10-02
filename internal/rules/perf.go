@@ -17,7 +17,7 @@ import (
 // and the analysis is a LEXICAL WHITELIST over each verification
 // rendering — it flags only the unambiguous forms and under-reports
 // everything else. A missed lint costs nothing the database would not
-// have charged anyway; a noisy one trains authors to sprinkle @allow.
+// have charged anyway; a noisy one trains authors to sprinkle @nolint.
 //
 // Running over ast.Renderings (not the template) is what makes the
 // lints guard-aware: every @if-present body is in the maximal
@@ -29,8 +29,8 @@ import (
 // CheckPerf runs the catalog-free performance lints — SQLETCH128
 // (function/cast on the column side), 129 (leading-wildcard LIKE), 130
 // (:many without LIMIT) and 131 (OFFSET pagination) — over every
-// verification rendering, applies the query's `-- @allow` directives,
-// and reports SQLETCH133 for an @allow of one of these codes that
+// verification rendering, applies the query's `-- @nolint` directives,
+// and reports SQLETCH133 for an @nolint of one of these codes that
 // suppressed nothing.
 func CheckPerf(profile dialect.LexerProfile, q *template.QueryTemplate, rs []ast.Rendering) []diagnostics.Diagnostic {
 	c := newPerfCollector(q)
@@ -80,9 +80,9 @@ func (c *perfCollector) add(d diagnostics.Diagnostic) {
 	c.diags = append(c.diags, d)
 }
 
-// finish applies the @allow directives for the codes this pass owns,
+// finish applies the @nolint directives for the codes this pass owns,
 // reports unused ones (SQLETCH133), and returns the result in span
-// order. Only owned codes are judged: an @allow of a code another pass
+// order. Only owned codes are judged: an @nolint of a code another pass
 // decides is that pass's business (SQLETCH132 needs the catalog, which
 // an offline pass may not have).
 func (c *perfCollector) finish(owned []diagnostics.Code) []diagnostics.Diagnostic {
@@ -92,7 +92,7 @@ func (c *perfCollector) finish(owned []diagnostics.Code) []diagnostics.Diagnosti
 	}
 	allowed := map[diagnostics.Code]bool{}
 	var out []diagnostics.Diagnostic
-	for _, a := range c.q.Allows {
+	for _, a := range c.q.NoLints {
 		if !slices.Contains(owned, a.Code) {
 			continue
 		}
@@ -100,9 +100,9 @@ func (c *perfCollector) finish(owned []diagnostics.Code) []diagnostics.Diagnosti
 		if fired[a.Code] {
 			continue
 		}
-		out = append(out, diagnostics.Warnf(diagnostics.CodePerfAllowUnused, a.Span,
-			"@allow %s suppresses nothing: the lint does not fire on this query, and a stale suppression would hide its next regression", a.Code).
-			WithHint("remove %s from the @allow directive", a.Code))
+		out = append(out, diagnostics.Warnf(diagnostics.CodePerfNoLintUnused, a.Span,
+			"@nolint %s suppresses nothing: the lint does not fire on this query, and a stale suppression would hide its next regression", a.Code).
+			WithHint("remove %s from the @nolint directive", a.Code))
 	}
 	for _, d := range c.diags {
 		if !allowed[d.Code] {
@@ -590,7 +590,7 @@ func lintPredicates(c *perfCollector, q *template.QueryTemplate, r ast.Rendering
 			if span, ok := templateSpan(q, r, right); ok {
 				c.add(diagnostics.Warnf(diagnostics.CodePerfLeadingLike, span,
 					"this %s pattern starts with a wildcard: a B-tree index can only serve a known prefix, so every row of the column is scanned and matched", kind).
-					WithHint("anchor the pattern at the start (`col %s :q || '%%'`), or use a full-text / trigram index and `-- @allow %s`", kind, diagnostics.CodePerfLeadingLike))
+					WithHint("anchor the pattern at the start (`col %s :q || '%%'`), or use a full-text / trigram index and `-- @nolint %s`", kind, diagnostics.CodePerfLeadingLike))
 			}
 		}
 	}
@@ -603,7 +603,7 @@ func reportWrapped(c *perfCollector, q *template.QueryTemplate, r ast.Rendering,
 	}
 	c.add(diagnostics.Warnf(diagnostics.CodePerfWrappedColumn, span,
 		"the column is wrapped in a function or cast in this comparison: an index on the plain column cannot serve it, so the predicate is evaluated row by row").
-		WithHint("compare the bare column and transform the parameter instead (e.g. `col >= :day_start AND col < :day_end`); if an expression index on exactly this expression exists, `-- @allow %s`", diagnostics.CodePerfWrappedColumn))
+		WithHint("compare the bare column and transform the parameter instead (e.g. `col >= :day_start AND col < :day_end`); if an expression index on exactly this expression exists, `-- @nolint %s`", diagnostics.CodePerfWrappedColumn))
 }
 
 // ---- SQLETCH130 / 131 ----------------------------------------------------
@@ -642,7 +642,7 @@ func lintTail(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks
 	if q.Annotation == template.AnnotationMany && verb == "SELECT" && !limited {
 		c.add(diagnostics.Warnf(diagnostics.CodePerfManyNoLimit, q.HeaderSpan,
 			"this :many query can run without a LIMIT: its result (and the slice the generated method builds) grows with the table").
-			WithHint("add `LIMIT :limit` (keyset-paginate with an @if-present cursor), or `-- @allow %s` for a result bounded by the data model", diagnostics.CodePerfManyNoLimit))
+			WithHint("add `LIMIT :limit` (keyset-paginate with an @if-present cursor), or `-- @nolint %s` for a result bounded by the data model", diagnostics.CodePerfManyNoLimit))
 	}
 	lintOffset(c, q, r, toks)
 }
@@ -719,5 +719,5 @@ func reportOffset(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, 
 	}
 	c.add(diagnostics.Warnf(diagnostics.CodePerfOffsetPaging, span,
 		"OFFSET pagination: the database must produce and discard every skipped row, so page N costs O(N × page size) and deep pages degrade linearly").
-		WithHint("paginate by key instead: `@if-present(after_id) AND id > :after_id @endif … ORDER BY id LIMIT :limit`; or `-- @allow %s` for a bounded page count", diagnostics.CodePerfOffsetPaging))
+		WithHint("paginate by key instead: `@if-present(after_id) AND id > :after_id @endif … ORDER BY id LIMIT :limit`; or `-- @nolint %s` for a bounded page count", diagnostics.CodePerfOffsetPaging))
 }
