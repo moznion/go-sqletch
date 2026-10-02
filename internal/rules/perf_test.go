@@ -98,6 +98,11 @@ func TestPerf_WrappedColumn(t *testing.T) {
 		{"not in", "postgres", "lower(u.email) NOT IN (:a)", nil},
 		{"case expression", "postgres", "CASE WHEN lower(u.email) = :e THEN true ELSE false END", nil},
 		{"function argument", "postgres", "coalesce(lower(u.email) = :e, false)", nil},
+		// A unit word is a unit only directly after its INTERVAL value;
+		// a later `day` is a column again.
+		{"interval unit", "mysql", "lower(u.email) = :x + INTERVAL 1 DAY", []string{"lower(u.email)"}},
+		{"interval then unit-named column", "mysql", "lower(u.email) = :x + INTERVAL 1 DAY - day", nil},
+		{"unit-named column, no interval", "mysql", "lower(u.email) = :x - day", nil},
 		{"subquery value side", "postgres", "lower(u.email) = (SELECT e FROM t)", nil},
 	}
 	for _, c := range cases {
@@ -281,6 +286,11 @@ func TestPerf_LeadingWildcardLike(t *testing.T) {
 		{"not like", "postgres", "u.email NOT LIKE '%foo'", nil},
 		{"mysql CONCAT prefix", "mysql", "u.email LIKE CONCAT(:q, '%')", nil},
 		{"non-column left", "postgres", ":q LIKE '%foo'", nil},
+		// Only a quote-delimited literal is read: the first character of
+		// a dollar-quoted pattern is whatever follows the opening tag,
+		// not the character after the first quote inside it.
+		{"dollar quoted quote first", "postgres", "u.email LIKE $$'%x$$", nil},
+		{"tagged dollar quote", "postgres", "u.email LIKE $t$'%x$t$", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

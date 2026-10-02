@@ -100,7 +100,9 @@ Flagged: a comparison (`= <> != < > <= >=`, `LIKE`, `ILIKE`, `IN (…)`,
 - `CAST(col AS type)`,
 
 and the other operand is **column-free**: placeholders, literals,
-operators, calls over those, typed literals, `INTERVAL` units, casts
+operators, calls over those, typed literals, `INTERVAL` units (only
+the word right after the interval's value — a later `day` is a
+column), casts
 (a type name ends where the type grammar does: only the words of a
 multi-word type continue it, so the zone column in `:t::timestamp AT
 TIME ZONE tz` is still a column). Only the
@@ -117,7 +119,8 @@ where `p` provably starts with a wildcard: a string literal whose
 content starts with `%` or `_` (E-strings included), the first operand
 of a concatenation (`'%' || :q`), or `CONCAT`'s first argument. A bare
 `:q` pattern is never flagged — its content is unknowable at compile
-time.
+time. Only quote-delimited literals are read (`'…'`, MySQL `"…"`,
+`E'…'`): a dollar-quoted `$$…$$` / `$tag$…$tag$` pattern is not judged.
 
 ### 3.4 SQLETCH130 / SQLETCH131 — unbounded results, OFFSET paging
 

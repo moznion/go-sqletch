@@ -357,6 +357,15 @@ func operands(toks []ptok, i int) (left, right []ptok) {
 
 // ---- operand shapes ------------------------------------------------------
 
+// endsValue reports whether t can end an INTERVAL's value operand.
+func endsValue(t ptok) bool {
+	switch t.Kind {
+	case dialect.KindNumber, dialect.KindString, dialect.KindRParen:
+		return true
+	}
+	return t.param != ""
+}
+
 // typeNameContinuations are the words that continue a type name after
 // its first word (`double precision`, `character varying`,
 // `timestamp with time zone`, `interval day to second`).
@@ -523,6 +532,9 @@ func isColumnFree(ops []ptok) bool {
 	// a multi-word type name continue it (`double precision`). Any
 	// other identifier ends the type and is judged normally — so
 	// `::timestamp AT TIME ZONE tz` still sees the column tz.
+	// interval: an INTERVAL is pending its unit. A unit word counts
+	// only right after the interval's value (`INTERVAL 1 DAY`); a later
+	// `day` is a column again.
 	typeMode, interval, skip := 0, false, 0
 	for k, t := range ops {
 		if skip > 0 {
@@ -554,7 +566,8 @@ func isColumnFree(ops []ptok) bool {
 				if t.upper == "INTERVAL" {
 					interval = true
 				}
-			case interval && t.Kind == dialect.KindIdent && slices.Contains(intervalUnits, t.upper):
+			case interval && t.Kind == dialect.KindIdent && slices.Contains(intervalUnits, t.upper) && k > 0 && endsValue(ops[k-1]):
+				interval = false
 			default:
 				return false
 			}
@@ -591,12 +604,27 @@ func leadingWildcard(ops []ptok) bool {
 	if first.Kind != dialect.KindString {
 		return false
 	}
-	q := strings.IndexAny(first.Text, `'"`)
-	if q < 0 || q+1 >= len(first.Text) {
+	body, ok := quotedLiteralBody(first.Text)
+	if !ok || body == "" {
 		return false
 	}
-	c := first.Text[q+1]
-	return c == '%' || c == '_'
+	return body[0] == '%' || body[0] == '_'
+}
+
+// quotedLiteralBody returns what follows the opening delimiter of a
+// quote-delimited string literal: '…', "…" (MySQL), or an E/N prefix
+// the lexer kept in the token (E'…'). Any other string token — dollar-quoted $$…$$ or
+// $tag$…$tag$, x'…' / b'…' bit strings — is not judged (ok false):
+// reading "the character after the first quote" inside it would
+// misplace the pattern's start.
+func quotedLiteralBody(text string) (string, bool) {
+	switch {
+	case strings.HasPrefix(text, "'"), strings.HasPrefix(text, `"`):
+		return text[1:], true
+	case len(text) >= 2 && strings.ContainsRune("EeNn", rune(text[0])) && text[1] == '\'':
+		return text[2:], true
+	}
+	return "", false
 }
 
 // ---- SQLETCH128 / 129 ----------------------------------------------------
