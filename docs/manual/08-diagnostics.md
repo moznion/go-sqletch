@@ -70,7 +70,9 @@ run only when enabled (`lint: true` in [sqletch.yaml](05-config.md), or
 `--lint` on `generate`/`check`), never fail a run, and never affect
 what is verified or generated. Each is a whitelist that flags only the
 unambiguous form. Suppress one per query with
-`-- @nolint CODE (reason)` ([annotations](03-annotations.md)).
+`-- @nolint CODE (reason)` ([annotations](03-annotations.md)). Usage,
+CI gating, and each lint's examples, rewrites, and limits are in
+[the performance-lints chapter](14-performance-lints.md).
 
 | Code | Meaning |
 | --- | --- |

@@ -96,7 +96,7 @@ error, raised with lints on or off.
   "function on the column" there is not an index finding. An
   aggregate's `FILTER (WHERE …)` (PostgreSQL/SQLite) is excluded for
   the same reason — it filters rows already fetched — for both L001 and
-  129.
+  L002.
 - **Spans and determinism.** Findings map through `Rendering.Map`
   back to template bytes; a placeholder maps to its `:name`, and any
   other synthesized token (a policy-woven conjunct, a construct

@@ -115,7 +115,7 @@ cold `generate`).
 SELECT action, count(*) FROM audit_logs GROUP BY action;
 ```
 
-Suppresses [performance lints](08-diagnostics.md#performance-lints-sqletchlnnn-opt-in-warnings)
+Suppresses [performance lints](14-performance-lints.md)
 (SQLETCHL001–L005) for this one query, in every shape. The trailing
 reason is optional but recommended — it is what a reviewer reads.
 

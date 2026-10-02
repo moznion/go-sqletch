@@ -69,7 +69,7 @@ policies:                      # cross-query policies (see the policies chapter)
   oracle's answers are pinned to a version. PostgreSQL/MySQL compare
   the major version; SQLite compares a dotted prefix (`"3.50"`
   matches `3.50.x`).
-- **`lint`** opts the run into the [performance lints](08-diagnostics.md#performance-lints-sqletchlnnn-opt-in-warnings)
+- **`lint`** opts the run into the [performance lints](14-performance-lints.md)
   (SQLETCHL001–L006). Off by default. `generate --lint` / `check
   --lint` turn them on for one run and `--lint=false` turns them off,
   whatever the file says. The editor (LSP) follows this key. Lints only
