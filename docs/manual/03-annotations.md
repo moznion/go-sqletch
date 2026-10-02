@@ -93,7 +93,10 @@ it until the rows are scanned, so a statement that outlasts the
 deadline is interrupted by the driver and the call fails. The value is
 a positive Go duration (`500ms`, `2s`, `1m30s`). A caller's own
 shorter deadline still wins — the generated deadline only ever
-tightens.
+tightens. The error on expiry is the driver's own, returned unchanged
+— `context.DeadlineExceeded` on pgx (default) and MySQL,
+`sqlite3.INTERRUPT` on SQLite, SQLSTATE 57014 with pgx's cancel-request
+handler; see [the per-driver table](07-runtime-and-generated-code.md#timeouts-and-cancellation-what-the-driver-returns).
 
 `-- @timeout none` opts the query out of `query_timeout.default` (see
 [the config reference](05-config.md#field-notes)); without a default

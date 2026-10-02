@@ -61,14 +61,43 @@ rows, err := q.SearchUsers(ctx, gen.SearchUsersParams{...})
    `context.WithTimeout(ctx, d)` right before the driver call and
    cancels it on return, so the deadline covers execution, row
    iteration, and scanning. An expired deadline surfaces as the
-   driver's error: pgx and go-sql-driver/mysql report
-   `context.DeadlineExceeded` (`errors.Is`); ncruces/go-sqlite3
-   interrupts the statement and reports `sqlite3.INTERRUPT`. With
-   pgx, use a pool (`pgxpool`): pgx closes a single connection whose
-   query was interrupted by its context.
+   driver's own error, unchanged — see below.
 
 With `static_expansion`, step 2 is a map lookup into precomposed SQL
 (the `.sqletch/expanded/` files are the audit surface).
+
+### Timeouts and cancellation: what the driver returns
+
+Generated methods return driver errors unchanged, so an expired
+deadline (from `-- @timeout`, `query_timeout.default`, or your own
+context) looks different per driver. This behavior is pinned by
+sqletch's real-database test suite:
+
+| Driver / configuration | Error | Connection afterwards |
+|---|---|---|
+| pgx, default | `errors.Is(err, context.DeadlineExceeded)` (`context.Canceled` on cancel) | **closed** — use `pgxpool`, which replaces it; a single `*pgx.Conn` is unusable afterwards |
+| pgx with `CancelRequestContextWatcherHandler` | `*pgconn.PgError` with `Code == "57014"` — not `DeadlineExceeded` | survives |
+| go-sql-driver/mysql | `errors.Is(err, context.DeadlineExceeded)` (`context.Canceled` on cancel) | managed by database/sql's pool |
+| ncruces/go-sqlite3 | `errors.Is(err, sqlite3.INTERRUPT)` — not `DeadlineExceeded`/`Canceled` | managed by database/sql's pool |
+
+The portable check is `ctx.Err() != nil` after a failed call.
+
+To keep pgx connections alive across timeouts, have the server cancel
+the statement instead of pgx closing the socket:
+
+```go
+cfg, _ := pgxpool.ParseConfig(dsn) // or pgx.ParseConfig
+cfg.ConnConfig.BuildContextWatcherHandler = func(pc *pgconn.PgConn) ctxwatch.Handler {
+	return &pgconn.CancelRequestContextWatcherHandler{Conn: pc, DeadlineDelay: time.Second}
+}
+```
+
+Trade-offs: each cancel is an extra round-trip on a separate TCP
+connection; if the server does not answer within `DeadlineDelay` the
+connection is closed anyway; a cancel can race the statement finishing
+(pgx waits for the cancel to complete); connection poolers must
+forward cancel requests; inside a transaction the transaction is
+aborted either way.
 
 ## Nullability
 

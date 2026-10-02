@@ -527,9 +527,16 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   "no deadline". The directive comment stays in the skeleton, so
   editing it re-keys oracle entries; the config default re-keys nothing.
 - Literal spelling `N*time.Unit` (largest exact unit) — pinned by
-  `TestDurationLiteral`. ncruces/go-sqlite3 reports expiry as
-  `sqlite3.INTERRUPT`, not `context.DeadlineExceeded`; pgx/MySQL wrap
-  the context error. Errors are passed through unchanged (doc 23 §5).
+  `TestDurationLiteral`.
+- Driver errors are returned UNCHANGED (owner decision 2026-10-02; a
+  `runtime.CtxErr` normalization was reverted — doc 17 keeps the
+  driver boundary, normalization can't be complete, and `ctx.Err()`
+  would misattribute racing errors). Expiry per driver, pinned in
+  `TestQueryTimeout*` (doc 23 §5): pgx default → DeadlineExceeded +
+  conn CLOSED (use pgxpool); pgx `CancelRequestContextWatcherHandler`
+  → `*PgError` 57014, conn SURVIVES; MySQL → DeadlineExceeded; SQLite
+  → `sqlite3.INTERRUPT` and NOT the ctx error (asserted both ways so a
+  driver upgrade is noticed). Portable check: `ctx.Err() != nil`.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

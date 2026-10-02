@@ -4,7 +4,9 @@ package e2e_test
 
 // Query timeouts (design 23) against real engines: the generated
 // method's context deadline must actually stop a slow statement on
-// every dialect's driver and surface as context.DeadlineExceeded; the
+// every dialect's driver and surface as THAT DRIVER's documented expiry
+// error (design 23 §5 — generated code passes driver errors through
+// unchanged, so the table there is pinned here); the
 // config-level default must apply to queries without a directive;
 // `@timeout none` must opt out of it; a caller's shorter deadline must
 // still win; and a generous deadline must not cut off row iteration.
@@ -42,10 +44,14 @@ type timeoutDialect struct {
 	// returning the generated Queries and a raw exec function.
 	imports []string
 	open    string
-	// deadline, when set, is Go source for `func deadline(error) bool`
-	// replacing the default errors.Is(err, context.DeadlineExceeded) —
-	// for drivers that report an expired context in their own terms.
-	deadline string
+	// expiry, when set, is Go source for `func deadline(error) bool` and
+	// `func canceled(error) bool` replacing the defaults
+	// (errors.Is context.DeadlineExceeded / context.Canceled) — the
+	// driver's documented error for an expired / cancelled context.
+	expiry string
+	// extra, when set, is Go source for `func extra(ctx, dsn)`: further
+	// driver-specific checks run at the end of main.
+	extra string
 	// unit is the "amount" that makes the slow statement take a short
 	// while (it is doubled until a run exceeds the default timeout);
 	// huge makes it outlast every deadline in the suite.
@@ -76,7 +82,9 @@ func TestQueryTimeoutPostgres(t *testing.T) {
 		schema:   "CREATE TABLE items (id bigint PRIMARY KEY, label text NOT NULL);\n",
 		queries:  timeoutQueries("", sleep, "UPDATE items SET label = label WHERE id > 0;\n"),
 		requires: []string{"github.com/jackc/pgx/v5"},
-		imports:  []string{`"github.com/jackc/pgx/v5/pgxpool"`},
+		imports: []string{`"github.com/jackc/pgx/v5/pgxpool"`, `"github.com/jackc/pgx/v5"`,
+			`"github.com/jackc/pgx/v5/pgconn"`, `"github.com/jackc/pgx/v5/pgconn/ctxwatch"`},
+		extra: pgCancelRequestCheck,
 		// A pool, as in production: pgx closes a single connection whose
 		// query was interrupted by its context, and the pool replaces it.
 		open: `
@@ -136,16 +144,51 @@ func TestQueryTimeoutSQLite(t *testing.T) {
 			`_ "github.com/ncruces/go-sqlite3/driver"`},
 		open: sqlOpen("sqlite3", "dsn"),
 		// ncruces/go-sqlite3 stops the statement on context expiry via
-		// sqlite3_interrupt and reports SQLITE_INTERRUPT, not the
-		// context's error (design 23 §5 documents this).
-		deadline: `
+		// sqlite3_interrupt and reports SQLITE_INTERRUPT WITHOUT the
+		// context's error (design 23 §5). Pinned both ways, so a driver
+		// upgrade that starts wrapping the context error is noticed.
+		expiry: `
 func deadline(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sqlite3.INTERRUPT)
+	return errors.Is(err, sqlite3.INTERRUPT) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func canceled(err error) bool {
+	return errors.Is(err, sqlite3.INTERRUPT) && !errors.Is(err, context.Canceled)
 }
 `,
 		amountType: "int64", unit: "100000", huge: "1000000000000",
 	})
 }
+
+// pgCancelRequestCheck pins pgx's opt-in CancelRequestContextWatcherHandler
+// (design 23 §5): on expiry the server cancels the statement (SQLSTATE
+// 57014, a *PgError — NOT context.DeadlineExceeded) and the single
+// connection survives, so the next generated call on it succeeds.
+const pgCancelRequestCheck = `
+func extra(ctx context.Context, dsn string) {
+	cfg, err := pgx.ParseConfig(dsn)
+	die(err)
+	cfg.BuildContextWatcherHandler = func(pc *pgconn.PgConn) ctxwatch.Handler {
+		return &pgconn.CancelRequestContextWatcherHandler{Conn: pc, DeadlineDelay: time.Second}
+	}
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	die(err)
+	defer conn.Close(ctx)
+	q := gen.New(conn)
+	for i := 0; i < 3; i++ {
+		_, err := q.Slow(ctx, gen.SlowParams{Amount: 30})
+		var pgErr *pgconn.PgError
+		expect(errors.As(err, &pgErr) && pgErr.Code == "57014",
+			"cancel-request handler: want *PgError 57014, got %T %v", err, err)
+		expect(!errors.Is(err, context.DeadlineExceeded),
+			"cancel-request handler: 57014 now wraps DeadlineExceeded (driver changed; update design 23 §5): %v", err)
+		expect(!conn.IsClosed(), "cancel-request handler: connection closed after timeout %d", i)
+	}
+	rows, err := q.Fast(ctx, gen.FastParams{})
+	die(err)
+	expect(len(rows) == 3, "cancel-request handler: next call on the surviving conn got %d rows", len(rows))
+}
+`
 
 func sqlOpen(driver, dsnExpr string) string {
 	return `
@@ -244,11 +287,16 @@ query_timeout:
 
 	main := timeoutMain
 	main = strings.Replace(main, "//IMPORTS", "\t"+strings.Join(d.imports, "\n\t"), 1)
-	deadline := d.deadline
-	if deadline == "" {
-		deadline = "\nfunc deadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) }\n"
+	expiry := d.expiry
+	if expiry == "" {
+		expiry = "\nfunc deadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) }\n" +
+			"\nfunc canceled(err error) bool { return errors.Is(err, context.Canceled) }\n"
 	}
-	main = strings.Replace(main, "//OPEN", d.open+deadline, 1)
+	extra := d.extra
+	if extra == "" {
+		extra = "\nfunc extra(context.Context, string) {}\n"
+	}
+	main = strings.Replace(main, "//OPEN", d.open+expiry+extra, 1)
 	main = strings.NewReplacer("AMOUNT_T", d.amountType, "UNIT", d.unit, "HUGE", d.huge,
 		"DEFAULT_MS", timeoutDefault.String()).Replace(main)
 	writeFile(t, dir, "main.go", main)
@@ -298,14 +346,15 @@ func expect(cond bool, format string, args ...any) {
 	}
 }
 //OPEN
-// obs counts exec events that carried an error: a deadline is an
-// execution failure and must be observed like any other (design 18).
-type obs struct{ execErrs int }
+// obs records exec events that carried an error: a deadline is an
+// execution failure and must be observed like any other (design 18),
+// with the same driver error the caller gets.
+type obs struct{ execErrs []error }
 
 func (o *obs) ObserveCompose(string, sqletchruntime.ShapeKey, bool) {}
 func (o *obs) ObserveExec(_ context.Context, _, _ string, _ time.Duration, _ int64, err error) {
 	if err != nil {
-		o.execErrs++
+		o.execErrs = append(o.execErrs, err)
 	}
 }
 func (o *obs) ObserveReject(context.Context, string, error) {}
@@ -331,20 +380,29 @@ func main() {
 
 	// 1. The directive's deadline stops a statement that would outlast it.
 	took, err := timed(func() error { _, err := q.Slow(ctx, gen.SlowParams{Amount: huge}); return err })
-	expect(deadline(err), "Slow: want DeadlineExceeded, got %v", err)
+	expect(deadline(err), "Slow: unexpected error %T %v", err, err)
 	expect(took < 5*time.Second, "Slow: took %v under a 200ms deadline", took)
 
 	// 2. No directive: the config default applies.
 	took, err = timed(func() error { _, err := q.SlowDefault(ctx, gen.SlowDefaultParams{Amount: huge}); return err })
-	expect(deadline(err), "SlowDefault: want DeadlineExceeded, got %v", err)
+	expect(deadline(err), "SlowDefault: unexpected error %T %v", err, err)
 	expect(took < 5*time.Second, "SlowDefault: took %v under the default deadline", took)
 
 	// 3. A caller's shorter deadline wins over a generous directive.
 	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	took, err = timed(func() error { _, err := q.SlowLong(short, gen.SlowLongParams{Amount: huge}); return err })
 	cancel()
-	expect(deadline(err), "SlowLong: want DeadlineExceeded, got %v", err)
+	expect(deadline(err), "SlowLong: unexpected error %T %v", err, err)
 	expect(took < 5*time.Second, "SlowLong: took %v under the caller's 200ms deadline", took)
+
+	// 3b. A caller cancelling mid-statement: the driver's cancel error.
+	cctx, ccancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(200*time.Millisecond, ccancel)
+	took, err = timed(func() error { _, err := q.SlowNone(cctx, gen.SlowNoneParams{Amount: huge}); return err })
+	timer.Stop()
+	ccancel()
+	expect(canceled(err), "SlowNone cancelled: unexpected error %T %v", err, err)
+	expect(took < 5*time.Second, "SlowNone cancelled: took %v after a 200ms cancel", took)
 
 	// 4. @timeout none opts out of the default: grow the work until one
 	// successful run outlasts the default by a margin.
@@ -367,8 +425,15 @@ func main() {
 	die(err)
 	expect(n >= 0, "Touch: rows affected %d", n)
 
-	// Three deadline failures, each observed as an exec error.
-	expect(ob.execErrs == 3, "observer saw %d exec errors, want 3", ob.execErrs)
+	// Three deadline failures and one cancel, each observed as an exec
+	// error carrying the same driver error.
+	expect(len(ob.execErrs) == 4, "observer saw %d exec errors, want 4: %v", len(ob.execErrs), ob.execErrs)
+	for i, e := range ob.execErrs[:3] {
+		expect(deadline(e), "observed error %d: %T %v", i, e, e)
+	}
+	expect(canceled(ob.execErrs[3]), "observed cancel: %T %v", ob.execErrs[3], ob.execErrs[3])
+
+	extra(ctx, os.Getenv("SQLETCH_TIMEOUT_DSN"))
 	fmt.Println("TIMEOUT-OK")
 }
 `

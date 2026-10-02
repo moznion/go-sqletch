@@ -1,6 +1,7 @@
 # sqletch Design — 23: Per-query timeouts
 
-Status: ACCEPTED — owner decisions D1–D3 settled 2026-10-02;
+Status: ACCEPTED — owner decisions D1–D3 and the driver-error stance
+(§5, §5.1) settled 2026-10-02;
 implemented. D4–D7 are the implementation choices made within them,
 recorded here for review.
 
@@ -99,18 +100,66 @@ not survive verbatim, and it would change composed SQL — out of scope.
 `TestQueryTimeout{Postgres,MySQL,SQLite}` run the real pipeline,
 compile the generated package, and execute against the dev database:
 
-| Driver | Error on expiry |
-|---|---|
-| pgx v5 | `errors.Is(err, context.DeadlineExceeded)` |
-| go-sql-driver/mysql (database/sql) | `errors.Is(err, context.DeadlineExceeded)` |
-| ncruces/go-sqlite3 (database/sql) | `sqlite3.INTERRUPT` — the statement is interrupted promptly, but the driver does not wrap the context error |
+Generated code returns the driver's error **unchanged** (owner
+decision 2026-10-02). What a caller sees on an expired deadline (or a
+cancelled context) is therefore the driver's own behavior, documented
+and pinned per driver (pgx v5.11.0, go-sql-driver/mysql v1.10.1,
+ncruces/go-sqlite3 v0.35.6):
 
-sqletch reports the driver's error unchanged; normalizing SQLite's
-interrupt into `context.DeadlineExceeded` in generated code would add
-an error-rewriting branch to every method for one driver's convention,
-and was not done. With pgx, a single `*pgx.Conn` whose query is
-interrupted by its context is closed by pgx; production code uses a
-pool (`pgxpool`), as the suite does.
+| Driver / configuration | Error on expiry | Connection afterwards |
+|---|---|---|
+| pgx, default `DeadlineContextWatcherHandler` | `errors.Is(err, context.DeadlineExceeded)` (`context.Canceled` on cancel) | **closed** — a single `*pgx.Conn` is unusable afterwards; `pgxpool` replaces it |
+| pgx with `CancelRequestContextWatcherHandler` (below) | `*pgconn.PgError` SQLSTATE **57014** (query_canceled) — NOT `DeadlineExceeded` | **survives**; the next query on it succeeds |
+| go-sql-driver/mysql (database/sql) | `errors.Is(err, context.DeadlineExceeded)` (`context.Canceled` on cancel) | managed by database/sql's pool (not pinned) |
+| ncruces/go-sqlite3 (database/sql) | `sqlite3.INTERRUPT` — NOT `DeadlineExceeded`/`Canceled` | managed by database/sql's pool (not pinned) |
+
+The pgx opt-in keeps connections alive by having the server cancel
+the statement instead of closing the socket:
+
+```go
+cfg.BuildContextWatcherHandler = func(pc *pgconn.PgConn) ctxwatch.Handler {
+	return &pgconn.CancelRequestContextWatcherHandler{Conn: pc, DeadlineDelay: time.Second}
+}
+```
+
+Verified on PG 16 + pgx v5.11.0: about 300 ms to return for a 200 ms
+deadline, three consecutive timeouts on one connection, then the next
+query OK. Caveats: the cancel is an extra round-trip on a separate TCP
+connection; if the server does not respond, the `DeadlineDelay`
+fallback closes the connection after all; the cancel-request protocol
+can race the statement finishing (pgx waits for the cancel to
+complete, which mitigates it); connection poolers (PgBouncer, RDS
+Proxy) must forward cancel requests; inside a transaction the
+transaction is aborted either way.
+
+**Portable check** across drivers: `ctx.Err() != nil` after a failed
+call (or `errors.Is(err, context.DeadlineExceeded)` where the driver
+wraps it — pgx default, MySQL).
+
+`TestQueryTimeout{Postgres,MySQL,SQLite}` pin the error column of every
+row (the connection column only for the cancel-request row): deadline and
+caller-cancel errors per driver (SQLite asserts `sqlite3.INTERRUPT`
+AND the absence of the context error, so a driver upgrade that starts
+wrapping is noticed), the observer receiving the same error, and the
+pgx cancel-request case on a single `*pgx.Conn` (57014, not closed,
+next generated call succeeds).
+
+### 5.1 Why no normalization — owner decision 2026-10-02
+
+A `runtime.CtxErr` normalization (prefix `ctx.Err()` onto SQLite's
+interrupt error in every SQLite method) was implemented and reverted
+the same day:
+
+- Design 17 keeps the **driver boundary deliberately unchanged**:
+  generated code hands the driver what it always did and returns what
+  the driver returns.
+- Normalization **cannot be complete**: pgx with
+  `CancelRequestContextWatcherHandler` returns `*PgError` 57014, not
+  `DeadlineExceeded`, and other drivers/configurations have their own
+  conventions; a half-normalized surface is worse than a documented
+  one.
+- Deciding from `ctx.Err()` (generated code cannot import a driver)
+  would **misattribute an unrelated error** that races the deadline.
 
 ## 6. Not in scope
 
