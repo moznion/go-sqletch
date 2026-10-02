@@ -307,6 +307,9 @@ func TestPerf_OffsetPagination(t *testing.T) {
 		{"mysql offset", "mysql", "LIMIT :lim OFFSET :off", []string{"OFFSET :off"}},
 		{"sqlite offset", "sqlite", "LIMIT :lim OFFSET :off", []string{"OFFSET :off"}},
 		{"sqlite comma form", "sqlite", "LIMIT :off, :lim", []string{":off"}},
+		// ALL/DESC precede a real clause: still flagged.
+		{"pg limit all offset", "postgres", "LIMIT ALL OFFSET :o", []string{"OFFSET :o"}},
+		{"pg desc offset first", "postgres", "DESC OFFSET :o LIMIT 5", []string{"OFFSET :o"}},
 
 		{"constant offset", "postgres", "LIMIT 10 OFFSET 1", nil},
 		{"mysql constant comma", "mysql", "LIMIT 1, :lim", nil},
@@ -331,6 +334,38 @@ func TestPerf_OffsetColumnIsNotTheClause(t *testing.T) {
 		if got := spanTexts(src, perfLint(t, d, src), diagnostics.CodePerfOffsetPaging); len(got) != 0 {
 			t.Errorf("%s: got %q", d, got)
 		}
+	}
+}
+
+// Every keyword position that takes an operand (or a relation name)
+// keeps a bare `offset` a column/table: a false SQLETCH131 there could
+// only be silenced by an @nolint that would also hide real OFFSET
+// paging, and design 24 §6 promises keyword columns only ever cost a
+// MISSED warning. Before any LIMIT, so the predecessor rule decides.
+func TestPerf_OffsetKeywordColumnPositions(t *testing.T) {
+	cases := []struct{ name, dialect, src string }{
+		{"between", "mysql", "SELECT id FROM t WHERE x BETWEEN offset AND 10"},
+		{"between sqlite", "sqlite", "SELECT id FROM t WHERE x BETWEEN offset AND 10"},
+		{"like", "mysql", "SELECT id FROM t WHERE x LIKE offset"},
+		{"like escape", "mysql", "SELECT id FROM t WHERE x LIKE :p ESCAPE offset"},
+		{"is", "sqlite", "SELECT id FROM t WHERE x IS offset"},
+		{"case", "mysql", "SELECT CASE offset WHEN 1 THEN 'a' END AS c FROM t"},
+		{"glob", "sqlite", "SELECT id FROM t WHERE x GLOB offset"},
+		{"regexp", "mysql", "SELECT id FROM t WHERE x REGEXP offset"},
+		{"interval", "mysql", "SELECT id FROM t WHERE d < now() - INTERVAL offset DAY"},
+		{"div", "mysql", "SELECT x DIV offset AS q FROM t"},
+		{"mod", "mysql", "SELECT x MOD offset AS q FROM t"},
+		{"from table", "mysql", "SELECT id FROM offset WHERE id = :id"},
+		{"join table", "sqlite", "SELECT t.id FROM t JOIN offset ON offset.id = t.id"},
+		{"returning", "sqlite", "DELETE FROM t WHERE id = :id RETURNING offset"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :many\n" + c.src + "\n"
+			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfOffsetPaging); len(got) != 0 {
+				t.Errorf("got %q", got)
+			}
+		})
 	}
 }
 

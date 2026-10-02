@@ -651,9 +651,16 @@ func lintTail(c *perfCollector, q *template.QueryTemplate, r ast.Rendering, toks
 var tailEnders = []string{"ROW", "ROWS", "FETCH", "LIMIT", "OFFSET", "FOR", "LOCK", "UNION", "INTERSECT", "EXCEPT"}
 
 // nonClausePredecessors are tokens after which `offset` is a column
-// name, not the clause (it is non-reserved on MySQL/SQLite).
+// or table name, not the clause (it is non-reserved on MySQL/SQLite):
+// every keyword that takes an operand or a relation name. None of them
+// can end an expression, so none can precede a real OFFSET clause —
+// over-listing only ever costs a missed warning, never a wrong one
+// (design 24 §6).
 var nonClausePredecessors = []string{
 	"SELECT", "BY", "WHERE", "AND", "OR", "NOT", "ON", "AS", "DISTINCT", "SET", "HAVING", "WHEN", "THEN", "ELSE",
+	"BETWEEN", "LIKE", "ILIKE", "GLOB", "REGEXP", "RLIKE", "MATCH", "ESCAPE", "IS", "IN", "CASE",
+	"INTERVAL", "BINARY", "DIV", "MOD", "XOR", "ALL", "ANY", "SOME",
+	"FROM", "JOIN", "UPDATE", "INTO", "USING", "RETURNING",
 }
 
 func tailOperand(toks []ptok, from int) []ptok {
