@@ -179,9 +179,9 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	res := &Result{Sources: map[string][]byte{}}
 	drv := driverFor(cfg)
 	profile := drv.profile
-	lint := cfg.Lint // performance lints are opt-in (design 24 §2)
+	lintOn := cfg.Lint // performance lints are opt-in (design 24 §2)
 	if opts.Lint != nil {
-		lint = *opts.Lint
+		lintOn = *opts.Lint
 	}
 	frontend := drv.frontend
 
@@ -248,7 +248,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		slugs[i] = t.Slug()
 	}
 	for _, cq := range queries {
-		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes, lint)
+		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes, lintOn)
 		if err != nil {
 			return nil, err
 		}
@@ -367,7 +367,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 
 	// ---- catalog-dependent checks, types, nullability -------------------
 	for _, cq := range queries {
-		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat, lint)
+		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat, lintOn)
 		if err != nil {
 			return nil, err
 		}

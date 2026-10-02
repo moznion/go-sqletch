@@ -114,8 +114,13 @@ internal/ast        P2  Render/RenderShape + SourceMap — the reference
 internal/rules      P2/3/4  CheckR1 (probe-based node completeness),
                         CheckLexical (R6, R9), CheckResolved (R3
                         resolution-based, R2 star, planner table),
-                        CheckTypeAgreement/ResolveParamTypes (P1 types),
-                        CheckPerf/CheckPerfTypes (doc 24 opt-in lints)
+                        CheckTypeAgreement/ResolveParamTypes (P1 types);
+                        ColumnResolver = the R3 resolver's one export
+internal/lint       —   opt-in performance lints (doc 24, SQLETCHLnnn):
+                        Check (L001–L004, in cli.scanChecks) and
+                        CheckTypes (L005, last in cli.resolvedChecks);
+                        never imports a dialect implementation, never
+                        forks resolution (uses rules.ColumnResolver)
 internal/policy     —   cross-query policy weaving (doc 14, spec
                         §Cross-Query Policies): Weave runs between
                         CheckLexical (unwoven) and Renderings (woven)
@@ -477,7 +482,7 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   depend on config. Lint codes live in their own `SQLETCHLnnn` space
   (L001–L006); the old SQLETCH128–133 spellings are SQLETCH016.
 - Lexical WHITELIST over every verification rendering
-  (`rules.CheckPerf` in `cli.scanChecks`; `rules.CheckPerfTypes` last
+  (`lint.Check` in `cli.scanChecks`; `lint.CheckTypes` last
   in `cli.resolvedChecks` — both shared with the LSP). Under-report,
   never noise; findings in synthesized (woven) text are dropped. Each
   pass judges unused @nolint only for the codes it owns (L005 belongs to

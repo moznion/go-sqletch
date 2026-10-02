@@ -1,4 +1,4 @@
-package rules
+package lint
 
 import (
 	"slices"
@@ -7,10 +7,11 @@ import (
 	"github.com/moznion/go-sqletch/internal/cache"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/rules"
 	"github.com/moznion/go-sqletch/internal/template"
 )
 
-// CheckPerfTypes runs SQLETCHL005 (design 24 §3.5): a column compared
+// CheckTypes runs SQLETCHL005 (design 24 §3.5): a column compared
 // with a parameter whose type makes the engine convert the COLUMN side,
 // which takes an index on the column out of play. It needs the catalog
 // (column types) and the resolved parameter types, so it runs in the
@@ -28,7 +29,7 @@ import (
 // typeByName, because the oracle infers one type per parameter from its
 // first use and a cast elsewhere does not change it — an unresolvable
 // cast type is silent).
-func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
+func CheckTypes(profile dialect.LexerProfile, dialectName string, q *template.QueryTemplate, rs []ast.Rendering,
 	tree dialect.Tree, cat *cache.Catalog, paramTypes map[string]dialect.TypeRef,
 	typeByName func(string) (dialect.TypeRef, bool)) []diagnostics.Diagnostic {
 
@@ -38,7 +39,7 @@ func CheckPerfTypes(profile dialect.LexerProfile, dialectName string, q *templat
 	c := newPerfCollector(q)
 	mismatch := typeMismatchRule(dialectName)
 	if mismatch != nil {
-		res := newResolver(profile, q, rs[0], tree, cat)
+		res := rules.NewColumnResolver(profile, q, rs[0], tree, cat)
 		for _, r := range rs {
 			toks, ok := lexRendering(profile, r)
 			if !ok {
@@ -159,28 +160,18 @@ func tokenText(sql string, ops []ptok) string {
 	return sql[ops[0].Start:ops[len(ops)-1].End]
 }
 
-// resolveColumn binds a bare column reference against the top-level
-// relations: a qualifier must name one, and an unqualified name must
-// match exactly one relation's catalog columns. nil when unresolved.
-func resolveColumn(res *resolver, col []ptok) *cache.Column {
+// resolveColumn binds a bare column reference (`col` or `q.col`)
+// against the top-level relations through the R3 resolver. nil when
+// unresolved.
+func resolveColumn(res *rules.ColumnResolver, col []ptok) *cache.Column {
 	name := identText(col[len(col)-1])
-	var rel *relInfo
 	switch len(col) {
 	case 1:
-		cands := res.columnCandidates(name)
-		if len(cands) != 1 {
-			return nil
-		}
-		rel = cands[0]
+		return res.Column("", name)
 	case 3:
-		rel = res.byName[res.fold(identText(col[0]))]
-	default:
-		return nil
+		return res.Column(identText(col[0]), name)
 	}
-	if rel == nil || rel.table == nil {
-		return nil
-	}
-	return res.col(rel.table, name)
+	return nil
 }
 
 // identText returns an identifier's name, unquoting a quoted one.
@@ -246,8 +237,8 @@ func mysqlTypeMismatch(colOID, paramOID uint32) string {
 }
 
 // The MySQL TypeRef flag bits (internal/dialect/mysql/typemap.go:
-// FlagUnsigned, FlagBinary), repeated here so the rules package stays
-// free of driver imports; TestPerfTypes_MySQLFlagsAgree pins them.
+// FlagUnsigned, FlagBinary), repeated here so the lint package stays
+// free of dialect-implementation imports; TestPerfTypes_MySQLFlagsAgree pins them.
 const (
 	mysqlFlagUnsigned uint32 = 1 << 8
 	mysqlFlagBinary   uint32 = 1 << 9

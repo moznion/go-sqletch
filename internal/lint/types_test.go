@@ -1,4 +1,4 @@
-package rules
+package lint
 
 import (
 	"slices"
@@ -91,7 +91,7 @@ func perfTypes(t *testing.T, dialectName, src string, params map[string]dialect.
 	typeByName := map[string]func(string) (dialect.TypeRef, bool){
 		"postgres": postgres.TypeMap{}.TypeByName, "mysql": mysql.TypeMap{}.TypeByName, "sqlite": sqlite.TypeMap{}.TypeByName,
 	}[dialectName]
-	return CheckPerfTypes(profile, dialectName, q, rs, tree, typesCatalog(t, dialectName), params, typeByName)
+	return CheckTypes(profile, dialectName, q, rs, tree, typesCatalog(t, dialectName), params, typeByName)
 }
 
 func TestPerfTypes_Postgres(t *testing.T) {
@@ -224,8 +224,8 @@ LIMIT 1
 	}
 }
 
-// The rules package repeats mysql's TypeRef flag bits to stay free of a
-// driver import; this pins the copies.
+// The lint package repeats mysql's TypeRef flag bits to stay free of a
+// dialect-implementation import; this pins the copies.
 func TestPerfTypes_MySQLFlagsAgree(t *testing.T) {
 	if mysqlFlagUnsigned != mysql.FlagUnsigned || mysqlFlagBinary != mysql.FlagBinary {
 		t.Fatal("mysql TypeRef flag bits drifted from internal/dialect/mysql")

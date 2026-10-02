@@ -1,4 +1,4 @@
-package rules
+package lint
 
 import (
 	"fmt"
@@ -36,7 +36,7 @@ func perfLint(t *testing.T, dialectName, src string) []diagnostics.Diagnostic {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CheckPerf(profile, q, rs)
+	return Check(profile, q, rs)
 }
 
 // spanTexts returns the template text under every diagnostic of code.
@@ -520,7 +520,7 @@ SELECT id FROM users;
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := len(CheckPerf(profile, q, rs)); got != want {
+		if got := len(Check(profile, q, rs)); got != want {
 			t.Errorf("%s: %d diagnostics, want %d", q.Name, got, want)
 		}
 	}
@@ -542,7 +542,7 @@ SELECT id FROM users LIMIT 10
 }
 
 // SQLETCHL005 needs the catalog: the catalog-free pass never calls an
-// @nolint of it unused (that verdict belongs to CheckPerfTypes).
+// @nolint of it unused (that verdict belongs to CheckTypes).
 func TestPerf_NoLintOfTypeLintNotJudgedOffline(t *testing.T) {
 	src := "-- name: Q :many\n-- @nolint SQLETCHL005\nSELECT id FROM users LIMIT 1\n"
 	if diags := perfLint(t, "postgres", src); len(diags) != 0 {
@@ -594,7 +594,7 @@ func TestPerf_ExamplesAreClean(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, d := range CheckPerf(profile, q, rs) {
+				for _, d := range Check(profile, q, rs) {
 					t.Errorf("%s %s: %s %s", p, q.Name, d.Code, d.Message)
 				}
 			}
@@ -633,7 +633,7 @@ func TestPerf_DegenerateInputs(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			_ = CheckPerf(profile, f.Queries[0], rs)
+			_ = Check(profile, f.Queries[0], rs)
 			ran++
 		}
 	}

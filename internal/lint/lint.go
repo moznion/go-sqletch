@@ -1,4 +1,21 @@
-package rules
+// Package lint implements the opt-in performance lints SQLETCHL001–L006
+// (docs/design/24-performance-lints.md).
+//
+// They are a separate axis from the structural rules in internal/rules:
+// they run only when enabled (sqletch.yaml `lint`, or --lint), every
+// finding is a WARNING, and the analysis is a LEXICAL WHITELIST over
+// each verification rendering — it flags only the unambiguous forms
+// and under-reports everything else. A missed lint costs nothing the
+// database would not have charged anyway; a noisy one trains authors
+// to sprinkle @nolint.
+//
+// Running over ast.Renderings (not the template) is what makes the
+// lints guard-aware: every @if-present body is in the maximal
+// rendering and every @choose case in its own, so a pattern anywhere
+// reachable is seen, and the source map attributes it back to the
+// template bytes. Findings anchored in synthesized text (policy-woven
+// conjuncts) are dropped — the author did not write them.
+package lint
 
 import (
 	"slices"
@@ -11,28 +28,13 @@ import (
 	"github.com/moznion/go-sqletch/internal/template"
 )
 
-// Performance lints (docs/design/24-performance-lints.md).
-//
-// These are a separate axis from soundness: every finding is a WARNING,
-// and the analysis is a LEXICAL WHITELIST over each verification
-// rendering — it flags only the unambiguous forms and under-reports
-// everything else. A missed lint costs nothing the database would not
-// have charged anyway; a noisy one trains authors to sprinkle @nolint.
-//
-// Running over ast.Renderings (not the template) is what makes the
-// lints guard-aware: every @if-present body is in the maximal
-// rendering and every @choose case in its own, so a pattern anywhere
-// reachable is seen, and the source map attributes it back to the
-// template bytes. Findings anchored in synthesized text (policy-woven
-// conjuncts) are dropped — the author did not write them.
-
-// CheckPerf runs the catalog-free performance lints — SQLETCHL001
+// Check runs the catalog-free performance lints — SQLETCHL001
 // (function/cast on the column side), L002 (leading-wildcard LIKE), L003
 // (:many without LIMIT) and L004 (OFFSET pagination) — over every
 // verification rendering, applies the query's `-- @nolint` directives,
 // and reports SQLETCHL006 for an @nolint of one of these codes that
 // suppressed nothing.
-func CheckPerf(profile dialect.LexerProfile, q *template.QueryTemplate, rs []ast.Rendering) []diagnostics.Diagnostic {
+func Check(profile dialect.LexerProfile, q *template.QueryTemplate, rs []ast.Rendering) []diagnostics.Diagnostic {
 	c := newPerfCollector(q)
 	for _, r := range rs {
 		toks, ok := lexRendering(profile, r)

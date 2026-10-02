@@ -202,8 +202,8 @@ never flagged. The SQLite row is a decision beyond D3's wording
 mismatch", but no SQLite pair is *known* to defeat the index under the
 whitelist rule, so none is flagged; revisit with a counterexample.
 
-The MySQL wire-code flag bits are repeated in `internal/rules` to keep
-it free of a driver import; `TestPerfTypes_MySQLFlagsAgree` pins them.
+The MySQL wire-code flag bits are repeated in `internal/lint` to keep
+it free of a dialect-implementation import; `TestPerfTypes_MySQLFlagsAgree` pins them.
 
 ## 4. `-- @nolint`
 

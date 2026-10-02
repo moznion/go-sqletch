@@ -12,6 +12,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
+	"github.com/moznion/go-sqletch/internal/lint"
 	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/rules"
 	"github.com/moznion/go-sqletch/internal/template"
@@ -512,7 +513,7 @@ func loadDescs(store *cache.Store, fp, slug, query string, rs []ast.Rendering) (
 // enforcement. Offline once the descs are in hand. q must be the
 // WOVEN template.
 func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *template.QueryTemplate, rs []ast.Rendering,
-	descs []dialect.Desc, cat *cache.Catalog, lint bool) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
+	descs []dialect.Desc, cat *cache.Catalog, lintOn bool) (map[string]dialect.TypeRef, []diagnostics.Diagnostic, error) {
 
 	tree, err := drv.frontend.Parse(rs[0].SQL)
 	if err != nil {
@@ -665,8 +666,8 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 	}
 	// SQLETCHL005 (design 24): needs column types and the final
 	// parameter types, so it runs last, in this shared pass.
-	if lint {
-		diags = append(diags, rules.CheckPerfTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes, drv.typeByName)...)
+	if lintOn {
+		diags = append(diags, lint.CheckTypes(drv.profile, dialectName, q, rs, tree, cat, paramTypes, drv.typeByName)...)
 	}
 	return paramTypes, diags, nil
 }
