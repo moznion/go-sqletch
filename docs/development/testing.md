@@ -166,7 +166,7 @@ files) SHOULD have robustness targets.
 | Lane | Targets | Budget | Corpus |
 |---|---|---|---|
 | PR smoke (`ci.yml`) | the six plain targets | 30 s each | empty every run |
-| Nightly (`fuzz-nightly.yml`) | all eight, server dialects included | 10 min each (dispatchable) | persisted in the Actions cache, compounding |
+| Nightly (`fuzz-nightly.yml`) | all eight, server dialects included | 10 min each (dispatchable) | committed to the `fuzz-corpus` branch, compounding |
 | Seeds in `go test` | every target | — | `f.Add` + `testdata/fuzz/` |
 
 A nightly crasher fails the run and is uploaded as an artifact; it is
