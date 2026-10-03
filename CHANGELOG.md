@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.0.7](https://github.com/moznion/go-sqletch/compare/v0.0.6...v0.0.7) - 2026-10-03
+
+- README: list shipped policies, native MySQL oracle, and runtime features by @moznion in https://github.com/moznion/go-sqletch/pull/163
+- cli: make TestScanSourceGoScalesLinearly deterministic (allocated bytes, not wall-clock) by @moznion in https://github.com/moznion/go-sqletch/pull/165
+
 ## [v0.0.6](https://github.com/moznion/go-sqletch/compare/v0.0.5...v0.0.6) - 2026-10-03
 
 - e2e: per-dialect SQL-shape conformance through generated code by @moznion in https://github.com/moznion/go-sqletch/pull/151
