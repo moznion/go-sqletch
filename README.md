@@ -274,7 +274,17 @@ per-dialect guides, and the
 - **Dialects**: PostgreSQL (types inferred by the server),
   MySQL and SQLite (types from `-- @param` / `-- @column`
   annotations). SQLite needs no Docker and no server at all — its
-  oracle is the real engine, in-process.
+  oracle is the real engine, in-process. MySQL can run the same way
+  with `database.oracle: native`: inference over a catalog built from
+  your DDL, proven byte-identical to a real server over a committed
+  corpus, refusing anything it cannot prove
+  ([dialects](docs/manual/04-dialects.md)).
+- **Cross-query policies**: a predicate declared once in
+  `sqletch.yaml` (tenant scoping, say) is woven at compile time into
+  every query touching the designated tables, and enforcement proves
+  no reachable shape touches them unscoped; opting out is an explicit
+  `-- @policy-optout` annotation. See the
+  [policies chapter](docs/manual/12-policies.md).
 - **Authoring**: `.sql` files or `//sqletch:query` consts in Go files;
   `sqletch fmt` for canonical layout; strict static expansion when
   every SQL text must exist on disk for audit.
@@ -284,6 +294,13 @@ per-dialect guides, and the
   column — checked across every reachable shape, suppressible per
   query with `-- @nolint`. See the
   [lint chapter](docs/manual/14-performance-lints.md).
+- **Runtime**: per-query client-side deadlines (`-- @timeout`, or a
+  config-wide default), an `Explain<Query>` sibling for every method
+  that EXPLAINs (and on PostgreSQL/MySQL ANALYZEs, inside a rolled-back
+  transaction) exactly the SQL the method would send, and metrics via
+  `runtime.Observer` with an OpenTelemetry adapter. See
+  [generated code](docs/manual/07-runtime-and-generated-code.md) and
+  [runtime metrics](docs/manual/13-runtime-metrics.md).
 - **Tooling**: `generate`, `check [--exhaustive]`,
   `explain [--enumerate|--analyze]`, `fmt`, and `lsp` — plus editor
   grammars under [`editors/`](editors/) (a VS Code extension with a
@@ -298,13 +315,6 @@ Recorded, unscheduled, and none of it changes the verification model:
   external database, the way SQLite already works. The spike is done
   and feasible; shipping waits on upstream libpglite
   ([docs/design/09-embedded-oracle.md](docs/design/09-embedded-oracle.md)).
-- **Native inference backend**, differential-tested against the
-  `(schema, query, types)` corpus every cache entry already
-  produces — for MySQL first, which has no embeddable real engine.
-- **Cross-query policy weaving** — a config-declared predicate (tenant
-  scoping, say) expanded into every query touching designated tables
-  at compile time, with a lint proving no reachable shape crosses the
-  boundary unscoped.
 
 ## Development
 
