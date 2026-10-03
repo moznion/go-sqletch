@@ -125,8 +125,9 @@ func leakData(d leakDialect, quote func(string) string) []string {
 // leakGen decodes fuzz bytes into a query: every byte is a production
 // choice, and an exhausted input reads as zeros, so ANY input yields a
 // syntactically plausible template (random byte mutation on raw SQL
-// text almost never survives the scanner — measured: 2 % of a 30 s
-// FuzzComposeConformance corpus nested two constructs).
+// text rarely gets past the scanner with any structure — measured: of a
+// 30 s FuzzComposeConformance corpus, 3 % combined two constructs and
+// none nested one inside another).
 type leakGen struct {
 	b []byte
 	i int
