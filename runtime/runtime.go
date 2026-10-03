@@ -43,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1162,7 +1163,10 @@ func cloneKey(k ShapeKey) ShapeKey {
 		if seq == nil {
 			out.Orders = append(out.Orders, nil)
 		} else {
-			out.Orders = append(out.Orders, append([]uint8(nil), seq...))
+			// Not append([]uint8(nil), seq...): that yields nil for an
+			// empty seq, turning default-or-omit into maximal — a key
+			// keysEqual then never matches against its own caller's.
+			out.Orders = append(out.Orders, slices.Clone(seq))
 		}
 	}
 	out.Trees = append([]string(nil), k.Trees...)
