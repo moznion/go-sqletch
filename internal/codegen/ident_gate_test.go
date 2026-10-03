@@ -252,6 +252,12 @@ SELECT count(*) AS total FROM t WHERE t.a = :tenant_id AND t.b = :region;
 // exercises the arg-shadow rename (a @filter-tree!(runtime) argument),
 // materialize it as a standalone module, and `go build` it.
 func TestGenerate_ArgShadowCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compile test skipped in -short")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available")
+	}
 	q := scanOne(t, `-- name: Pick :many
 SELECT t.id FROM t
 WHERE TRUE
@@ -269,12 +275,13 @@ t.tenant_id = :scope_tenant_id
 	if diagnostics.HasErrors(diags) {
 		t.Fatalf("generate: %+v", diags)
 	}
-	buildGenerated(t, files)
+
+	buildGenerated(t, map[string]map[string][]byte{"gen": files})
 }
 
-// buildGenerated materializes files as package gen of a standalone
-// module and `go build`s it, failing the test on any compile error.
-func buildGenerated(t *testing.T, files map[string][]byte) {
+// buildGenerated materializes each package (directory name -> files) in
+// a scratch module that requires this repository and runs `go build`.
+func buildGenerated(t *testing.T, pkgs map[string]map[string][]byte) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("compile test skipped in -short")
@@ -283,13 +290,15 @@ func buildGenerated(t *testing.T, files map[string][]byte) {
 		t.Skip("go toolchain not available")
 	}
 	dir := t.TempDir()
-	genDir := filepath.Join(dir, "gen")
-	if err := os.MkdirAll(genDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(genDir, name), content, 0o644); err != nil {
+	for pkg, files := range pkgs {
+		genDir := filepath.Join(dir, pkg)
+		if err := os.MkdirAll(genDir, 0o755); err != nil {
 			t.Fatal(err)
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(genDir, name), content, 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	repoRoot, err := filepath.Abs("../..")
