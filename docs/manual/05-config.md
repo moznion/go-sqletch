@@ -66,9 +66,14 @@ policies:                      # cross-query policies (see the policies chapter)
 - **`server_version`** does three jobs: selects the auto-managed dev
   database image, is validated against whatever DSN you point at
   (mismatch = SQLETCH200), and is part of the cache fingerprint — the
-  oracle's answers are pinned to a version. PostgreSQL/MySQL compare
-  the major version; SQLite compares a dotted prefix (`"3.50"`
-  matches `3.50.x`).
+  oracle's answers are pinned to a version. The pin is a dotted
+  prefix of the server's version (`"16"` matches 16.x, `"3.50"`
+  matches 3.50.x). For a committed cache, pin the patch release
+  (`"16.15"`, `"8.4.11"`): the dev image is `postgres:<pin>-alpine` /
+  `mysql:<pin>`, so a major-only pin floats with the image tag and
+  the next cache miss after an upstream patch release stops with
+  SQLETCH203. Changing the pin re-keys the cache (one cold
+  `generate`).
 - **`lint`** opts the run into the [performance lints](14-performance-lints.md)
   (SQLETCHL001–L006). Off by default. `generate --lint` / `check
   --lint` turn them on for one run and `--lint=false` turns them off,

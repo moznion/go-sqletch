@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "577379344cb73d81090d4e34a0700a45ecb79b41f04e6af952d7ffdc61ae4a4c",
+  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
   "rendered_sql": "\n-- @filter-tree! (v0.3): the caller composes a closed predicate\n-- vocabulary with And/Or; nil is rejected, FilterUsersUnscoped() is\n-- the explicit opt-out. See docs/spec.md Use Case 5.\nSELECT u.id, u.email\nFROM users AS u\nWHERE TRUE\n  AND ((u.tenant_id = $1) AND (u.status = $2) AND (u.email LIKE $3 || '%'))\nORDER BY u.id\nLIMIT $4;\n\n",
   "params": [
     {

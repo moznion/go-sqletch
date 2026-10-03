@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "schema_fp": "00bee77d27865758e214d6e882463851e47b530e6dd382de757c8ed01bdc0ccc",
+  "schema_fp": "414728b76381048e507ce9a85b8fab9a30f3b36e220dd677bc34ba6bdc8e0167",
   "rendered_sql": "\n-- @filter-tree! (v0.3): the caller composes a closed predicate\n-- vocabulary with And/Or; nil is rejected, FilterUsersUnscoped() is\n-- the explicit opt-out. See docs/spec.md Use Case 5.\n-- @param scope_tenant_id: bigint\n-- @param scope_status: varchar(32)\n-- @param scope_prefix: varchar(255)\n-- @param limit: bigint\nSELECT u.id, u.email\nFROM users AS u\nWHERE TRUE\n  AND ((u.tenant_id = ?) AND (u.status = ?) AND (u.email LIKE concat(?, '%')))\nORDER BY u.id\nLIMIT ?;\n\n",
   "params": [
     {
