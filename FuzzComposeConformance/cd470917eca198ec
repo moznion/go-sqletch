@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--0\xf1\x85\x920000000")

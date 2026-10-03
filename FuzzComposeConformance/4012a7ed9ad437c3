@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nINSERT A A(@if-present(A)00000000000000000000000000\n0000000000\n@if-present0000000000\n0000000000000\n000000\n0\n0000000000000")

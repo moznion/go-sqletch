@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @param a:\xcd0\xcf0\xac\xb3\xa7\x80")

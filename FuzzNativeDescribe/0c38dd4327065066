@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT*,Ơ\xefA/\xd9\xeb,0")

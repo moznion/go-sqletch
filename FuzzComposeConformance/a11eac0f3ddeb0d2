@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:a  :many\nSX.OAT8*E\n@if-present(a)a  Abt.10@endifC@if-present(Z)\n  DBt.b\n@f\n@choose(b,\n@case(x)1X2A*R 9XX1$@#\n@endifYRDER B&(\n@end;")

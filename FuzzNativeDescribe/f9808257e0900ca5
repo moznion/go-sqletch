@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT'' '\u06dd0ԫѝԦ\U0010fe93⨙߹ا'0")

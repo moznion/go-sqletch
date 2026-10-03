@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a: vArChAr()\nSELECT A(email,'0')FROM users#0")

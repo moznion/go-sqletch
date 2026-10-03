@@ -1,0 +1,2 @@
+go test fuzz v1
+string("0/䓹/ᙡ\uea56\ueecaᛷ/0/抔$/000/0/0")

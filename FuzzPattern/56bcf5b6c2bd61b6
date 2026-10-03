@@ -1,0 +1,2 @@
+go test fuzz v1
+string("(\xfe\xb2\xe0\x9a")

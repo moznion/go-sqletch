@@ -1,0 +1,2 @@
+go test fuzz v1
+string("UPDATE 0A\x80\xff\xc1A")

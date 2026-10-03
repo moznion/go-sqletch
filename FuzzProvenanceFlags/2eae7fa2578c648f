@@ -1,0 +1,2 @@
+go test fuzz v1
+string("WITH A00 AS(INSERT INTO A(A)VALUES(1)RETURNING A)SELECT A00")

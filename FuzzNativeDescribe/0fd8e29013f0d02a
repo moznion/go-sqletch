@@ -1,0 +1,2 @@
+go test fuzz v1
+string("#Ǩ߳\xafȗ\x9c߳\xb5\xfb\nSELECT 0")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--\x00000A:000000A\nAAAA 0(")

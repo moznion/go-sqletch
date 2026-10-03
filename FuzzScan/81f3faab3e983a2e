@@ -1,0 +1,2 @@
+go test fuzz v1
+string("0@if-present0@if-present@end@if-present@end@if-present@end@choose@case@case0@default")

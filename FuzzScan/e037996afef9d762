@@ -1,0 +1,2 @@
+go test fuzz v1
+string("!...[.!..!....\x7f.?.}!![^!!]a.aa aa.aa.aa aa>aa?.\xe1aa.\xa4a..\x87aaa{\xb5aaaaa.\xc4aaaaaa>\xdfaaa.\xdaaa?\xe7aa.\xe7.\xff.aaaaaaaa.\xa0aaaaaaaaa!\x80aaaaaaaa@a.a.\x9caaaaaa\\\xfeaa.\xbba.aa.\x92=.\xa3.\xd2aa~\xfba<\x80aaaa}\xf9aaaaaa.\xd4a!\x8b.\x9e.\xbb?\xabaaaaaaaaaa`}..@!.\x7f\x9f.. \xf6!\xa4]00\xed00.\xe7.\xa9000|\xbf000!00A!00\x8a0!A0\x000{0\x860000 0\xae..a0.!0000\xac!0\xad0. 0\x9d000{00\x97000000\\00000000000\xb3.!!0000\xca000000000000\\0000A.")

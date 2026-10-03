@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--\uec2b00000000")

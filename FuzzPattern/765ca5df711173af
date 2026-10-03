@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x16\xe5\x93\x1b$")

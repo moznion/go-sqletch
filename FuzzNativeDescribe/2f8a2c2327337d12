@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT('')'\U0007b8e3\U0007b8e3'")

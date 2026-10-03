@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- \xe8\x8c\xe4\xbb\xe7\nSELECT 0")

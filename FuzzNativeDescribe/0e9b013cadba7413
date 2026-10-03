@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:ChAr(\xd7\xd7\xd7\xd7\xd7\xd7\xd7\xd7)\nSELECT('')x")

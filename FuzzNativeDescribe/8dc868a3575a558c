@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT A.*,a.a FROM a a 0")

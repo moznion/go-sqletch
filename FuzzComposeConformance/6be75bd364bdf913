@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nFROM @if-present(a)@endifWHERE @if-present(b)AND @endif@if-present(c)AND :a@endif@choose(a)@case(a)ORDER BY 0 0@0A 0 0A 0 0 A 0 0A A 0 0A@default ORDER BY A 0 0A@end")

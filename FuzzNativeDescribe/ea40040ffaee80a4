@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT\fusers(emAil,id)VALUE(0,0)")

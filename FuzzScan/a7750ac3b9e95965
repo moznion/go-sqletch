@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\na\x800aa(A)@case(A)/0\"000")

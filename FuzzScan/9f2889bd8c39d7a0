@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\naaaaa a aaaaaa a aaaaaaaa a aaaaa WHERE aa aaaaaaa a aaaaaa@if-present(email_prefix)AND 0:email_prefix@endif@if-present(created_after)AND 0:created_after")

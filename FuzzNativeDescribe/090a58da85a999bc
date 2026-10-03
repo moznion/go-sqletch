@@ -1,0 +1,2 @@
+go test fuzz v1
+string("勋\xf4\x8b\x8b00")

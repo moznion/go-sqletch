@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A0000000000000 :many\nWHERE:a0000000 \xc60\xb6 A\x9e \xe3\xd9\xe1\xe0 \xb2\xa9`\x9a\xc3@if-present(a0000000):a0 :a000")

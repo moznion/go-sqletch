@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n\xff \xb7 \xd3 \xf8 \xd4 \xdc \xa10 \xdd\"\"A0\x8200 ׇ0000000000000000000")

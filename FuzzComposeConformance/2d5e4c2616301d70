@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nUPDaTE Xa SET @if-present(a),@endifAa0a Xa0a")

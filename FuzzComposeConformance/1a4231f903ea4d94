@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :one\n\x9e\x86(@if-present(A)@endif")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n$q$$q$ռ0000000000")

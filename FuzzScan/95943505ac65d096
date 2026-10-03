@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n?\xc30\x9ca\xb4000@aaaaaaaaaaaaa@predicate")

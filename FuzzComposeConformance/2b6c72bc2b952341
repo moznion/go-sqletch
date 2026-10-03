@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name\\A :man\xff\x7f@if-p\x85e3e\xf8\xf8\xf8\xf8")

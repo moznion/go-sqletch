@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n$$Վ\xc40Ն \x9f \x87ޫē0 A\x8e \x88 A00000\xdb A00\xf400 a\xba0 a000000\xd50000000000000000 \x9d \xbe 0\xa1 0\xef 000\xaa \x8b 0000A0aۥ00;0A!0A!0!0!0A!0!0A!0!0!0!0!0!0\"\"00A 0!0!0!0!0A!0!0A!0!0A!0!0!0!0!0!0A")

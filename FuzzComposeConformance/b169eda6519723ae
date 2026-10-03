@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- \n@if-present0 A!0 0 : @end")

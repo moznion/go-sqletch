@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--\"\nA@A}A A A@A A A A A A~A A}A A A A]A A A{A A''A A\\A A[A[A^A A A A A A A A^A A A@\\A A A A A`A A]A^A A}A\x7fA\x7fA A A A`A A A A A@A A A}A|A A A A A A A A A A A~A A A A\x7fA A\x7fA A~A A A\x7fA A A@A A A]A}A@A A{A A^A")

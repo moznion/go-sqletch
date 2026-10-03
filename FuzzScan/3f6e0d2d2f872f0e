@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nA00?!\xc30\x9ca\xb400 0A000 A WHERE A000 A000@filter-tree(a)@predicate(a)a!a!")

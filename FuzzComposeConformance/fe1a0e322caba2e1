@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:aAaaaaaAaaaa :many\n0 A a!0a a!0a a!0a a 0 a 0 a @a -a(0)0JOIN Aaaaaa 0 aa ON aa aaaa0aa 0 a aa 0 aa aaaaaaaaaaaa0aa 0A:aaaaaaaaaaaa_aa a 0 0A@if-present(aaaaaa):aaaaaa@endif0@if-present(aaaaa_aaaaaa):aaaaa_aaaaaa'0'0@endif0@choose(aaaa)0@case(aaaaaaa_aa_aaaa!0A 0 A 0 0A@case(aaaaa_aaa!0A 0 A 0 0A A 0 0 0 0 0A 0 0A@end0A :aaaaa!0")

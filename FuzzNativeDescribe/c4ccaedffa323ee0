@@ -1,0 +1,2 @@
+go test fuzz v1
+string("DELETE FROM 0aaaa\xf2Έ0\x8c WHERE 0%?ORDER BY A LIMIT 0")

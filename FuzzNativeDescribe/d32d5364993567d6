@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\"ѣ\xfa\xfa\xfa\xfa\xfa\xfa\xe9")

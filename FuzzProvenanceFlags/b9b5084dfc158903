@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT A!0 FROM A JOIN(SELECT 0 !A0000)A ON A00!0!0")

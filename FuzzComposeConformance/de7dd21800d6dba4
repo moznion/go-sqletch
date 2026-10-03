@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nWHERE@if-present(after)AND :a@endif0:b@if-present(after)AND :c@endif@if-present(a)AND :a@endif:x")

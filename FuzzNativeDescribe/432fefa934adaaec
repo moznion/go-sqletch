@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT id\rFROM users#\x1f\r\x1d")

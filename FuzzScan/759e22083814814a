@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n00a a a a\na a\na@choose(A)@case(A) ORDER BY \n@default\nORDER A0\x9d\n\n")

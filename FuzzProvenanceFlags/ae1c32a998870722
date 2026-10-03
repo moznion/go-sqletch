@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECt FROM A A JOIN A A ON 0")

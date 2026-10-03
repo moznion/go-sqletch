@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:Aa 000\n@choose0@case0@end")

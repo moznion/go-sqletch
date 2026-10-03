@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n-- 00000000000\n-- @column a:0\xa0\xa0")

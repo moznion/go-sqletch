@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nJOIN ON @if-present(status):status\n@endif@if-present(created_after)\n:created_after")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x: varchar(9999)\nSELECT co\xabcat(email, '?') AS x FROM users -- ?")

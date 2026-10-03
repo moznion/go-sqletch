@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--@column a:0\xa9\xc7\xd20\xf0")

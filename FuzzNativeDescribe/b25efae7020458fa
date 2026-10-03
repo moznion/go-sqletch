@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT \x92\x92\x92\x92\x92\x92\x92(A,A)VALUE(\x94,0)ON DUPLICATE KEY UPDATE A=0")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- nam0000000\na0aA")

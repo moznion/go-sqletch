@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nSELECT@when(A=fAlse)@end0@if-present(A)")

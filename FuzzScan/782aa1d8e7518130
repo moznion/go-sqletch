@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n@order-a)\n@key(A)\naa\n@defaultORDER aaa\n@end")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:0\x83000\n@if-present@end@if-present0A@endif@choose0A @case0A @default!")

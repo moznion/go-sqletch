@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nINSERT(@if-present(A)\x7f\x04\x1f\x0f\x10\x17")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nՎīē \xdb \xf4 \xba \xd5 \x9d")

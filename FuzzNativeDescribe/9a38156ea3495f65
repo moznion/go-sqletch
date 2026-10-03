@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xbb\xf1\x8e00")

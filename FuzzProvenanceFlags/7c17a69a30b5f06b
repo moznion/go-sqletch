@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT FROM A JOIN A ON 0 JOIN A ON 0 JOIN A ON 0 JOIN A ON 0")

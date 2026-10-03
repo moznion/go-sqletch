@@ -1,0 +1,2 @@
+go test fuzz v1
+string("WITH \xf3 AS(SELECT )DELETE FROM A")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT FROM A JOIN(SELECT \xc7)ON 0")

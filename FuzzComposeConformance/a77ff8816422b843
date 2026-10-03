@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:aAaaaaaAaaaa :many\n@if-present(aaaaaaaaaaaa_aaaaaaaaaaaaa_aaaaaaa)0:aaaaaa :aaaaa_aaaaaa'0'@endif@choose(aaaaaaaaaa_aa_aaaa)0A 0 A 0 0A@case(aaaaa_aaa!0A 0 A 0 0A A 0 0 0 0 0A 0 0A:aaaaa")

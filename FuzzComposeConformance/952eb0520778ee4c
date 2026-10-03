@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- \U0008e30000000000")

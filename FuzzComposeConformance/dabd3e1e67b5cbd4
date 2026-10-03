@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n0 0 0 0 0A0\xc6\xc6\xc6\xc6\xc6\xc6 0 0@order-by(A)0@key(0@default0 0A")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n-- @timeout 0000\n-- @timeout 0000\n-- @timeout 0000\n-- 0000000000000\n-- 0000000000")

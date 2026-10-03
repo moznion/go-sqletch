@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT \xe4,\xe4)000")

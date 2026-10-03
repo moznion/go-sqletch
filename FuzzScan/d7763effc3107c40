@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n@if-present(email_prefix):email_prefix@endif@if-present(created_after):created_after")

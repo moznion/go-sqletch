@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nFROM@if-present(a0000)@endif0WHER#@if-present(a)0000@endif")

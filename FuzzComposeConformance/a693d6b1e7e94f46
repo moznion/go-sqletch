@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:UX :one\nUPDaTE xXArx\nSET CX A%ZZ!A\n@if-present(y9ay)\n  ,miA 0#:a\n@endif1@if-present(b), nYk~8 &AA@endif WHXE YX 72A UBAYXb+zC(.9cBix,0%7 ac;9")

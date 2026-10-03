@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A0000000000000 :many\n,(.A)@aa\x82a(A A).A0.A@if-present(a00000000)0A 0!A.A(0:a00000000#@endif")

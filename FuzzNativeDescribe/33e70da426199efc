@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT u.id FROM users u WHERE u.emAil IN(SELECT AAAAAAAA WHERE FALSE)")

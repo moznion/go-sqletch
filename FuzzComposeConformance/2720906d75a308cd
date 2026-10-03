@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nSELECT@choose(a)@case(a)''@end`GROUP ORDER")

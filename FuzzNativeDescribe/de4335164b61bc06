@@ -1,0 +1,2 @@
+go test fuzz v1
+string("DELETE FRO, \x88 \xc1")

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("02(\v\xec\x13YYY-1%&001A")

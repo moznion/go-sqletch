@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- nYme: C :mt.a = LECT 1 FROM t WHERE any\nSE:x AND t.b = :x\n@if-present(y)\n  AND t.c = :x\n@endif\n;")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nFROM @when(a=fAlse)@endGROUP HAVING @if-present(a)AND @endif")
