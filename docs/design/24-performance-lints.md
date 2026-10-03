@@ -90,7 +90,10 @@ error, raised with lints on or off.
   opened after `WHERE`/`ON`/`AND`/`OR`/`NOT`/`(`. Function-argument
   lists, operand subqueries (`IN (SELECT …)`, `= (SELECT …)`), and
   `CASE` expressions are not predicate positions. `ON CONFLICT` and
-  `ON DUPLICATE KEY` open none.
+  `ON DUPLICATE KEY` open none, and neither does any `WHERE` of an
+  upsert's `ON CONFLICT` clause (the conflict target's partial-index
+  predicate, or `DO UPDATE … WHERE` on the one conflicting row): no
+  index-served scan is filtered there.
 - **HAVING is excluded** (a decision beyond D3's wording, 2026-10-02):
   HAVING filters groups after aggregation, where no index applies, so a
   "function on the column" there is not an index finding. An

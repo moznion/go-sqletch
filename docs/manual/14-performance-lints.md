@@ -158,9 +158,10 @@ suite pins all of this against the real planners.
 
 **Not flagged:** both sides referencing columns (`lower(a.x) =
 lower(b.y)`), arithmetic on the column (`u.id + 1 = :id`), negated
-forms (`NOT LIKE`, `NOT IN`), anything inside `CASE`, `HAVING`, and an
-aggregate's `FILTER (WHERE …)` — the last two filter rows already
-fetched or grouped, where no index applies.
+forms (`NOT LIKE`, `NOT IN`), anything inside `CASE`, `HAVING`, an
+aggregate's `FILTER (WHERE …)`, and the `WHERE` of an upsert's
+`ON CONFLICT` clause — these filter rows already fetched, grouped, or
+singled out by the conflict, where no index lookup applies.
 
 **Dialects:** all three.
 

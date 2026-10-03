@@ -253,13 +253,14 @@ var boolOpeners = []string{"WHERE", "ON", "AND", "OR", "NOT"}
 
 func predicateContexts(toks []ptok) predCtx {
 	pc := predCtx{pred: make([]bool, len(toks)), top: make([]bool, len(toks))}
-	var active, top, filter []bool
+	var active, top, filter, conflict []bool
 	var cases []int
 	grow := func(d int) {
 		for len(active) <= d {
 			active = append(active, false)
 			top = append(top, false)
 			filter = append(filter, false)
+			conflict = append(conflict, false)
 			cases = append(cases, 0)
 		}
 	}
@@ -277,7 +278,11 @@ func predicateContexts(toks []ptok) predCtx {
 			// fetched — like HAVING, no index can serve it.
 			filter[d+1] = i > 0 && toks[i-1].isIdent("FILTER")
 		case t.isIdent("WHERE"):
-			if filter[d] {
+			// An aggregate's FILTER (WHERE …), and any WHERE of an
+			// upsert's ON CONFLICT clause (the conflict target's
+			// partial-index predicate, DO UPDATE's condition on the one
+			// conflicting row), filter no scan an index could serve.
+			if filter[d] || conflict[d] {
 				break
 			}
 			active[d], top[d] = true, d == 0
@@ -285,7 +290,12 @@ func predicateContexts(toks []ptok) predCtx {
 			// ON CONFLICT / ON DUPLICATE KEY open no predicate.
 			next := i+1 < len(toks) && toks[i+1].isIdent("CONFLICT", "DUPLICATE")
 			active[d], top[d] = !next, !next && d == 0
-		case t.isIdent(clauseEnders...), t.Kind == dialect.KindComma, t.Kind == dialect.KindSemicolon:
+			if next {
+				conflict[d] = true // to the end of the statement
+			}
+		case t.Kind == dialect.KindSemicolon:
+			active[d], top[d], conflict[d] = false, false, false
+		case t.isIdent(clauseEnders...), t.Kind == dialect.KindComma:
 			active[d], top[d] = false, false
 		case t.isIdent("CASE"):
 			cases[d]++

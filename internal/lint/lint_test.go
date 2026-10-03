@@ -166,6 +166,31 @@ func TestPerf_WrappedColumnCastTypeExtent(t *testing.T) {
 	}
 }
 
+// The WHERE of an upsert's ON CONFLICT clause — the conflict target's
+// partial-index predicate, or DO UPDATE's condition on the one
+// conflicting row — filters no scan an index could serve, so neither
+// is a predicate position. The SELECT feeding an INSERT still is.
+func TestPerf_OnConflictWhereIsNotAPredicate(t *testing.T) {
+	cases := []struct {
+		name, dialect, src string
+		want               []string
+	}{
+		{"conflict target where", "postgres", "INSERT INTO users (email) VALUES (:e) ON CONFLICT (lower(email)) WHERE lower(email) <> 'x' DO NOTHING", nil},
+		{"do update where", "postgres", "INSERT INTO users (id, email) VALUES (:id, :e) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email WHERE users.created_at::date = :d", nil},
+		{"both", "postgres", "INSERT INTO users (id) VALUES (:id) ON CONFLICT (id) WHERE lower(email) = 'a' DO UPDATE SET email = 'b' WHERE lower(users.email) = :e", nil},
+		{"sqlite upsert", "sqlite", "INSERT INTO users (id, email) VALUES (:id, :e) ON CONFLICT (id) DO UPDATE SET email = excluded.email WHERE lower(users.email) = :e", nil},
+		{"insert select still linted", "postgres", "INSERT INTO users (email) SELECT o.email FROM orgs AS o WHERE lower(o.email) = :e ON CONFLICT DO NOTHING", []string{"lower(o.email)"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "-- name: Q :exec\n" + c.src + "\n"
+			if got := spanTexts(src, perfLint(t, c.dialect, src), diagnostics.CodePerfWrappedColumn); !slices.Equal(got, c.want) {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // An aggregate's FILTER (WHERE …) runs over rows the query already
 // fetched — no index can serve it, exactly like HAVING — so neither
 // SQLETCHL001 nor L002 fires there; the statement's own WHERE after it
