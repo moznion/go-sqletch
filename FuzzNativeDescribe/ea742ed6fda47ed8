@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET@@0=@@\xee\xc3\xdc%@@\xee\xc3\xdc")

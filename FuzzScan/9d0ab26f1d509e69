@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nWHERE$AND@filter-tree(a)@predicate(a)0@end0")

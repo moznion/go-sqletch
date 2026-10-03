@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nߘ ߘ WHERE @filter-tree(A)")

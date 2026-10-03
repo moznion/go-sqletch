@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n-- @column a:\xb1\xbc0\xdd0\xf70\xf80\xc800\xcc0\xa4\xb1\xde0\xdf\naݕ\U0009d953Ӻ˔¸ނܜȤߥƄ:\u07b30#:ˁ a˪Қ")

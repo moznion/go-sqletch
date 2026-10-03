@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nINSERT(@if-present(A)ȍ:ˈ#ЮۻăЮۻă'0Ѣ0תŰН̼Ҩ͚0")

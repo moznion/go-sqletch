@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\n0000000@if-present(ЭгٍᴭƱ睹Ҏ̄샯ڣϙΰҴٶՍͧƜ0")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:\r  \t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tChAr\nSELECT('')x")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("WITH ins AS (INSERT INTO t (a) VALUES (1) RETURNING a) SELECT iT INTO ns.a FROM ins")

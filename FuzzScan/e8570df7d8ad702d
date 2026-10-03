@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n-- @param a:ܹù\xec\xb3\xe7\xa20\xe1\xbc0\xeb\x870ɍ\xe7\xa50د\xe5\x89ߞԟƬ\xe1\x9fߵ셶؋č")

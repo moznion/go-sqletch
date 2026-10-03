@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nSELECT @if-present(A)@endif@if-present(A)@endif@if-present(A)@endif@choose(A)@case(A)0@case(A)0@case(A)0@default00@endLIMIT")

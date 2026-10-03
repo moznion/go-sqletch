@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nA A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A")

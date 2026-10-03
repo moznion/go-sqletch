@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT ൵ૼ൵\xe0\xab0\"൵૬൵ૼ\"")

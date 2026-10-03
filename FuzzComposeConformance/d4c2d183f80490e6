@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n:\xa5\xfe\x9c\x890`(@order-by(A)")

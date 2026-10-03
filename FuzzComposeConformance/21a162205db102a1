@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nЯгƱҎӔŧ ϙ ΰ Ҵ փ Ս ͧ \u07b5 Ɯ")

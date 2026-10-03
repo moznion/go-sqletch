@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT('')'\xee\xa3\xee\xbe\ue8f9\xa3\xee\xbe\ue8f9\xa3\ue8e3'")
