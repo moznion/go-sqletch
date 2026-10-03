@@ -70,17 +70,23 @@ func newRootCommand() *cobra.Command {
 	// stays visible on the command line and in CI logs.
 	const destructiveFlagUsage = "confirm the database at a user-supplied database.dsn is disposable, letting sqletch drop and recreate its schema (required for a cold run against a dsn you set; SQLETCH204 otherwise)"
 
+	// Unlike the two escape hatches above, linting is harmless to arm
+	// in config (`lint: true`): it only adds warnings. The flag
+	// overrides the config either way for one invocation.
+	const lintFlagUsage = "run the SQLETCHLnnn performance lints (warnings); overrides the lint key in sqletch.yaml, and --lint=false turns them off"
+
 	var generateDrift, generateDestructive bool
 	generate := &cobra.Command{
 		Use:   "generate",
 		Short: "compile templates, run type extraction, emit Go",
 		Run: func(cmd *cobra.Command, args []string) {
-			opts := cli.RunOptions{AllowServerDrift: generateDrift, AllowDestructive: generateDestructive}
+			opts := cli.RunOptions{AllowServerDrift: generateDrift, AllowDestructive: generateDestructive, Lint: lintOverride(cmd)}
 			os.Exit(cli.Generate(context.Background(), configPath, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
 	}
 	generate.Flags().BoolVar(&generateDrift, "allow-server-drift", false, driftFlagUsage)
 	generate.Flags().BoolVar(&generateDestructive, "allow-destructive", false, destructiveFlagUsage)
+	generate.Flags().Bool("lint", false, lintFlagUsage)
 	root.AddCommand(generate)
 
 	var exhaustive, checkDrift, checkDestructive bool
@@ -88,7 +94,7 @@ func newRootCommand() *cobra.Command {
 		Use:   "check",
 		Short: "verify only (offline on cache hit)",
 		Run: func(cmd *cobra.Command, args []string) {
-			opts := cli.RunOptions{AllowServerDrift: checkDrift, AllowDestructive: checkDestructive}
+			opts := cli.RunOptions{AllowServerDrift: checkDrift, AllowDestructive: checkDestructive, Lint: lintOverride(cmd)}
 			os.Exit(cli.Check(context.Background(), configPath, exhaustive, jsonFormat, opts, os.Stdout, os.Stderr))
 		},
 	}
@@ -96,6 +102,7 @@ func newRootCommand() *cobra.Command {
 		"prepare and EXPLAIN every enumerable shape (needs the dev DB)")
 	check.Flags().BoolVar(&checkDrift, "allow-server-drift", false, driftFlagUsage)
 	check.Flags().BoolVar(&checkDestructive, "allow-destructive", false, destructiveFlagUsage)
+	check.Flags().Bool("lint", false, lintFlagUsage)
 	root.AddCommand(check)
 
 	var enumerate, analyze, explainDestructive bool
@@ -147,4 +154,18 @@ func newRootCommand() *cobra.Command {
 	})
 
 	return root
+}
+
+// lintOverride turns the tri-state --lint flag into RunOptions.Lint:
+// nil when the flag was not given (sqletch.yaml's `lint` decides),
+// otherwise the flag's value.
+func lintOverride(cmd *cobra.Command) *bool {
+	if !cmd.Flags().Changed("lint") {
+		return nil
+	}
+	v, err := cmd.Flags().GetBool("lint")
+	if err != nil {
+		return nil
+	}
+	return &v
 }

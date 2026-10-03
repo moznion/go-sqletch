@@ -18,7 +18,7 @@ type AllAuditActionsRow struct {
 }
 
 var allAuditActionsFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n"},
+	{Kind: runtime.Skel, Text: "\n-- Crossing tenants is a deliberate, reviewable exemption.\n-- @policy-optout: tenant_scope (ops dashboard; aggregates across tenants)\n-- A cross-tenant aggregate can run long; the generated method bounds\n-- it with a context deadline (`-- @timeout none` would opt a query out\n-- of a query_timeout.default set in sqletch.yaml instead).\n-- @timeout 30s\n-- One row per distinct action, so the result is bounded by the action\n-- vocabulary, not the table: a reviewed exemption from SQLETCHL003.\n-- @nolint SQLETCHL003 (one row per distinct action)\nSELECT a.action, count(*) AS occurrences\nFROM audit_logs AS a\nGROUP BY a.action\nORDER BY occurrences DESC;\n\n"},
 }
 
 func (q *Queries) AllAuditActions(ctx context.Context, arg AllAuditActionsParams) ([]AllAuditActionsRow, error) {

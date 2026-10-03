@@ -19,7 +19,7 @@ func TestManualCoversAllCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	constRe := regexp.MustCompile(`Code = "(SQLETCH[0-9]{3})"`)
+	constRe := regexp.MustCompile(`Code = "(SQLETCHL?[0-9]{3})"`)
 	defined := map[string]bool{}
 	for _, m := range constRe.FindAllSubmatch(src, -1) {
 		defined[string(m[1])] = true
@@ -28,7 +28,7 @@ func TestManualCoversAllCodes(t *testing.T) {
 		t.Fatalf("suspiciously few code constants found: %d", len(defined))
 	}
 
-	rowRe := regexp.MustCompile(`\| (SQLETCH[0-9]{3}) \|`)
+	rowRe := regexp.MustCompile(`\| (SQLETCHL?[0-9]{3}) \|`)
 	documented := map[string]bool{}
 	for _, m := range rowRe.FindAllSubmatch(manual, -1) {
 		documented[string(m[1])] = true

@@ -27,6 +27,11 @@ func hintCatalog() *cache.Catalog {
 // a database. params is the Desc's parameter list, by position.
 func runResolvedChecks(t *testing.T, dialectName, src string, params []dialect.TypeRef) (map[string]dialect.TypeRef, []diagnostics.Diagnostic) {
 	t.Helper()
+	return runResolvedChecksLint(t, true, dialectName, src, params)
+}
+
+func runResolvedChecksLint(t *testing.T, lint bool, dialectName, src string, params []dialect.TypeRef) (map[string]dialect.TypeRef, []diagnostics.Diagnostic) {
+	t.Helper()
 	drv := driverFor(config.Config{Dialect: dialectName})
 	file, diags := template.NewScanner(drv.profile).ScanFile("t.sql", []byte(src))
 	if diagnostics.HasErrors(diags) || len(file.Queries) != 1 {
@@ -43,7 +48,7 @@ func runResolvedChecks(t *testing.T, dialectName, src string, params []dialect.T
 			Columns: []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}, SrcRel: 101, SrcAtt: 1}},
 		}
 	}
-	types, d, err := resolvedChecks(drv, dialectName, nil, file.Queries[0], rs, descs, hintCatalog())
+	types, d, err := resolvedChecks(drv, dialectName, nil, file.Queries[0], rs, descs, hintCatalog(), lint)
 	if err != nil {
 		t.Fatal(err)
 	}

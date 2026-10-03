@@ -42,6 +42,14 @@ var (
 	// exemption, so there is nothing for it to justify.
 	applyRe     = regexp.MustCompile(`^--\s*@policy-apply\b`)
 	applyFormRe = regexp.MustCompile(`^--\s*@policy-apply:\s*([a-z][a-z0-9_]*)\s*(?:\((.+)\)\s*)?$`)
+	// nolintRe/nolintFormRe split `-- @nolint` the same way: any
+	// @nolint-shaped comment (`@nolint`, `@nolint:`, `@nolint(`,
+	// `@nolint X`) is the directive (so a malformed one is an error
+	// rather than an ignored comment), the form is a comma list of codes
+	// with an optional trailing `(reason)` (design 24 §4).
+	nolintRe     = regexp.MustCompile(`^--\s*@nolint(?:\s|:|\(|$)`)
+	nolintBareRe = regexp.MustCompile(`^--\s*@nolint\s*(?:\(.*\)\s*)?$`)
+	nolintFormRe = regexp.MustCompile(`^--\s*@nolint\s+(SQLETCHL?[0-9]{3}(?:\s*,\s*SQLETCHL?[0-9]{3})*)\s*(?:\((.*\S.*)\)\s*)?$`)
 )
 var snakeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -133,7 +141,7 @@ type fileScan struct {
 	strayReported bool
 
 	// pendingDirectives buffers directive comments (`-- @param`,
-	// `-- @column`, `-- @policy-optout`) until their target query is
+	// `-- @column`, `-- @policy-optout`, `-- @nolint`, …) until their target query is
 	// known. A directive attaches to a query only once a real SQL token
 	// of that query is seen (in-body directives) or, in the gap before
 	// the next `-- name:` header, to the FOLLOWING query — never the
@@ -413,14 +421,16 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 
 // isDirectiveComment reports whether a line comment is one of the
 // per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`,
-// `-- @policy-apply`, `-- @timeout`), including a malformed policy annotation (which
-// still targets a query, so its diagnostic must attach there too).
+// `-- @policy-apply`, `-- @timeout`, `-- @nolint`), including a malformed
+// policy or @nolint annotation (which still targets a query, so its
+// diagnostic must attach there too).
 func isDirectiveComment(text string) bool {
 	return paramHintRe.MatchString(text) ||
 		colHintRe.MatchString(text) ||
 		optOutRe.MatchString(text) ||
 		applyRe.MatchString(text) ||
-		timeoutRe.MatchString(text)
+		timeoutRe.MatchString(text) ||
+		nolintRe.MatchString(text)
 }
 
 // applyDirectives attaches every buffered directive to q (in source
@@ -474,6 +484,54 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 			fs.errorf(diagnostics.CodeConstructGrammar, fs.span(tok.Start, tok.End),
 				"malformed @policy-apply; the form is `-- @policy-apply: policy_name` with an optional trailing `(reason)`")
 		}
+		return
+	}
+	if nolintRe.MatchString(tok.Text) {
+		fs.applyNoLint(q, tok)
+	}
+}
+
+// applyNoLint records one `-- @nolint` directive. It is all-or-nothing:
+// a directive naming any code outside the performance-lint vocabulary
+// records none of its codes, so a typo can never leave a half-applied
+// suppression behind the error.
+func (fs *fileScan) applyNoLint(q *QueryTemplate, tok dialect.Token) {
+	span := fs.span(tok.Start, tok.End)
+	vocab := make([]string, len(diagnostics.PerfLintCodes))
+	for i, c := range diagnostics.PerfLintCodes {
+		vocab[i] = string(c)
+	}
+	hint := "@nolint suppresses performance lints only: " + strings.Join(vocab, ", ")
+	m := nolintFormRe.FindStringSubmatch(tok.Text)
+	if m == nil {
+		msg := "malformed @nolint; the form is `-- @nolint SQLETCHnnn[, SQLETCHnnn…]` with an optional trailing `(reason)`"
+		if nolintBareRe.MatchString(tok.Text) {
+			// Unlike golangci-lint's bare //nolint, there is no
+			// suppress-everything form: a blanket opt-out would also
+			// hide every lint added later.
+			msg = "@nolint must name the codes it suppresses (there is no suppress-all form); write `-- @nolint SQLETCHnnn[, SQLETCHnnn…] (reason)`"
+		}
+		fs.emit(diagnostics.Errorf(diagnostics.CodeBadNoLint, span, "%s", msg).WithHint("%s", hint))
+		return
+	}
+	var codes []diagnostics.Code
+	for _, raw := range strings.Split(m[1], ",") {
+		c := diagnostics.Code(strings.TrimSpace(raw))
+		if !diagnostics.IsPerfLint(c) {
+			fs.emit(diagnostics.Errorf(diagnostics.CodeBadNoLint, span,
+				"@nolint names %s, which is not a performance lint; soundness and rule diagnostics cannot be suppressed per query, and an unknown code would suppress nothing", c).
+				WithHint("%s", hint))
+			return
+		}
+		if !slices.Contains(codes, c) {
+			// A repeat shares the directive's span, so it could only
+			// duplicate every verdict about the code.
+			codes = append(codes, c)
+		}
+	}
+	reason := strings.TrimSpace(m[2])
+	for _, c := range codes {
+		q.NoLints = append(q.NoLints, NoLint{Code: c, Reason: reason, Span: span})
 	}
 }
 
