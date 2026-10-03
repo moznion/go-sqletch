@@ -1,0 +1,162 @@
+name: Fuzz (nightly)
+
+# The CI fuzz smoke (ci.yml, 30 s per target) starts every run from an
+# empty corpus, so each PR re-explores the same shallow region: measured
+# 2026-10, every target was still finding 160–555 new interesting inputs
+# per 30 s when it stopped. This workflow is the depth half: long runs,
+# and a corpus that persists from night to night, so coverage compounds
+# instead of being rediscovered.
+#
+# The corpus lives on the orphan branch `fuzz-corpus` (one directory per
+# target, Go's fuzz-cache format). Each fuzz job seeds itself from it and
+# uploads what it ends with; the single `commit-corpus` job then commits
+# the union back — one writer per run (and `concurrency` serializes
+# runs), so parallel matrix jobs never race on a push. Only that job can
+# write, and only for runs of main.
+#
+# A crasher fails the job and is uploaded as an artifact; commit it
+# under the package's testdata/fuzz/<target>/ — that file IS the
+# regression test (CLAUDE.md).
+
+on:
+  schedule:
+    - cron: "17 18 * * *" # daily, 03:17 JST
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Fuzz duration per target (Go duration)"
+        required: false
+        default: "10m"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  CORPUS_BRANCH: fuzz-corpus
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./internal/template, target: FuzzScan }
+          - { pkg: ./internal/codegen, target: FuzzComposeConformance }
+          - { pkg: ./internal/dialect/postgres, target: FuzzProvenanceFlags }
+          - { pkg: ./internal/dialect/mysql, target: FuzzNativeDescribe }
+          - { pkg: ./internal/pathpat, target: FuzzPattern }
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_SQLite }
+          # Server dialects: every fuzz worker process starts its own
+          # testcontainers database, so keep the worker count small.
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_Postgres, tags: devdb, parallel: 2 }
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_MySQL, tags: devdb, parallel: 2 }
+    env:
+      FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+      # An explicit cache dir (not $GOCACHE/fuzz) so exactly the corpus
+      # is persisted. Not a dot-directory: upload-artifact skips hidden
+      # files by default.
+      CORPUS_DIR: ${{ github.workspace }}/fuzz-corpus-work
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+      # -test.fuzzcachedir=DIR keeps a target's corpus in DIR/<target>/,
+      # the same layout as the branch, so a target directory copies over
+      # as is. Absent branch or directory (first run, new target) = cold.
+      - name: Restore corpus from the ${{ env.CORPUS_BRANCH }} branch
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "$CORPUS_DIR"
+          if git fetch --depth=1 origin "$CORPUS_BRANCH" && git cat-file -e "FETCH_HEAD:$TARGET" 2>/dev/null; then
+            git archive FETCH_HEAD "$TARGET" | tar -x -C "$CORPUS_DIR"
+          fi
+          echo "corpus before: $(find "$CORPUS_DIR" -type f | wc -l)"
+      - name: Fuzz
+        run: |
+          go test ${{ matrix.tags && format('-tags {0}', matrix.tags) || '' }} ${{ matrix.pkg }} \
+            -run '^$' -fuzz='^${{ matrix.target }}$' -fuzztime="$FUZZTIME" \
+            -parallel=${{ matrix.parallel || 4 }} \
+            -test.fuzzcachedir="$CORPUS_DIR"
+      - name: Corpus size after
+        if: always()
+        run: |
+          echo "corpus after: $(find "$CORPUS_DIR" -type f | wc -l)"
+      # Uploaded even when fuzzing failed: the corpus that reached a
+      # crasher is the most valuable one to keep.
+      - name: Upload corpus
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: ${{ env.CORPUS_DIR }}/
+          retention-days: 3
+          if-no-files-found: ignore
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  commit-corpus:
+    name: commit corpus
+    needs: fuzz
+    # Even when a target found a crasher; never for runs of other
+    # branches (a dispatch on a feature branch must not write).
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download corpora
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: fuzz-corpus-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/corpus
+      # Corpus files are content-addressed, so the union of the branch
+      # and every job's directory is the new corpus; nothing is deleted.
+      - name: Commit the union to the ${{ env.CORPUS_BRANCH }} branch
+        env:
+          NEW: ${{ runner.temp }}/corpus
+        run: |
+          if [ ! -d "$NEW" ] || [ -z "$(ls -A "$NEW")" ]; then
+            echo "no corpus uploaded; nothing to commit"
+            exit 0
+          fi
+          if git fetch --depth=1 origin "$CORPUS_BRANCH"; then
+            git checkout -q -B "$CORPUS_BRANCH" FETCH_HEAD
+          else
+            git checkout -q --orphan "$CORPUS_BRANCH"
+            git rm -rqf .
+            cat > README.md <<'EOF'
+          # fuzz-corpus
+
+          Written by `.github/workflows/fuzz-nightly.yml` — do not edit by
+          hand. One directory per fuzz target, in Go's fuzz-cache format
+          (`go test -fuzz … -test.fuzzcachedir=<checkout>` reads it as is).
+          EOF
+          fi
+          cp -R "$NEW"/. .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "corpus unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "fuzz corpus: run ${{ github.run_id }}" \
+            -m "$(for d in */; do echo "${d%/}: $(find "$d" -type f | wc -l)"; done)"
+          git push origin "$CORPUS_BRANCH"
