@@ -250,6 +250,21 @@ SELECT id FROM users WHERE lower(email) = :email;
 and carry a justified `@nolint SQLETCHL003`; `UserAuditActions` gained
 `LIMIT :limit` (its result is genuinely unbounded).
 
+## 5a. Evidence
+
+- The L005 whitelist is pinned against the real planners
+  (`internal/e2e/perf_devdb_test.go`).
+- The rewrites the hints and manual 14 recommend for L001/L002 are
+  pinned the same way, per dialect (`perf_rewrite_devdb_test.go`). This
+  is what showed the original L002 hint ("anchor the pattern, `:q ||
+  '%'`") to be wrong on PostgreSQL (a B-tree never serves a
+  parameterized LIKE in the generic plan, `text_pattern_ops` included)
+  and SQLite (the `||` expression is never optimized); the hint now
+  recommends the range form every dialect indexes.
+- Editor/CLI parity after a real `generate`, L005 included
+  (`perf_lsp_parity_devdb_test.go`), and an offline examples gate
+  (`cli.TestExamplesAreLintClean`).
+
 ## 6. Known limits / follow-ups
 
 - Lexical keyword handling: a non-reserved keyword used as a column

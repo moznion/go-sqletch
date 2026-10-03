@@ -493,6 +493,14 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   SQLite pairs (a bound param takes the column's affinity). Its
   whitelist is per-dialect (PG int vs numeric/float; MySQL string vs
   number) — add a pair only with evidence the index is lost.
+- Lint ADVICE is evidence-backed like the whitelist: every "flagged form
+  loses the index / recommended rewrite keeps it" claim in manual 14 is
+  pinned against the real planners (`perf_rewrite_devdb_test.go`; a
+  parameterized `LIKE :q || '%'` is NOT indexed on PG or SQLite). Change
+  a hint or the chapter's table only with a matching row there. Editor
+  and CLI lint findings must agree after a real generate
+  (`perf_lsp_parity_devdb_test.go`); the examples are lint-clean
+  offline (`cli.TestExamplesAreLintClean`).
 - Tests that enable lints need `:many` fixtures with a LIMIT (or
   `@nolint SQLETCHL003`); examples/ sets `lint: true` and is kept
   warning-free.

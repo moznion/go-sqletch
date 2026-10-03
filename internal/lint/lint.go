@@ -651,7 +651,7 @@ func lintPredicates(c *perfCollector, q *template.QueryTemplate, r ast.Rendering
 			if span, ok := templateSpan(q, r, right); ok {
 				c.add(diagnostics.Warnf(diagnostics.CodePerfLeadingLike, span,
 					"this %s pattern starts with a wildcard: a B-tree index can only serve a known prefix, so every row of the column is scanned and matched", kind).
-					WithHint("anchor the pattern at the start (`col %s :q || '%%'`), or use a full-text / trigram index and `-- @nolint %s`", kind, diagnostics.CodePerfLeadingLike))
+					WithHint("for a prefix search, compare a range (`col >= :lo AND col < :hi`), which a plain index serves on every dialect (anchoring the pattern helps only on some: see the performance-lints chapter); for a substring search, use a trigram / full-text index and `-- @nolint %s`", diagnostics.CodePerfLeadingLike))
 			}
 		}
 	}

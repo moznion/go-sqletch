@@ -39,15 +39,51 @@ type perfTypeCase struct {
 // SQLETCHL005 — the lint as a user sees it, through the oracle's types.
 func perfCheckFlagged(t *testing.T, ctx context.Context, dialect, version, dsn, schema string, cases []perfTypeCase, table string) map[string]bool {
 	t.Helper()
+	queries := map[string]perfQuery{}
+	for _, c := range cases {
+		queries[c.name] = perfQuery{where: c.template, hint: c.hint}
+	}
+	flagged := map[string]bool{}
+	for name, codes := range perfCheckCodes(t, ctx, dialect, version, dsn, schema, queries, table) {
+		for _, code := range codes {
+			if code != diagnostics.CodePerfTypeMismatch {
+				t.Errorf("%s: unexpected diagnostic %s", name, code)
+				continue
+			}
+			flagged[name] = true
+		}
+	}
+	return flagged
+}
+
+// perfQuery is one `:one` query of a perfCheckCodes project: its WHERE
+// predicate and its `-- @param` hint lines (MySQL/SQLite).
+type perfQuery struct {
+	where string
+	hint  string // "v: bigint" style, one per line; "" = none
+}
+
+// perfCheckCodes runs `sqletch check --lint --json` against the real
+// dev database and returns, per query file, the codes of its
+// diagnostics. Every diagnostic must be a lint warning: the run must
+// pass (lints never fail it).
+func perfCheckCodes(t *testing.T, ctx context.Context, dialect, version, dsn, schema string, queries map[string]perfQuery, table string) map[string][]diagnostics.Code {
+	t.Helper()
 	dir := t.TempDir()
 	writeFile(t, dir, "db/schema.sql", schema)
-	for _, c := range cases {
-		q := "-- name: " + strings.ReplaceAll(c.name, "_", "") + " :one\n"
-		if c.hint != "" {
-			q += "-- @param v: " + c.hint + "\n"
+	for name, pq := range queries {
+		q := "-- name: " + strings.ReplaceAll(name, "_", "") + " :one\n"
+		for _, h := range strings.Split(pq.hint, "\n") {
+			if h == "" {
+				continue
+			}
+			if !strings.Contains(h, ":") {
+				h = "v: " + h // the single-parameter shorthand of perfTypeCase
+			}
+			q += "-- @param " + h + "\n"
 		}
-		q += "SELECT note FROM " + table + " WHERE " + c.template + ";\n"
-		writeFile(t, dir, "queries/"+c.name+".sql", q)
+		q += "SELECT note FROM " + table + " WHERE " + pq.where + ";\n"
+		writeFile(t, dir, "queries/"+name+".sql", q)
 	}
 	writeFile(t, dir, "sqletch.yaml", `version: 1
 dialect: `+dialect+`
@@ -71,24 +107,22 @@ cache:
 	if code != cli.ExitOK {
 		t.Fatalf("check must pass (performance lints are warnings): exit %d\n%s%s", code, out.String(), errW.String())
 	}
-	flagged := map[string]bool{}
+	got := map[string][]diagnostics.Code{}
 	sc := bufio.NewScanner(&errW)
 	for sc.Scan() {
 		var d map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &d); err != nil {
 			t.Fatalf("non-JSON diagnostic line %q", sc.Text())
 		}
-		if d["code"] != string(diagnostics.CodePerfTypeMismatch) {
-			t.Errorf("unexpected diagnostic: %v", d)
-			continue
-		}
 		if d["severity"] != "warning" {
-			t.Errorf("SQLETCHL005 must be a warning: %v", d)
+			t.Errorf("only lint warnings are expected: %v", d)
 		}
 		file, _ := d["file"].(string)
-		flagged[strings.TrimSuffix(filepath.Base(file), ".sql")] = true
+		name := strings.TrimSuffix(filepath.Base(file), ".sql")
+		code, _ := d["code"].(string)
+		got[name] = append(got[name], diagnostics.Code(code))
 	}
-	return flagged
+	return got
 }
 
 func TestPerfTypeMismatchPostgres(t *testing.T) {

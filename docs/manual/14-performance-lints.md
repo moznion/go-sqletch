@@ -149,8 +149,12 @@ WHERE u.email = :email                   -- normalize in Go before binding
 WHERE u.created_at >= :day_start AND u.created_at < :day_end
 ```
 
-If an expression index on exactly that expression exists
-(`CREATE INDEX … ON users (lower(email))`), `@nolint SQLETCHL001`.
+Both rewrites use a plain index on PostgreSQL, MySQL, and SQLite. If an
+expression index on exactly that expression exists
+(`CREATE INDEX … ON users (lower(email))`, MySQL `KEY ((lower(email)))`),
+it does serve the wrapped form — the lint cannot see indexes, so
+`@nolint SQLETCHL001` with that index's name as the reason. The devdb
+suite pins all of this against the real planners.
 
 **Not flagged:** both sides referencing columns (`lower(a.x) =
 lower(b.y)`), arithmetic on the column (`u.id + 1 = :id`), negated
@@ -171,12 +175,28 @@ WHERE u.email LIKE '%example.com'        -- flagged
 WHERE u.email LIKE CONCAT('%', :q)       -- flagged (MySQL)
 ```
 
-**Why it is slow.** An index can only seek to a known prefix; a pattern
-with no prefix matches every row.
+**Why it is slow.** A B-tree index can only seek to a known prefix; a
+pattern with no prefix matches every row.
 
-**Rewrite.** Anchor the pattern (`u.email LIKE :q || '%'`), or use a
-full-text / trigram index built for substring search and
-`@nolint SQLETCHL002`.
+**Rewrite.** What serves a search depends on the database, and an
+"anchored" pattern is *not* enough everywhere:
+
+| Search | PostgreSQL | MySQL | SQLite |
+| --- | --- | --- | --- |
+| prefix, `col LIKE :q \|\| '%'` / `CONCAT(:q, '%')` | **not indexed** — a B-tree (even `text_pattern_ops`) never serves a parameterized `LIKE` | indexed | **not indexed** — SQLite never optimizes the `\|\|` expression |
+| prefix, `col LIKE :pattern` with `"abc%"` built in Go | not indexed (same reason) | indexed | indexed, against an index `ON t (col COLLATE NOCASE)` (`LIKE` is case-insensitive) |
+| prefix, range `col >= :lo AND col < :hi` (bounds computed in Go) | indexed | indexed | indexed |
+| substring / suffix, `col LIKE '%' \|\| :q` | indexed by a `pg_trgm` GIN index (`USING gin (col gin_trgm_ops)`) | full-text index | full-text (FTS5) |
+
+The range is the one prefix rewrite every dialect serves with a plain
+index. It is exact for byte-order (`C`/binary) collations; under a
+linguistic collation compute the bounds with care, or use a trigram
+index. When a trigram or full-text index serves the leading wildcard,
+keep the query and `@nolint SQLETCHL002 (gin_trgm_ops index on …)`.
+Every row of this table is pinned against the real planners by the
+devdb suite (`internal/e2e/perf_rewrite_devdb_test.go`), except the
+full-text entries for MySQL and SQLite, which need a different query
+form (`MATCH … AGAINST`, an FTS5 table).
 
 **Not flagged:** a bare `:q` pattern (its content is unknown at compile
 time), `NOT LIKE`, a dollar-quoted pattern (`$$…$$`), and a non-column
