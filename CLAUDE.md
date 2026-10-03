@@ -99,6 +99,11 @@ regression test.
 
 ## Working conventions (user-mandated)
 
+The full, normative version is `docs/development/testing.md` (testing
+policy: required tests per change type, mutation checks, oracle
+independence, coverage obligation, fuzzing requirements, gates). The
+bullets below are its summary.
+
 - **Test-first; tests are the spec.** Every layer gets thorough tests;
   rejected inputs are asserted down to their `SQLETCHnnn` code. Never
   report a task complete with failing or missing tests.

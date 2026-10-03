@@ -314,6 +314,11 @@ $ go test -tags devdb ./internal/e2e/    # real-database E2E (Docker)
 $ golangci-lint run --build-tags devdb ./...
 ```
 
+Every change follows the [testing policy](docs/development/testing.md):
+test-first, rejections asserted to their diagnostic code, must-stay
+tests for every soundness grant, mutation-checked soundness tests, and
+fuzz targets with independent oracles.
+
 ## License
 
 [Apache-2.0](LICENSE). Attribution notices are in [NOTICE](NOTICE).
