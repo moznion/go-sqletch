@@ -52,6 +52,11 @@ type timeoutDialect struct {
 	// extra, when set, is Go source for `func extra(ctx, dsn)`: further
 	// driver-specific checks run at the end of main.
 	extra string
+	// explainAnalyze: the dialect has EXPLAIN ANALYZE, so the generated
+	// ExplainSlow with opts.Analyze really runs the slow statement and
+	// must expire under Slow's deadline (design 22 §6.1). Without it the
+	// call is refused with ErrExplainUnsupported before any DB work.
+	explainAnalyze bool
 	// unit is the "amount" that makes the slow statement take a short
 	// while (it is doubled until a run exceeds the default timeout);
 	// huge makes it outlast every deadline in the suite.
@@ -84,7 +89,8 @@ func TestQueryTimeoutPostgres(t *testing.T) {
 		requires: []string{"github.com/jackc/pgx/v5"},
 		imports: []string{`"github.com/jackc/pgx/v5/pgxpool"`, `"github.com/jackc/pgx/v5"`,
 			`"github.com/jackc/pgx/v5/pgconn"`, `"github.com/jackc/pgx/v5/pgconn/ctxwatch"`},
-		extra: pgCancelRequestCheck,
+		extra:          pgCancelRequestCheck,
+		explainAnalyze: true,
 		// A pool, as in production: pgx closes a single connection whose
 		// query was interrupted by its context, and the pool replaces it.
 		open: `
@@ -114,13 +120,14 @@ func TestQueryTimeoutMySQL(t *testing.T) {
 			}
 			return dsn, cleanup
 		},
-		runDSN:     func(dsn string) string { return dsn },
-		schema:     "CREATE TABLE items (id BIGINT PRIMARY KEY, label VARCHAR(64) NOT NULL);\n",
-		queries:    timeoutQueries("-- @param amount: double\n", sleep, "UPDATE items SET label = label WHERE id > 0;\n"),
-		requires:   []string{"github.com/go-sql-driver/mysql"},
-		imports:    []string{`"database/sql"`, `_ "github.com/go-sql-driver/mysql"`},
-		open:       sqlOpen("mysql", "dsn"),
-		amountType: "float64", unit: "0.1", huge: "30",
+		runDSN:         func(dsn string) string { return dsn },
+		schema:         "CREATE TABLE items (id BIGINT PRIMARY KEY, label VARCHAR(64) NOT NULL);\n",
+		queries:        timeoutQueries("-- @param amount: double\n", sleep, "UPDATE items SET label = label WHERE id > 0;\n"),
+		requires:       []string{"github.com/go-sql-driver/mysql"},
+		imports:        []string{`"database/sql"`, `_ "github.com/go-sql-driver/mysql"`},
+		open:           sqlOpen("mysql", "dsn"),
+		explainAnalyze: true,
+		amountType:     "float64", unit: "0.1", huge: "30",
 	})
 }
 
@@ -297,6 +304,11 @@ query_timeout:
 		extra = "\nfunc extra(context.Context, string) {}\n"
 	}
 	main = strings.Replace(main, "//OPEN", d.open+expiry+extra, 1)
+	explain := explainUnsupported
+	if d.explainAnalyze {
+		explain = explainAnalyzeDeadline
+	}
+	main = strings.Replace(main, "\t//EXPLAIN\n", explain, 1)
 	main = strings.NewReplacer("AMOUNT_T", d.amountType, "UNIT", d.unit, "HUGE", d.huge,
 		"DEFAULT_MS", timeoutDefault.String()).Replace(main)
 	writeFile(t, dir, "main.go", main)
@@ -316,6 +328,25 @@ query_timeout:
 		t.Fatalf("harness did not report success:\n%s", got)
 	}
 }
+
+// explainAnalyzeDeadline: an ANALYZE executes the statement, so
+// ExplainSlow must expire under Slow's 200ms deadline with the driver's
+// documented error (design 22 §6.1) — not run the 30s statement to the
+// end. Explain reports no exec event, so the observer count is unchanged.
+const explainAnalyzeDeadline = `	// 3c. EXPLAIN ANALYZE is bound by the query's deadline.
+	took, err = timed(func() error {
+		_, err := q.ExplainSlow(ctx, gen.SlowParams{Amount: huge}, sqletchruntime.ExplainOptions{Analyze: true})
+		return err
+	})
+	expect(deadline(err), "ExplainSlow analyze: unexpected error %T %v", err, err)
+	expect(took < 5*time.Second, "ExplainSlow analyze: took %v under a 200ms deadline", took)
+`
+
+// explainUnsupported: no EXPLAIN ANALYZE (SQLite) — refused up front.
+const explainUnsupported = `	// 3c. No EXPLAIN ANALYZE on this dialect: refused before any DB work.
+	_, err = q.ExplainSlow(ctx, gen.SlowParams{Amount: huge}, sqletchruntime.ExplainOptions{Analyze: true})
+	expect(errors.Is(err, sqletchruntime.ErrExplainUnsupported), "ExplainSlow analyze: unexpected error %T %v", err, err)
+`
 
 const timeoutMain = `package main
 
@@ -403,6 +434,8 @@ func main() {
 	ccancel()
 	expect(canceled(err), "SlowNone cancelled: unexpected error %T %v", err, err)
 	expect(took < 5*time.Second, "SlowNone cancelled: took %v after a 200ms cancel", took)
+
+	//EXPLAIN
 
 	// 4. @timeout none opts out of the default: grow the work until one
 	// successful run outlasts the default by a margin.

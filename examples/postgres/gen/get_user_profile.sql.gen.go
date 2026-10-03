@@ -55,3 +55,16 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	q.observeExec(ctx, "GetUserProfile", key, execStart, 1, nil)
 	return i, nil
 }
+
+// ExplainGetUserProfile EXPLAINs the statement GetUserProfile would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainGetUserProfile(ctx context.Context, arg GetUserProfileParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if arg.Status.IsPresent() {
+		key.Guards |= 1 << 0
+	}
+	sqlText, argIdx := q.cache.Get("GetUserProfile", getUserProfileFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.ID, arg.Status.Ptr()})
+	return q.explain(ctx, "GetUserProfile", key.String(), opts, sqlText, args)
+}

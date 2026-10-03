@@ -57,3 +57,22 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 	q.observeExec(ctx, "UpdateUserProfile", key, execStart, n, nil)
 	return n, nil
 }
+
+// ExplainUpdateUserProfile EXPLAINs the statement UpdateUserProfile would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainUpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if arg.NewEmail.IsPresent() {
+		key.Guards |= 1 << 0
+	}
+	if arg.Nickname.IsPresent() {
+		key.Guards |= 1 << 1
+	}
+	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UpdateUserProfile", updateUserProfileFrags, key)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	args := runtime.ResolveArgs(binds, []any{arg.NewEmail.Ptr(), arg.Nickname.OrZero().UnwrapAsPtr(), arg.ID}, nil)
+	return q.explain(ctx, "UpdateUserProfile", key.String(), opts, sqlText, args)
+}

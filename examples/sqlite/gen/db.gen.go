@@ -5,6 +5,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -123,6 +124,38 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 		key.Trees = []string{t.Encode()}
 		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
+}
+
+// explain sends EXPLAIN QUERY PLAN for a composed statement (design doc
+// 22) and renders its rows with runtime.SQLitePlan.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (runtime.Plan, error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainSQLite, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	rows, err := q.db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var steps []runtime.SQLitePlanRow
+	for rows.Next() {
+		var r runtime.SQLitePlanRow
+		var notused int64
+		if err := rows.Scan(&r.ID, &r.Parent, &notused, &r.Detail); err != nil {
+			return runtime.Plan{}, err
+		}
+		steps = append(steps, r)
+	}
+	if err := rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	out, err := runtime.SQLitePlan(steps, opts.Format)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Output: out}, nil
 }
 
 // ShapeSpace describes each query's reachable shape space, computed

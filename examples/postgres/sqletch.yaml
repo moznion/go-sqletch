@@ -25,3 +25,7 @@ policies:
     param:
       name: tenant_id
       type: bigint
+
+# Opt into the SQLETCHLnnn performance lints (warnings only); `sqletch
+# check --lint=false` turns them off for one run.
+lint: true

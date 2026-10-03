@@ -8,6 +8,9 @@ $ sqletch lsp     # stdio; started by your editor, not by hand
 
 - **Diagnostics as you type** — the same `SQLETCHnnn` codes as the
   CLI, produced by the same analysis code (they cannot disagree).
+  [Performance lints](14-performance-lints.md) (`SQLETCHLnnn`
+  warnings) appear when sqletch.yaml sets `lint: true`; SQLETCHL005
+  additionally needs the query's entries in the committed cache.
 - **Go-to-definition** on `:param` → its `-- @param` annotation (or
   first occurrence).
 - **Strictly offline**: the server never opens a database. Checks

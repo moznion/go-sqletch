@@ -67,6 +67,8 @@ query_timeout:
   doc-18 `ObserveExec` events — sees the derived context. A deadline
   failure is an ordinary exec error, observed like any other (the
   devdb suite counts one `ObserveExec` error per expired call).
+  The `Explain<Query>` sibling (design 22 §6.1) carries the same
+  deadline, emitted right before its `q.explain` hand-off.
 - **D5 — literal spelling.** `N*time.Unit` with the largest unit
   (Hour … Nanosecond) that divides the duration exactly (`1.5s` →
   `1500*time.Millisecond`): readable, a pure function of the value

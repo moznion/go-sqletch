@@ -114,7 +114,13 @@ internal/ast        P2  Render/RenderShape + SourceMap — the reference
 internal/rules      P2/3/4  CheckR1 (probe-based node completeness),
                         CheckLexical (R6, R9), CheckResolved (R3
                         resolution-based, R2 star, planner table),
-                        CheckTypeAgreement/ResolveParamTypes (P1 types)
+                        CheckTypeAgreement/ResolveParamTypes (P1 types);
+                        ColumnResolver = the R3 resolver's one export
+internal/lint       —   opt-in performance lints (doc 24, SQLETCHLnnn):
+                        Check (L001–L004, in cli.scanChecks) and
+                        CheckTypes (L005, last in cli.resolvedChecks);
+                        never imports a dialect implementation, never
+                        forks resolution (uses rules.ColumnResolver)
 internal/policy     —   cross-query policy weaving (doc 14, spec
                         §Cross-Query Policies): Weave runs between
                         CheckLexical (unwoven) and Renderings (woven)
@@ -174,7 +180,8 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   inputs (renderings, cache JSON, generated Go, composed SQL). Never
   range over a map into output without sorting.
 - **Diagnostics carry stable codes** (`SQLETCH0xx` scanner, `1xx`
-  rules, `2xx` oracle, `3xx` codegen/config) and template-file spans
+  rules, `2xx` oracle, `3xx` codegen/config; opt-in performance lints
+  are `SQLETCHLnnn`) and template-file spans
   via the source map; messages state the rule *and its rationale*,
   hints show the compliant rewrite.
 - **Hashes are an index, never identity**: cache entries store full
@@ -456,6 +463,48 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   use the synthetic `_corpus/<name>/maximal` naming; `examples-mysql`
   is a copy of examples/mysql's tree).
 
+## Known decisions: performance lints (doc 24)
+
+- Owner decisions 2026-10-02: SQLETCHL001–L005 are WARNINGS, a separate
+  axis from soundness — never fail a run, never touch renderings,
+  shapes, cache, or fingerprint. `-- @nolint CODE[, CODE…] (reason)`
+  suppresses per query; it may name ONLY `diagnostics.PerfLintCodes`
+  (anything else / malformed = SQLETCH016 error, all-or-nothing). An
+  @nolint that suppresses nothing = SQLETCHL006 warning. Renamed from
+  `@allow` (same day, owner decision); deliberately NOT golangci grammar:
+  no bare suppress-all form, no `:CODE` spelling (both SQLETCH016).
+- Owner decisions 2026-10-03: lints are OPT-IN — `lint: true` in
+  sqletch.yaml, or `--lint` / `--lint=false` on generate/check (flag
+  overrides config; `RunOptions.Lint *bool`, nil = config). The LSP
+  follows the config. `scanChecks`/`resolvedChecks` take the effective
+  switch — gate there, never in the rules. `@nolint` is parsed and
+  validated (SQLETCH016) with lints OFF too: template validity must not
+  depend on config. Lint codes live in their own `SQLETCHLnnn` space
+  (L001–L006); the old SQLETCH128–133 spellings are SQLETCH016.
+- Lexical WHITELIST over every verification rendering
+  (`lint.Check` in `cli.scanChecks`; `lint.CheckTypes` last
+  in `cli.resolvedChecks` — both shared with the LSP). Under-report,
+  never noise; findings in synthesized (woven) text are dropped. Each
+  pass judges unused @nolint only for the codes it owns (L005 belongs to
+  the resolved pass, so an LSP cache miss never calls it stale).
+- HAVING and aggregate `FILTER (WHERE …)` are not SQLETCHL001/L002
+  positions; SQLETCHL005 inspects only the
+  top-level statement's WHERE/ON, skips set operations, and has NO
+  SQLite pairs (a bound param takes the column's affinity). Its
+  whitelist is per-dialect (PG int vs numeric/float; MySQL string vs
+  number) — add a pair only with evidence the index is lost.
+- Lint ADVICE is evidence-backed like the whitelist: every "flagged form
+  loses the index / recommended rewrite keeps it" claim in manual 14 is
+  pinned against the real planners (`perf_rewrite_devdb_test.go`; a
+  parameterized `LIKE :q || '%'` is NOT indexed on PG or SQLite). Change
+  a hint or the chapter's table only with a matching row there. Editor
+  and CLI lint findings must agree after a real generate
+  (`perf_lsp_parity_devdb_test.go`); the examples are lint-clean
+  offline (`cli.TestExamplesAreLintClean`).
+- Tests that enable lints need `:many` fixtures with a LIMIT (or
+  `@nolint SQLETCHL003`); examples/ sets `lint: true` and is kept
+  warning-free.
+
 ## Server environment drift (SQLETCH203, doc 04 §3.1)
 
 - `.sqletch/cache/env.json` records the server a run actually
@@ -537,6 +586,31 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   → `*PgError` 57014, conn SURVIVES; MySQL → DeadlineExceeded; SQLite
   → `sqlite3.INTERRUPT` and NOT the ctx error (asserted both ways so a
   driver upgrade is noticed). Portable check: `ctx.Err() != nil`.
+
+## Known decisions: runtime EXPLAIN (doc 22)
+
+- Owner decisions 2026-10-02: explicit `Explain<Query>(…, opts
+  runtime.ExplainOptions) (runtime.Plan, error)` per query (no
+  auto-explain hook); text|JSON closed choice; ANALYZE supported;
+  always generated (no knob). Not in `Querier` (mock compatibility).
+- `codegen.writePreamble` is the ONE writer of shape-key derivation,
+  composition and bind resolution for BOTH the query method and its
+  Explain sibling — that is the byte-identity guarantee for
+  `Plan.SQL`. Never fork it; `TestGenerate_ExplainPreambleIdentity`
+  pins it per preamble kind.
+- The EXPLAIN prefix is a constant from `runtime.ExplainStatement`'s
+  closed table — never caller text. ANALYZE wraps EVERY statement (not
+  just DML; a SELECT can call side-effecting functions) in a
+  rolled-back tx, a savepoint inside a caller's tx (pgx `Tx.Begin`;
+  database/sql `SAVEPOINT sqletch_explain`); no tx ⇒ `ErrExplainNoTx`.
+  SQLite: ANALYZE ⇒ `ErrExplainUnsupported` before any DB work.
+- `codegen.Options.Explain` must be set for StyleQuestion (MySQL and
+  SQLite share it); zero is only inferred as PostgreSQL for
+  StyleDollar. `opts` is reserved in `argIdent`; `explain`/`explainTx`
+  in `queriesMethodNames`; `Foo`+`ExplainFoo` queries ⇒ SQLETCH310.
+- MySQL 8.4 server behaviors are passed through, not second-guessed:
+  TREE prints `<not executable by iterator executor>` for single-table
+  UPDATE/DELETE; `EXPLAIN ANALYZE FORMAT=JSON` is ERROR 1235 by default.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

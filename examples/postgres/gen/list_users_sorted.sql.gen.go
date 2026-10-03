@@ -78,3 +78,21 @@ func (q *Queries) ListUsersSorted(ctx context.Context, arg ListUsersSortedParams
 	q.observeExec(ctx, "ListUsersSorted", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainListUsersSorted EXPLAINs the statement ListUsersSorted would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainListUsersSorted(ctx context.Context, arg ListUsersSortedParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if arg.IncludeBanned == false {
+		key.Guards |= 1 << 0
+	}
+	oseq0, err := runtime.OrderSeq(arg.Sort, 2)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("ListUsersSorted: %w", err)
+	}
+	key.Orders = [][]uint8{oseq0}
+	sqlText, argIdx := q.cache.Get("ListUsersSorted", listUsersSortedFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.Limit, arg.IncludeBanned})
+	return q.explain(ctx, "ListUsersSorted", key.String(), opts, sqlText, args)
+}

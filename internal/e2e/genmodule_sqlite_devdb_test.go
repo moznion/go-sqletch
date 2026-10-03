@@ -171,9 +171,11 @@ const sqliteE2EMain = `package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
@@ -432,6 +434,35 @@ func main() {
 	expect(gen.ShapeSpace["UsersInStatuses"].Unbounded,
 		"@in arity marks the query unbounded on an expanding dialect")
 	expect(gen.ShapeSpace["FilterUsers"].Unbounded, "@filter-tree marks its query unbounded")
+
+	// Design 22: Explain<Query> over EXPLAIN QUERY PLAN. Plan.SQL is
+	// byte-identical to what the query method sends.
+	var lastSQL string
+	q.OnQuery(func(_, sql string) { lastSQL = sql })
+	inArg := gen.UsersInStatusesParams{TenantID: 1, Statuses: []string{"active", "banned"}, Limit: 100}
+	_, err = q.UsersInStatuses(ctx, inArg)
+	die(err)
+	lastSQL, executedSQL := "", lastSQL
+	plan, err := q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(lastSQL == "", "explain does not fire the OnQuery hook")
+	expect(plan.SQL == executedSQL, "explained SQL is byte-identical to the executed SQL")
+	expect(plan.Statement == "EXPLAIN QUERY PLAN "+plan.SQL, "query plan prefix")
+	expect(strings.HasPrefix(plan.Output, "SCAN u") || strings.HasPrefix(plan.Output, "SEARCH u"),
+		"text plan reads the aliased table: "+plan.Output)
+	jplan, err := q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Format: sqletchruntime.ExplainJSON})
+	die(err)
+	var steps []sqletchruntime.SQLitePlanRow
+	expect(json.Unmarshal([]byte(jplan.Output), &steps) == nil && len(steps) > 0 && steps[0].Detail != "",
+		"JSON plan parses: "+jplan.Output)
+	tplan, err := q.ExplainFilterUsers(ctx, gen.Or(gen.FilterUsersStatusEq("banned"), gen.FilterUsersEmailPrefix("alice")),
+		gen.FilterUsersParams{Limit: 100}, sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(strings.Contains(tplan.ShapeKey, ";t="), "tree shape key: "+tplan.ShapeKey)
+
+	// SQLite has no EXPLAIN ANALYZE: refused before any database work.
+	_, err = q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Analyze: true})
+	expect(errors.Is(err, sqletchruntime.ErrExplainUnsupported), "SQLite ANALYZE is unsupported")
 
 	fmt.Println("E2E-OK")
 }

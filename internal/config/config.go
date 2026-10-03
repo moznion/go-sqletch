@@ -147,6 +147,11 @@ type Config struct {
 	TreeCaps      TreeCaps     `yaml:"filter_tree_caps"`
 	QueryTimeout  QueryTimeout `yaml:"query_timeout"`
 	Policies      []Policy     `yaml:"policies"`
+	// Lint opts the run into the SQLETCHLnnn performance lints (design
+	// 24). Off by default; `--lint` / `--lint=false` on generate and
+	// check override it per invocation. It changes only which warnings
+	// are reported — never renderings, the cache, or the fingerprint.
+	Lint bool `yaml:"lint"`
 
 	// Dir is the directory containing sqletch.yaml; all relative paths
 	// resolve against it. Not part of the YAML.

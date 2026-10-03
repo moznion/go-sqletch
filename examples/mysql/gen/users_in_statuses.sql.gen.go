@@ -59,3 +59,17 @@ func (q *Queries) UsersInStatuses(ctx context.Context, arg UsersInStatusesParams
 	q.observeExec(ctx, "UsersInStatuses", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainUsersInStatuses EXPLAINs the statement UsersInStatuses would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainUsersInStatuses(ctx context.Context, arg UsersInStatusesParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	key.Arities = []int32{int32(len(arg.Statuses))}
+	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "UsersInStatuses", usersInStatusesFrags, key)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	args := runtime.ResolveArgs(binds, []any{arg.TenantID, arg.Statuses, arg.Limit}, nil)
+	return q.explain(ctx, "UsersInStatuses", key.String(), opts, sqlText, args)
+}

@@ -48,3 +48,37 @@ func TestResolvedVersion(t *testing.T) {
 		t.Error("resolvedVersion must never be empty")
 	}
 }
+
+// --lint is tri-state on generate and check: absent leaves sqletch.yaml's
+// `lint` in charge (nil), --lint / --lint=true force it on, --lint=false
+// forces it off.
+func TestLintFlagOverride(t *testing.T) {
+	for _, name := range []string{"generate", "check"} {
+		for args, want := range map[string]string{
+			"":             "nil",
+			"--lint":       "true",
+			"--lint=true":  "true",
+			"--lint=false": "false",
+		} {
+			root := newRootCommand()
+			cmd, _, err := root.Find([]string{name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var argv []string
+			if args != "" {
+				argv = []string{args}
+			}
+			if err := cmd.ParseFlags(argv); err != nil {
+				t.Fatalf("%s %q: %v", name, args, err)
+			}
+			got := "nil"
+			if p := lintOverride(cmd); p != nil {
+				got = map[bool]string{true: "true", false: "false"}[*p]
+			}
+			if got != want {
+				t.Errorf("%s %q: override = %s, want %s", name, args, got, want)
+			}
+		}
+	}
+}

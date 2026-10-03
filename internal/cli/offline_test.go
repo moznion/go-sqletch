@@ -18,13 +18,9 @@ import (
 // writeOfflineProject lays out a minimal postgres project and returns
 // the loaded config. Extra template files come from the files map
 // (path relative to the project root).
-func writeOfflineProject(t *testing.T, files map[string]string) config.Config {
-	t.Helper()
-	dir := t.TempDir()
-	base := map[string]string{
-		"db/schema.sql": "CREATE TABLE t (id bigint NOT NULL, x text);\n" +
-			"CREATE TABLE u (id bigint NOT NULL, name text, score bigint);",
-		"sqletch.yaml": `version: 1
+// offlineYAML is writeOfflineProject's default sqletch.yaml; a test
+// that needs one more key appends to it.
+const offlineYAML = `version: 1
 dialect: postgres
 server_version: "16"
 schema:
@@ -34,7 +30,15 @@ targets:
     output:
       package: gen
       path: gen
-`,
+`
+
+func writeOfflineProject(t *testing.T, files map[string]string) config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	base := map[string]string{
+		"db/schema.sql": "CREATE TABLE t (id bigint NOT NULL, x text);\n" +
+			"CREATE TABLE u (id bigint NOT NULL, name text, score bigint);",
+		"sqletch.yaml": offlineYAML,
 	}
 	maps.Copy(base, files)
 	for name, content := range base {

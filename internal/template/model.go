@@ -283,6 +283,10 @@ type QueryTemplate struct {
 	// when absent. It never affects rendering or verification: codegen
 	// alone consumes it, wrapping the generated method's context.
 	Timeout *TimeoutDirective
+	// NoLints are the query's `-- @nolint CODE[, CODE…]` suppressions of
+	// performance lints (design 24), one entry per named code in
+	// declaration order. A suppression applies to the whole query.
+	NoLints []NoLint
 }
 
 // TimeoutDirective is one parsed `-- @timeout <duration>|none`. None
@@ -292,6 +296,14 @@ type TimeoutDirective struct {
 	Duration time.Duration
 	None     bool
 	Span     diagnostics.Span
+}
+
+// NoLint is one code named by a `-- @nolint` directive. Span is the
+// whole directive comment (the unused-@nolint warning points at it).
+type NoLint struct {
+	Code   diagnostics.Code
+	Reason string
+	Span   diagnostics.Span
 }
 
 // PolicyOptOut is one `-- @policy-optout` annotation: a deliberate,

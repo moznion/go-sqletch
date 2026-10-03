@@ -63,6 +63,11 @@ type Options struct {
 	// DefaultTimeout is query_timeout.default (design 23): the deadline
 	// of every method whose query has no `-- @timeout`. 0 = none.
 	DefaultTimeout time.Duration
+	// Explain selects the EXPLAIN vocabulary of the generated
+	// Explain<Query> methods (design 22). Zero means "derive from
+	// Style", which is only unambiguous for StyleDollar (PostgreSQL):
+	// MySQL and SQLite share StyleQuestion, so they must say which.
+	Explain runtime.ExplainDialect
 }
 
 // Generate emits the full package: db.gen.go, querier.gen.go, and one
@@ -86,12 +91,33 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		caps.MaxDepth = runtime.DefaultTreeCaps.MaxDepth
 	}
 
+	explainDialect, err := resolveExplainDialect(opts)
+	if err != nil {
+		return nil, []diagnostics.Diagnostic{diagnostics.Errorf(diagnostics.CodeNameCollision,
+			diagnostics.Span{}, "internal: %v", err)}
+	}
+
 	typeNames := map[string]string{}        // generated type name -> query
 	fileStems := map[string]string{}        // generated file stem -> query
 	policyTypes := map[string]*policyType{} // named type -> policy parameter
 	var querier []string
 	var shapeSpaces []string // rendered ShapeSpace entries, in query order
 	sigImports := map[string]bool{}
+
+	// Every query Foo also declares ExplainFoo on *Queries (design 22); a
+	// query literally named ExplainFoo would declare it a second time.
+	queryNames := map[string]bool{}
+	for _, in := range sorted {
+		queryNames[in.Q.Name] = true
+	}
+	for _, in := range sorted {
+		if strings.HasPrefix(in.Q.Name, "Explain") && queryNames[strings.TrimPrefix(in.Q.Name, "Explain")] {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodeNameCollision, in.Q.HeaderSpan,
+				"query %q collides with the generated %s method of query %q; rename one",
+				in.Q.Name, in.Q.Name, strings.TrimPrefix(in.Q.Name, "Explain")).
+				WithHint("every query Foo also generates ExplainFoo, so no query may be named Explain<another query>"))
+		}
+	}
 
 	for _, in := range sorted {
 		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
@@ -141,10 +167,13 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 			treeHook = treeHookFunc
 		}
 		space := shapeSpaceVar(shapeSpaces)
-		if opts.Style == runtime.StyleQuestion {
-			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package, treeHook, space))
-		} else {
-			files["db.gen.go"] = []byte(dbFile(opts.Package, treeHook, space))
+		switch explainDialect {
+		case runtime.ExplainMySQL:
+			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package, []string{"errors", "strings"}, treeHook+explainHelperMySQL, space))
+		case runtime.ExplainSQLite:
+			files["db.gen.go"] = []byte(dbFileQuestion(opts.Package, nil, treeHook+explainHelperSQLite, space))
+		default:
+			files["db.gen.go"] = []byte(dbFile(opts.Package, treeHook+explainHelperPostgres, space))
 		}
 		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier, sigImports))
 		if len(policyTypes) > 0 {
@@ -153,6 +182,27 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	}
 
 	return files, append(diags, formatFiles(files)...)
+}
+
+// resolveExplainDialect pins the Explain<Query> vocabulary to the
+// placeholder style: a mismatch would emit EXPLAIN syntax the driver's
+// engine does not speak.
+func resolveExplainDialect(opts Options) (runtime.ExplainDialect, error) {
+	d := opts.Explain
+	if d == 0 {
+		if opts.Style != runtime.StyleDollar {
+			return 0, fmt.Errorf("codegen.Options.Explain is required for the question placeholder style (MySQL and SQLite share it)")
+		}
+		d = runtime.ExplainPostgres
+	}
+	wantDollar := d == runtime.ExplainPostgres
+	switch {
+	case d != runtime.ExplainPostgres && d != runtime.ExplainMySQL && d != runtime.ExplainSQLite:
+		return 0, fmt.Errorf("unknown explain dialect %v", d)
+	case wantDollar != (opts.Style == runtime.StyleDollar):
+		return 0, fmt.Errorf("explain dialect %v does not match placeholder style %d", d, opts.Style)
+	}
+	return d, nil
 }
 
 // formatFiles gofmts each generated file in place and reports the ones
@@ -444,7 +494,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 	// one of them is caught too (argIdent already suffixes them away, so
 	// this is defensive).
 	argOwner := map[string]string{}
-	fixedSigNames := map[string]bool{"ctx": true, "arg": true, "q": true}
+	fixedSigNames := map[string]bool{"ctx": true, "arg": true, "q": true, "opts": true}
 	for _, ra := range requiredArgs {
 		if fixedSigNames[ra.name] {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeInvalidColumnIdentifier, paramSpanOf(q, ra.param),
@@ -587,6 +637,7 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		}
 	}
 	sig := g.writeFunc(w, paramsName, rowName, chooses, orders, filter, ins, rowFields, requiredArgs)
+	g.writeExplainFunc(w, paramsName, chooses, orders, filter, ins, requiredArgs)
 
 	return []byte(g.b.String()), sig, diags
 }
@@ -709,6 +760,7 @@ var queriesMethodNames = map[string]bool{
 	"WithTx": true, "OnQuery": true, "SetObserver": true, "Cache": true,
 	"hook": true, "hookTree": true, "observeExec": true,
 	"observeReject": true, "observeExecResult": true, "observeExecTree": true,
+	"explain": true, "explainTx": true,
 }
 
 // importPkgIdents are the package identifiers a generated query body may
@@ -732,13 +784,14 @@ var importPkgIdents = map[string]bool{
 // argument) in the consumer's module. Reserved names get an "Arg"
 // suffix; no reserved name ends in "Arg", so one suffix always escapes
 // every set. Keep this in sync with the locals writeFunc emits:
-// ctx/arg/q (signature + receiver), the fixed locals below, the indexed
+// ctx/arg/q (signature + receiver), opts (the Explain<Query> method's
+// trailing parameter, design 22), the fixed locals below, the indexed
 // ord/oseq/nul families (reservedLocal), the imports (importPkgIdents),
 // and the frags/shapes vars writeFragsVar/writeShapesVar declare.
 func argIdent(param, queryName string) string {
 	name := lowerCamel(GoName(param))
 	switch name {
-	case "ctx", "arg", "q", "err", "key", "zero", "args", "binds",
+	case "ctx", "arg", "q", "opts", "err", "key", "zero", "args", "binds",
 		"sqlText", "argIdx", "items", "rows", "i", "row",
 		"execStart", "res", "n", "rerr", "tag", "cancel":
 		return name + "Arg"
@@ -966,7 +1019,6 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	ins []*template.InExpr, rowFields []field, requiredArgs []requiredArg) string {
 
 	q := g.in.Q
-	fragsVar := lowerCamel(q.Name) + "Frags"
 
 	var ret, zero string
 	switch q.Annotation {
@@ -984,12 +1036,7 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 	// Required values come before the params struct, in template order
 	// with the tree last, so the signature reads "what you must decide,
 	// then what you may vary".
-	var params []string
-	params = append(params, "ctx context.Context")
-	for _, ra := range requiredArgs {
-		params = append(params, fmt.Sprintf("%s %s", ra.name, ra.typ))
-	}
-	params = append(params, "arg "+paramsName)
+	params := methodParams(requiredArgs, paramsName)
 	sig := fmt.Sprintf("%s(%s) %s", q.Name, strings.Join(params, ", "), ret)
 	for _, ra := range requiredArgs {
 		fmt.Fprintf(w, "// %s is required (%s).\n", ra.name, ra.doc)
@@ -1012,126 +1059,12 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 		}
 	}
 
-	fmt.Fprint(w, "\tvar key runtime.ShapeKey\n")
-	for i, atom := range q.GuardAtoms {
-		if atom.IsValue() {
-			op := "=="
-			if atom.Op == "!=" {
-				op = "!="
-			}
-			fmt.Fprintf(w, "\tif arg.%s %s %s {\n\t\tkey.Guards |= 1 << %d\n\t}\n",
-				GoName(atom.Param), op, goLiteral(atom), i)
-			continue
-		}
-		fmt.Fprintf(w, "\tif arg.%s.IsPresent() {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
+	fail := func(rejected, returned string) string {
+		return fmt.Sprintf("\t\tq.observeReject(ctx, %q, %s)\n\t\t%s\n", q.Name, rejected, errRet(returned))
 	}
-	if len(chooses) > 0 {
-		g.imports["fmt"] = true
-		var ords []string
-		for i, cm := range chooses {
-			ord := fmt.Sprintf("ord%d", i)
-			ords = append(ords, ord)
-			fmt.Fprintf(w, "\t%s, err := runtime.ChooseOrdinal(int(arg.%s), %d, %v)\n",
-				ord, GoName(cm.c.Param), cm.numNamed, cm.c.Default != nil)
-			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
-				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
-		}
-		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
-	}
-	if len(orders) > 0 {
-		g.imports["fmt"] = true
-		var seqs []string
-		for i, om := range orders {
-			seq := fmt.Sprintf("oseq%d", i)
-			seqs = append(seqs, seq)
-			fmt.Fprintf(w, "\t%s, err := runtime.OrderSeq(arg.%s, %d)\n",
-				seq, GoName(om.o.Param), len(om.o.Keys))
-			fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n",
-				q.Name, errRet(fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
-		}
-		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
-	}
-	if g.style == runtime.StyleQuestion && len(ins) > 0 {
-		var arities []string
-		for _, in := range ins {
-			arities = append(arities, fmt.Sprintf("int32(len(arg.%s))", GoName(in.Param)))
-		}
-		fmt.Fprintf(w, "\tkey.Arities = []int32{%s}\n", strings.Join(arities, ", "))
-	}
+	g.writePreamble(w, chooses, orders, filter, ins, requiredArgs, fail)
+	argExpr := requiredArgExprs(requiredArgs)
 
-	// A required value is an argument, not a field, so the body must
-	// name it directly.
-	argExpr := map[string]string{}
-	for _, ra := range requiredArgs {
-		argExpr[ra.param] = ra.expr
-	}
-	var vals []string
-	for _, name := range q.ParamOrder {
-		switch {
-		case filter != nil && name == filter.Param:
-			vals = append(vals, "nil /* tree control */")
-		case filterOnlyParam(q.Params[name]):
-			vals = append(vals, "nil /* predicate arg */")
-		case argExpr[name] != "":
-			vals = append(vals, argExpr[name])
-		case q.Params[name].Optional && g.nullableParam(name):
-			// Omittable[Option[T]]: the composed plan selects this slot
-			// only in shapes whose guard is on; inside, None binds NULL.
-			vals = append(vals, "arg."+GoName(name)+".OrZero().UnwrapAsPtr()")
-		case q.Params[name].Optional:
-			// The composed plan selects this slot only in shapes whose
-			// guard is on, and Ptr keeps the value the driver sees the
-			// same *T every guarded bind has always been (design 17 §2).
-			vals = append(vals, "arg."+GoName(name)+".Ptr()")
-		case g.nullableParam(name):
-			// A nil *T binds SQL NULL (design 20).
-			vals = append(vals, "arg."+GoName(name)+".UnwrapAsPtr()")
-		default:
-			vals = append(vals, "arg."+GoName(name))
-		}
-	}
-	styleArg := ""
-	if g.style == runtime.StyleQuestion {
-		styleArg = "runtime.StyleQuestion, "
-	}
-	switch {
-	case filter != nil:
-		treeField := "arg." + GoName(filter.Param)
-		if e := argExpr[filter.Param]; e != "" {
-			treeField = e
-		}
-		if filter.Required {
-			// The argument's type keeps `nil` from compiling; this
-			// refuses the one zero that still can, `runtime.Tree{}`.
-			fmt.Fprintf(w, "\tif %s.IsZero() {\n\t\tq.observeReject(ctx, %q, runtime.ErrFilterRequired)\n\t\t%s\n\t}\n",
-				treeField, q.Name, errRet("runtime.ErrFilterRequired"))
-		}
-		// The tree's `;t=` key segment is NOT derived here: the cache
-		// derives it authoritatively, and deriving it a second time for
-		// the hook encoded every tree twice per call. hookTree spells it
-		// out only when a hook is installed.
-		method := "GetTree"
-		if g.style == runtime.StyleQuestion {
-			method = "GetTreeStyle"
-		}
-		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.%s(%s%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
-			method, styleArg, q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
-		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
-			strings.Join(vals, ", "), treeField)
-	case g.in.ExpandedShapes != nil:
-		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
-		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
-	case g.style == runtime.StyleQuestion:
-		// The binds path covers slice-element expansion (@in).
-		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, %q, %s, key)\n", q.Name, fragsVar)
-		fmt.Fprintf(w, "\tif err != nil {\n\t\tq.observeReject(ctx, %q, err)\n\t\t%s\n\t}\n", q.Name, errRet("err"))
-		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, nil)\n", strings.Join(vals, ", "))
-	default:
-		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
-		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
-	}
 	// The key is passed unencoded: hook only spells it out when a hook
 	// is actually installed, so the common no-observability case does
 	// not pay for the canonical encoding on every call. A filter tree
@@ -1289,7 +1222,9 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 // call; the deferred cancel keeps the deadline over row iteration and
 // scanning. A caller's shorter deadline still wins, by context
 // semantics. Nothing is emitted when there is no deadline, so such
-// methods stay byte-identical to pre-design-23 output.
+// methods stay byte-identical to pre-design-23 output. The
+// Explain<Query> sibling (design 22) emits the same deadline right
+// before its hand-off to the explain helper.
 func (g *queryGen) writeTimeout(w *strings.Builder) {
 	d, source := g.defTimeout, fmt.Sprintf("query_timeout.default (%s)", g.defTimeout)
 	if td := g.in.Q.Timeout; td != nil {
@@ -1323,6 +1258,189 @@ func durationLiteral(d time.Duration) string {
 	return fmt.Sprintf("%d*time.Nanosecond", d)
 }
 
+// methodParams is the parameter list a query method and its explain
+// sibling share. Required values come before the params struct, in
+// template order with the tree last, so the signature reads "what you
+// must decide, then what you may vary".
+func methodParams(requiredArgs []requiredArg, paramsName string) []string {
+	params := []string{"ctx context.Context"}
+	for _, ra := range requiredArgs {
+		params = append(params, fmt.Sprintf("%s %s", ra.name, ra.typ))
+	}
+	return append(params, "arg "+paramsName)
+}
+
+// writeExplainFunc emits Explain<Query> (design 22): the query method's
+// preamble verbatim — so the EXPLAINed statement and its binds are the
+// ones the query method would send — then a hand-off to the db.gen.go
+// explain helper instead of execution. It reports to neither the
+// OnQuery hook nor the observer: it is not an execution of the query.
+func (g *queryGen) writeExplainFunc(w *strings.Builder, paramsName string, chooses []chooseMeta,
+	orders []orderMeta, filter *template.FilterTree, ins []*template.InExpr, requiredArgs []requiredArg) {
+
+	q := g.in.Q
+	params := append(methodParams(requiredArgs, paramsName), "opts runtime.ExplainOptions")
+	fmt.Fprintf(w, "\n// Explain%s EXPLAINs the statement %s would send for these\n", q.Name, q.Name)
+	fmt.Fprint(w, "// arguments instead of executing it (design doc 22); with\n")
+	fmt.Fprint(w, "// opts.Analyze it runs inside a transaction that is rolled back.\n")
+	fmt.Fprintf(w, "func (q *Queries) Explain%s(%s) (runtime.Plan, error) {\n", q.Name, strings.Join(params, ", "))
+	g.writePreamble(w, chooses, orders, filter, ins, requiredArgs, func(_, returned string) string {
+		return fmt.Sprintf("\t\treturn runtime.Plan{}, %s\n", returned)
+	})
+	if filter != nil {
+		treeField := "arg." + GoName(filter.Param)
+		if e := requiredArgExprs(requiredArgs)[filter.Param]; e != "" {
+			treeField = e
+		}
+		fmt.Fprintf(w, "\tkey.Trees = []string{%s.Encode()}\n", treeField)
+	}
+	// The query method's deadline (design 23) bounds its EXPLAIN too:
+	// with opts.Analyze the statement really runs, and even a plain
+	// EXPLAIN is a round trip the caller budgeted for under this query.
+	g.writeTimeout(w)
+	fmt.Fprintf(w, "\treturn q.explain(ctx, %q, key.String(), opts, sqlText, args)\n}\n", q.Name)
+}
+
+// writePreamble emits everything a generated method does before talking
+// to the database: shape-key derivation (with the @choose / @order-by /
+// @filter-tree! rejections), composition through q.cache, and bind
+// resolution into `sqlText` and `args`. The query method and its
+// Explain<Query> sibling (design 22) both call it, which is what makes
+// Plan.SQL byte-identical to the executed statement. fail renders the
+// body of a rejection branch: the rejected error to report and the error
+// expression to return.
+func (g *queryGen) writePreamble(w *strings.Builder, chooses []chooseMeta, orders []orderMeta,
+	filter *template.FilterTree, ins []*template.InExpr, requiredArgs []requiredArg,
+	fail func(rejected, returned string) string) {
+
+	q := g.in.Q
+	fragsVar := lowerCamel(q.Name) + "Frags"
+	fmt.Fprint(w, "\tvar key runtime.ShapeKey\n")
+	for i, atom := range q.GuardAtoms {
+		if atom.IsValue() {
+			op := "=="
+			if atom.Op == "!=" {
+				op = "!="
+			}
+			fmt.Fprintf(w, "\tif arg.%s %s %s {\n\t\tkey.Guards |= 1 << %d\n\t}\n",
+				GoName(atom.Param), op, goLiteral(atom), i)
+			continue
+		}
+		fmt.Fprintf(w, "\tif arg.%s.IsPresent() {\n\t\tkey.Guards |= 1 << %d\n\t}\n", GoName(atom.Param), i)
+	}
+	if len(chooses) > 0 {
+		g.imports["fmt"] = true
+		var ords []string
+		for i, cm := range chooses {
+			ord := fmt.Sprintf("ord%d", i)
+			ords = append(ords, ord)
+			fmt.Fprintf(w, "\t%s, err := runtime.ChooseOrdinal(int(arg.%s), %d, %v)\n",
+				ord, GoName(cm.c.Param), cm.numNamed, cm.c.Default != nil)
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t}\n", fail("err", fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
+		}
+		fmt.Fprintf(w, "\tkey.Choices = []uint8{%s}\n", strings.Join(ords, ", "))
+	}
+	if len(orders) > 0 {
+		g.imports["fmt"] = true
+		var seqs []string
+		for i, om := range orders {
+			seq := fmt.Sprintf("oseq%d", i)
+			seqs = append(seqs, seq)
+			fmt.Fprintf(w, "\t%s, err := runtime.OrderSeq(arg.%s, %d)\n",
+				seq, GoName(om.o.Param), len(om.o.Keys))
+			fmt.Fprintf(w, "\tif err != nil {\n%s\t}\n", fail("err", fmt.Sprintf("fmt.Errorf(%q, err)", q.Name+": %w")))
+		}
+		fmt.Fprintf(w, "\tkey.Orders = [][]uint8{%s}\n", strings.Join(seqs, ", "))
+	}
+	if g.style == runtime.StyleQuestion && len(ins) > 0 {
+		var arities []string
+		for _, in := range ins {
+			arities = append(arities, fmt.Sprintf("int32(len(arg.%s))", GoName(in.Param)))
+		}
+		fmt.Fprintf(w, "\tkey.Arities = []int32{%s}\n", strings.Join(arities, ", "))
+	}
+
+	argExpr := requiredArgExprs(requiredArgs)
+	var vals []string
+	for _, name := range q.ParamOrder {
+		switch {
+		case filter != nil && name == filter.Param:
+			vals = append(vals, "nil /* tree control */")
+		case filterOnlyParam(q.Params[name]):
+			vals = append(vals, "nil /* predicate arg */")
+		case argExpr[name] != "":
+			vals = append(vals, argExpr[name])
+		case q.Params[name].Optional && g.nullableParam(name):
+			// Omittable[Option[T]]: the composed plan selects this slot
+			// only in shapes whose guard is on; inside, None binds NULL.
+			vals = append(vals, "arg."+GoName(name)+".OrZero().UnwrapAsPtr()")
+		case q.Params[name].Optional:
+			// The composed plan selects this slot only in shapes whose
+			// guard is on, and Ptr keeps the value the driver sees the
+			// same *T every guarded bind has always been (design 17 §2).
+			vals = append(vals, "arg."+GoName(name)+".Ptr()")
+		case g.nullableParam(name):
+			// A nil *T binds SQL NULL (design 20).
+			vals = append(vals, "arg."+GoName(name)+".UnwrapAsPtr()")
+		default:
+			vals = append(vals, "arg."+GoName(name))
+		}
+	}
+	styleArg := ""
+	if g.style == runtime.StyleQuestion {
+		styleArg = "runtime.StyleQuestion, "
+	}
+	switch {
+	case filter != nil:
+		treeField := "arg." + GoName(filter.Param)
+		if e := argExpr[filter.Param]; e != "" {
+			treeField = e
+		}
+		if filter.Required {
+			// The argument's type keeps `nil` from compiling; this
+			// refuses the one zero that still can, `runtime.Tree{}`.
+			fmt.Fprintf(w, "\tif %s.IsZero() {\n%s\t}\n",
+				treeField, fail("runtime.ErrFilterRequired", "runtime.ErrFilterRequired"))
+		}
+		// The tree's `;t=` key segment is NOT derived here: the cache
+		// derives it authoritatively, and deriving it a second time for
+		// the hook encoded every tree twice per call. hookTree spells it
+		// out only when a hook is installed.
+		method := "GetTree"
+		if g.style == runtime.StyleQuestion {
+			method = "GetTreeStyle"
+		}
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.%s(%s%q, %s, key, %s, runtime.TreeCaps{MaxNodes: %d, MaxDepth: %d})\n",
+			method, styleArg, q.Name, fragsVar, treeField, g.caps.MaxNodes, g.caps.MaxDepth)
+		fmt.Fprintf(w, "\tif err != nil {\n%s\t}\n", fail("err", "err"))
+		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, runtime.TreeArgs(%s))\n",
+			strings.Join(vals, ", "), treeField)
+	case g.in.ExpandedShapes != nil:
+		fmt.Fprintf(w, "\tsqlText, argIdx, err := runtime.Lookup(%sShapes, key)\n", lowerCamel(q.Name))
+		fmt.Fprintf(w, "\tif err != nil {\n%s\t}\n", fail("err", "err"))
+		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	case g.style == runtime.StyleQuestion:
+		// The binds path covers slice-element expansion (@in).
+		fmt.Fprintf(w, "\tsqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, %q, %s, key)\n", q.Name, fragsVar)
+		fmt.Fprintf(w, "\tif err != nil {\n%s\t}\n", fail("err", "err"))
+		fmt.Fprintf(w, "\targs := runtime.ResolveArgs(binds, []any{%s}, nil)\n", strings.Join(vals, ", "))
+	default:
+		fmt.Fprintf(w, "\tsqlText, argIdx := q.cache.Get(%q, %s, key)\n", q.Name, fragsVar)
+		fmt.Fprintf(w, "\targs := runtime.BuildArgs(argIdx, []any{%s})\n", strings.Join(vals, ", "))
+	}
+}
+
+// requiredArgExprs maps each required argument's template parameter to
+// the expression the body names it by: a required value is an argument,
+// not a field, so the body must name it directly.
+func requiredArgExprs(requiredArgs []requiredArg) map[string]string {
+	argExpr := map[string]string{}
+	for _, ra := range requiredArgs {
+		argExpr[ra.param] = ra.expr
+	}
+	return argExpr
+}
+
 // treeHookFunc is spliced into db.gen.go only when the package has a
 // @filter-tree query. See hookTree's own comment for why the tree's key
 // segment is derived here rather than at the call site.
@@ -1346,6 +1464,173 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 		key.Trees = []string{t.Encode()}
 		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
+}
+`
+
+// explainHelperPostgres is db.gen.go's Explain<Query> back end for pgx
+// (design 22). The rollback defer is registered before rows.Close's, so
+// the rows are closed first (LIFO).
+const explainHelperPostgres = `
+// explain sends the EXPLAIN form of a composed statement (design doc
+// 22). Analyze always runs inside a transaction — a savepoint when the
+// DBTX is itself a pgx.Tx — that is rolled back, whatever the
+// statement; a DBTX that cannot begin one is refused.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (plan runtime.Plan, err error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainPostgres, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	db := q.db
+	if opts.Analyze {
+		b, ok := q.db.(interface {
+			Begin(context.Context) (pgx.Tx, error)
+		})
+		if !ok {
+			return runtime.Plan{}, fmt.Errorf("%s: %w", query, runtime.ErrExplainNoTx)
+		}
+		var tx pgx.Tx
+		if tx, err = b.Begin(ctx); err != nil {
+			return runtime.Plan{}, err
+		}
+		defer func() {
+			if rerr := tx.Rollback(context.WithoutCancel(ctx)); rerr != nil && err == nil {
+				plan, err = runtime.Plan{}, rerr
+			}
+		}()
+		db = tx
+	}
+	rows, err := db.Query(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err = rows.Scan(&line); err != nil {
+			return runtime.Plan{}, err
+		}
+		lines = append(lines, line)
+	}
+	if err = rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Analyzed: opts.Analyze, Output: strings.Join(lines, "\n")}, nil
+}
+`
+
+// explainHelperMySQL is the database/sql back end for MySQL. A caller's
+// *sql.Tx gets a savepoint rather than a nested transaction (which
+// database/sql cannot open), so that transaction stays usable.
+const explainHelperMySQL = `
+// explain sends the EXPLAIN form of a composed statement (design doc
+// 22). Analyze always runs inside a transaction (a savepoint inside a
+// caller's *sql.Tx) that is rolled back, whatever the statement; a DBTX
+// that can open neither is refused.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (plan runtime.Plan, err error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainMySQL, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	db := q.db
+	if opts.Analyze {
+		var done func() error
+		if db, done, err = q.explainTx(ctx); err != nil {
+			return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+		}
+		defer func() {
+			// ErrTxDone: database/sql already rolled back (ctx ended);
+			// sqletch never commits, so the effects are gone either way.
+			if rerr := done(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) && err == nil {
+				plan, err = runtime.Plan{}, rerr
+			}
+		}()
+	}
+	rows, err := db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err = rows.Scan(&line); err != nil {
+			return runtime.Plan{}, err
+		}
+		lines = append(lines, line)
+	}
+	if err = rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Analyzed: opts.Analyze, Output: strings.Join(lines, "\n")}, nil
+}
+
+// explainTx opens the rolled-back scope an ANALYZE runs in: a
+// transaction on a *sql.DB or *sql.Conn, a savepoint inside a caller's
+// *sql.Tx. done rolls it back.
+func (q *Queries) explainTx(ctx context.Context) (DBTX, func() error, error) {
+	switch db := q.db.(type) {
+	case *sql.Tx:
+		if _, err := db.ExecContext(ctx, "SAVEPOINT sqletch_explain"); err != nil {
+			return nil, nil, err
+		}
+		return db, func() error {
+			c := context.WithoutCancel(ctx)
+			if _, err := db.ExecContext(c, "ROLLBACK TO SAVEPOINT sqletch_explain"); err != nil {
+				return err
+			}
+			_, err := db.ExecContext(c, "RELEASE SAVEPOINT sqletch_explain")
+			return err
+		}, nil
+	case interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	}:
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return tx, tx.Rollback, nil
+	}
+	return nil, nil, runtime.ErrExplainNoTx
+}
+`
+
+// explainHelperSQLite is the database/sql back end for SQLite. SQLite
+// has no EXPLAIN ANALYZE; runtime.ExplainStatement refuses it before any
+// database work, so no transaction machinery is emitted.
+const explainHelperSQLite = `
+// explain sends EXPLAIN QUERY PLAN for a composed statement (design doc
+// 22) and renders its rows with runtime.SQLitePlan.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (runtime.Plan, error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainSQLite, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	rows, err := q.db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var steps []runtime.SQLitePlanRow
+	for rows.Next() {
+		var r runtime.SQLitePlanRow
+		var notused int64
+		if err := rows.Scan(&r.ID, &r.Parent, &notused, &r.Detail); err != nil {
+			return runtime.Plan{}, err
+		}
+		steps = append(steps, r)
+	}
+	if err := rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	out, err := runtime.SQLitePlan(steps, opts.Format)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Output: out}, nil
 }
 `
 
@@ -1415,6 +1700,8 @@ package %s
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -1513,17 +1800,20 @@ var (
 `, pkg, treeHook, shapeSpace)
 }
 
-func dbFileQuestion(pkg string, treeHook string, shapeSpace string) string {
+func dbFileQuestion(pkg string, extraImports []string, treeHook string, shapeSpace string) string {
+	imports := []string{"context", "database/sql", "fmt", "sync/atomic", "time"}
+	imports = append(imports, extraImports...)
+	sort.Strings(imports)
+	var imp strings.Builder
+	for _, i := range imports {
+		fmt.Fprintf(&imp, "\t%q\n", i)
+	}
 	return fmt.Sprintf(`// Code generated by sqletch. DO NOT EDIT.
 
 package %s
 
 import (
-	"context"
-	"database/sql"
-	"sync/atomic"
-	"time"
-
+%s
 	"github.com/moznion/go-sqletch/runtime"
 )
 
@@ -1627,7 +1917,7 @@ var (
 	And = runtime.And
 	Or  = runtime.Or
 )
-`, pkg, treeHook, shapeSpace)
+`, pkg, imp.String(), treeHook, shapeSpace)
 }
 
 func querierFile(pkg string, sigs []string, extraImports map[string]bool) string {

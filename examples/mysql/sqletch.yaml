@@ -10,3 +10,7 @@ targets:
     output:
       package: gen
       path: gen
+
+# Opt into the SQLETCHLnnn performance lints (warnings only); `sqletch
+# check --lint=false` turns them off for one run.
+lint: true
