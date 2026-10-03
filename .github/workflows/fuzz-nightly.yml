@@ -1,0 +1,94 @@
+name: Fuzz (nightly)
+
+# The CI fuzz smoke (ci.yml, 30 s per target) starts every run from an
+# empty corpus, so each PR re-explores the same shallow region: measured
+# 2026-10, every target was still finding 160–555 new interesting inputs
+# per 30 s when it stopped. This workflow is the depth half: long runs,
+# and a corpus that persists from night to night, so coverage compounds
+# instead of being rediscovered.
+#
+# A crasher fails the job and is uploaded as an artifact; commit it
+# under the package's testdata/fuzz/<target>/ — that file IS the
+# regression test (CLAUDE.md).
+
+on:
+  schedule:
+    - cron: "17 18 * * *" # daily, 03:17 JST
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Fuzz duration per target (Go duration)"
+        required: false
+        default: "10m"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./internal/template, target: FuzzScan }
+          - { pkg: ./internal/codegen, target: FuzzComposeConformance }
+          - { pkg: ./internal/dialect/postgres, target: FuzzProvenanceFlags }
+          - { pkg: ./internal/dialect/mysql, target: FuzzNativeDescribe }
+          - { pkg: ./internal/pathpat, target: FuzzPattern }
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_SQLite }
+          # Server dialects: every fuzz worker process starts its own
+          # testcontainers database, so keep the worker count small.
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_Postgres, tags: devdb, parallel: 2 }
+          - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_MySQL, tags: devdb, parallel: 2 }
+    env:
+      FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+      # An explicit cache dir (not $GOCACHE/fuzz) so exactly the corpus
+      # is persisted, nothing else from the build cache.
+      CORPUS_DIR: ${{ github.workspace }}/.fuzz-corpus
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+      # Restore the newest corpus for this target; save under a fresh
+      # key every run (cache entries are immutable), so the prefix
+      # restore always picks up last night's growth.
+      - name: Restore corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CORPUS_DIR }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Corpus size before
+        run: find "$CORPUS_DIR" -type f 2>/dev/null | wc -l
+      - name: Fuzz
+        run: |
+          go test ${{ matrix.tags && format('-tags {0}', matrix.tags) || '' }} ${{ matrix.pkg }} \
+            -run '^$' -fuzz='^${{ matrix.target }}$' -fuzztime="$FUZZTIME" \
+            -parallel=${{ matrix.parallel || 4 }} \
+            -test.fuzzcachedir="$CORPUS_DIR"
+      - name: Corpus size after
+        if: always()
+        run: find "$CORPUS_DIR" -type f 2>/dev/null | wc -l
+      # Saved even when fuzzing failed: the corpus that reached a
+      # crasher is the most valuable one to keep.
+      - name: Save corpus
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CORPUS_DIR }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
