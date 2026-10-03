@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/template"
@@ -72,50 +72,49 @@ func buildGoConsts(k int) []byte {
 	return []byte(b.String())
 }
 
-// A .go file with many marked consts must scan in ~linear total time.
+// A .go file with many marked consts must scan in ~linear total work.
 // Each const's view is the whole file with everything but its own
 // literal blanked; handing the scanner the full [0,end) prefix made it
 // re-lex (and re-copy, as one giant whitespace token's Text) that
 // blank prefix once per const — O(consts × file size). At source scale
 // that is seconds of CPU and, through cli.scanSource, hangs the LSP on
 // file-open. This asserts the scan cost tracks file size, not its
-// square: doubling the const count must not quadruple the time.
+// square: doubling the const count must not quadruple the work.
 //
-// On the pre-fix (quadratic) scanner this FAILS — k=4000 takes ~4× the
-// k=2000 time; the fix bounds each const's scan to its own literal, so
-// the ratio drops to ~2×.
+// Work is measured as bytes allocated, not wall-clock time: the
+// re-lex copies the blank prefix into a token per const, so allocation
+// carries the same quadratic signal deterministically. A timing ratio
+// flaked on loaded CI runners (testing policy: no wall-clock
+// dependence). Measured: the fix allocates 2.05× from k=2000 to
+// k=4000; scanning each view from 0 instead (the pre-fix behavior)
+// allocates 3.92×.
 func TestScanSourceGoScalesLinearly(t *testing.T) {
 	sc := template.NewScanner(driverFor(config.Config{Dialect: "postgres"}).profile)
 
-	measure := func(k int) time.Duration {
+	allocated := func(k int) uint64 {
 		src := buildGoConsts(k)
-		best := time.Duration(1<<62 - 1)
-		for range 5 {
-			t0 := time.Now()
-			file, diags := scanSource(sc, "repo/users.go", src)
-			el := time.Since(t0)
-			if len(diags) != 0 {
-				t.Fatalf("k=%d: unexpected diagnostics: %v", k, diags)
-			}
-			if len(file.Queries) != k {
-				t.Fatalf("k=%d: got %d queries, want %d", k, len(file.Queries), k)
-			}
-			if el < best {
-				best = el
-			}
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		file, diags := scanSource(sc, "repo/users.go", src)
+		runtime.ReadMemStats(&after)
+		if len(diags) != 0 {
+			t.Fatalf("k=%d: unexpected diagnostics: %v", k, diags)
 		}
-		return best
+		if len(file.Queries) != k {
+			t.Fatalf("k=%d: got %d queries, want %d", k, len(file.Queries), k)
+		}
+		return after.TotalAlloc - before.TotalAlloc
 	}
 
-	t2 := measure(2000)
-	t4 := measure(4000)
+	b2 := allocated(2000)
+	b4 := allocated(4000)
 
-	// Linear scanning gives t4 ≈ 2·t2; the quadratic prefix re-lex gives
-	// t4 ≈ 4·t2. Fail at 3× — comfortably between the two regimes and
-	// tolerant of scheduler noise (best-of-5 already damps it).
-	if ratio := float64(t4) / float64(t2); ratio > 3.0 {
-		t.Fatalf("scan time scales super-linearly with const count: "+
-			"k=2000 took %v, k=4000 took %v (%.2f×, want ≈2×); "+
-			"the blank prefix before each literal is being re-lexed per const", t2, t4, ratio)
+	// Linear scanning gives b4 ≈ 2·b2; the quadratic prefix re-lex gives
+	// b4 ≈ 4·b2. Fail at 3× — between the two regimes.
+	if ratio := float64(b4) / float64(b2); ratio > 3.0 {
+		t.Fatalf("scan allocation scales super-linearly with const count: "+
+			"k=2000 allocated %d B, k=4000 allocated %d B (%.2f×, want ≈2×); "+
+			"the blank prefix before each literal is being re-lexed per const", b2, b4, ratio)
 	}
 }
