@@ -45,8 +45,11 @@ go test -tags devdb ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_MySQL -
 The six plain fuzz targets run in CI for 30s per PR (smoke, empty
 corpus). `.github/workflows/fuzz-nightly.yml` is the depth half: all
 eight targets (server dialects included) for 10m each, nightly and on
-demand, with each target's corpus persisted across runs in the Actions
-cache (`-test.fuzzcachedir`), so coverage compounds. The policy-weave leak
+demand, with each target's corpus committed to the orphan branch
+`fuzz-corpus` (one directory per target, Go fuzz-cache format; restored
+via `-test.fuzzcachedir`), so coverage compounds and never expires. Only
+the workflow's single `commit-corpus` job writes that branch, and only
+for runs of main. The policy-weave leak
 targets judge the woven SQL by executing it (a tenant-2 marker in a
 tid=1 result is a leak), never by re-reading it with the weaver's own
 scanners; the Postgres/MySQL variants need Docker or
