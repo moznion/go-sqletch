@@ -82,3 +82,20 @@ func (q *Queries) FilterUsers(ctx context.Context, scope runtime.Tree, arg Filte
 	q.observeExecTree(ctx, "FilterUsers", key, scope, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainFilterUsers EXPLAINs the statement FilterUsers would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainFilterUsers(ctx context.Context, scope runtime.Tree, arg FilterUsersParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	if scope.IsZero() {
+		return runtime.Plan{}, runtime.ErrFilterRequired
+	}
+	sqlText, binds, err := q.cache.GetTreeStyle(runtime.StyleQuestion, "FilterUsers", filterUsersFrags, key, scope, runtime.TreeCaps{MaxNodes: 32, MaxDepth: 8})
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	args := runtime.ResolveArgs(binds, []any{nil /* predicate arg */, nil /* predicate arg */, nil /* predicate arg */, arg.Limit}, runtime.TreeArgs(scope))
+	key.Trees = []string{scope.Encode()}
+	return q.explain(ctx, "FilterUsers", key.String(), opts, sqlText, args)
+}

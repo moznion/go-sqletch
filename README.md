@@ -278,6 +278,12 @@ per-dialect guides, and the
 - **Authoring**: `.sql` files or `//sqletch:query` consts in Go files;
   `sqletch fmt` for canonical layout; strict static expansion when
   every SQL text must exist on disk for audit.
+- **Performance lints** (opt-in, `lint: true` or `--lint`): warnings
+  for index-defeating predicates, leading-wildcard `LIKE`, `:many`
+  without `LIMIT`, OFFSET paging, and parameter types that convert the
+  column — checked across every reachable shape, suppressible per
+  query with `-- @nolint`. See the
+  [lint chapter](docs/manual/14-performance-lints.md).
 - **Tooling**: `generate`, `check [--exhaustive]`,
   `explain [--enumerate|--analyze]`, `fmt`, and `lsp` — plus editor
   grammars under [`editors/`](editors/) (a VS Code extension with a

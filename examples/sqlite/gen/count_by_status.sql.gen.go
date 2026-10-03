@@ -19,7 +19,7 @@ type CountByStatusRow struct {
 }
 
 var countByStatusFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\n-- @param tenant_id: integer\n-- @column n: integer\nSELECT u.status, count(*) AS n\nFROM users AS u\nWHERE u.tenant_id = :tenant_id\nGROUP BY u.status\nORDER BY u.status;\n\n", ParamSpans: []runtime.Span{{Start: 119, End: 129}}, ParamIdx: []int16{0}},
+	{Kind: runtime.Skel, Text: "\n-- @param tenant_id: integer\n-- @column n: integer\n-- @nolint SQLETCHL003 (one row per status)\nSELECT u.status, count(*) AS n\nFROM users AS u\nWHERE u.tenant_id = :tenant_id\nGROUP BY u.status\nORDER BY u.status;\n\n", ParamSpans: []runtime.Span{{Start: 163, End: 173}}, ParamIdx: []int16{0}},
 }
 
 func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([]CountByStatusRow, error) {
@@ -52,4 +52,17 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	}
 	q.observeExec(ctx, "CountByStatus", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
+}
+
+// ExplainCountByStatus EXPLAINs the statement CountByStatus would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainCountByStatus(ctx context.Context, arg CountByStatusParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "CountByStatus", countByStatusFrags, key)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	args := runtime.ResolveArgs(binds, []any{arg.TenantID}, nil)
+	return q.explain(ctx, "CountByStatus", key.String(), opts, sqlText, args)
 }

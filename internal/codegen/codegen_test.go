@@ -475,7 +475,7 @@ func TestGenerate_MaybeOne_QuestionStyle(t *testing.T) {
 	tm := mysql.TypeMap{}
 	idRef, _ := tm.TypeByName("bigint")
 	textRef, _ := tm.TypeByName("varchar")
-	files, diags := Generate(Options{Package: "gen", Style: runtime.StyleQuestion}, tm, []QueryInput{{
+	files, diags := Generate(Options{Package: "gen", Style: runtime.StyleQuestion, Explain: runtime.ExplainMySQL}, tm, []QueryInput{{
 		Q:          q,
 		Frags:      BuildFrags(mysql.Profile{}, q),
 		ParamTypes: map[string]dialect.TypeRef{"id": idRef},
@@ -698,7 +698,9 @@ t.tenant_id = :scope_tenant_id
 		// site must NOT derive it a second time for the hook — that
 		// encoded every tree twice per call — and must route the hook
 		// through hookTree so an installed hook still sees the segment.
-		if strings.Contains(src, "key.Trees =") {
+		// (Scoped to the query method: ExplainPick reports the full key
+		// in its Plan, so it spells the segment out once, by design.)
+		if strings.Contains(strings.Join(methodBody(t, src, "Pick"), "\n"), "key.Trees =") {
 			t.Errorf("call site re-derives the tree key segment\n----\n%s", src)
 		}
 		if !strings.Contains(src, "q.hookTree(key, scope, sqlText)") {

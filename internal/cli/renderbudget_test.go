@@ -35,7 +35,7 @@ func TestScanChecks_RenderingBudgetRefused(t *testing.T) {
 	drv := driverFor(config.Config{Dialect: "postgres"})
 	q := manyCaseTemplate(t, 50) // 1 + 50 = 51 renderings
 
-	_, rs, diags, err := scanChecks(drv, nil, q, 10)
+	_, rs, diags, err := scanChecks(drv, nil, q, 10, false)
 	if err != nil {
 		t.Fatalf("scanChecks returned a hard error, want a diagnostic: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestScanChecks_RenderingBudgetAdmitted(t *testing.T) {
 	drv := driverFor(config.Config{Dialect: "postgres"})
 	q := manyCaseTemplate(t, 50) // 51 renderings
 
-	_, rs, diags, err := scanChecks(drv, nil, q, 4096)
+	_, rs, diags, err := scanChecks(drv, nil, q, 4096, false)
 	if err != nil {
 		t.Fatalf("scanChecks: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestScanChecks_RenderingBudgetDisabled(t *testing.T) {
 	drv := driverFor(config.Config{Dialect: "postgres"})
 	q := manyCaseTemplate(t, 50)
 
-	_, rs, diags, err := scanChecks(drv, nil, q, 0)
+	_, rs, diags, err := scanChecks(drv, nil, q, 0, false)
 	if err != nil {
 		t.Fatalf("scanChecks: %v", err)
 	}

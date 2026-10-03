@@ -11,6 +11,7 @@ import (
 )
 
 type UserAuditActionsParams struct {
+	Limit int64
 }
 
 type UserAuditActionsRow struct {
@@ -20,15 +21,15 @@ type UserAuditActionsRow struct {
 
 var userAuditActionsFrags = []runtime.Frag{
 	{Kind: runtime.Skel, Text: "\n-- audit_logs sits on the null-extended side here, so the policy\n-- weaves into the JOIN's ON clause: every user row survives, and only\n-- the tenant's audit rows join (a WHERE conjunct would have turned\n-- the LEFT JOIN into an inner join).\nSELECT u.id, a.action\nFROM users AS u\nLEFT JOIN audit_logs AS a ON a.actor_id = u.id"},
-	{Kind: runtime.Skel, Text: " AND (a.tenant_id = :tenant_id)", ParamSpans: []runtime.Span{{Start: 20, End: 30}}, ParamIdx: []int16{0}},
-	{Kind: runtime.Skel, Text: "\nORDER BY u.id, a.id;\n"},
+	{Kind: runtime.Skel, Text: " AND (a.tenant_id = :tenant_id)", ParamSpans: []runtime.Span{{Start: 20, End: 30}}, ParamIdx: []int16{1}},
+	{Kind: runtime.Skel, Text: "\nORDER BY u.id, a.id\nLIMIT :limit;\n", ParamSpans: []runtime.Span{{Start: 27, End: 33}}, ParamIdx: []int16{0}},
 }
 
 // tenantID is required (policy tenant_scope).
 func (q *Queries) UserAuditActions(ctx context.Context, tenantID TenantID, arg UserAuditActionsParams) ([]UserAuditActionsRow, error) {
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("UserAuditActions", userAuditActionsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{int64(tenantID)})
+	args := runtime.BuildArgs(argIdx, []any{arg.Limit, int64(tenantID)})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {
@@ -53,4 +54,14 @@ func (q *Queries) UserAuditActions(ctx context.Context, tenantID TenantID, arg U
 	}
 	q.observeExec(ctx, "UserAuditActions", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
+}
+
+// ExplainUserAuditActions EXPLAINs the statement UserAuditActions would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainUserAuditActions(ctx context.Context, tenantID TenantID, arg UserAuditActionsParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, argIdx := q.cache.Get("UserAuditActions", userAuditActionsFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.Limit, int64(tenantID)})
+	return q.explain(ctx, "UserAuditActions", key.String(), opts, sqlText, args)
 }

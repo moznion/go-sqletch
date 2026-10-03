@@ -13,6 +13,7 @@
 11. [Compatibility and versioning](11-compatibility.md)
 12. [Cross-query policies](12-policies.md)
 13. [Runtime metrics](13-runtime-metrics.md)
+14. [Performance lints](14-performance-lints.md) — opt-in `SQLETCHLnnn` warnings
 
 The language specification (rules R1–R9 with their soundness argument)
 is [docs/spec.md](../spec.md); the

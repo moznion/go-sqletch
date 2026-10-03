@@ -176,9 +176,11 @@ const mysqlE2EMain = `package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -436,6 +438,79 @@ func main() {
 		"@in arity marks the query unbounded on an expanding dialect")
 	expect(gen.ShapeSpace["FilterUsers"].Unbounded, "@filter-tree marks its query unbounded")
 
+	// Design 22: Explain<Query>. Plan.SQL is byte-identical to what the
+	// query method sends (an @in arity shape here), and the binds are
+	// expanded the same way.
+	var lastSQL string
+	q.OnQuery(func(_, sql string) { lastSQL = sql })
+	inArg := gen.UsersInStatusesParams{TenantID: 1, Statuses: []string{"active", "banned"}, Limit: 100}
+	_, err = q.UsersInStatuses(ctx, inArg)
+	die(err)
+	lastSQL, executedSQL := "", lastSQL
+	plan, err := q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(lastSQL == "", "explain does not fire the OnQuery hook")
+	expect(plan.SQL == executedSQL, "explained SQL is byte-identical to the executed SQL")
+	expect(plan.Statement == "EXPLAIN FORMAT=TREE "+plan.SQL, "text explain prefix")
+	expect(strings.Contains(plan.Output, "-> "), "TREE plan: "+plan.Output)
+	jplan, err := q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Format: sqletchruntime.ExplainJSON})
+	die(err)
+	var jdoc map[string]any
+	expect(json.Unmarshal([]byte(jplan.Output), &jdoc) == nil && jdoc["query_block"] != nil, "JSON plan parses: "+jplan.Output)
+	emptyPlan, err := q.ExplainUsersInStatuses(ctx, gen.UsersInStatusesParams{TenantID: 1, Statuses: []string{}, Limit: 1},
+		sqletchruntime.ExplainOptions{})
+	die(err)
+	expect(strings.Contains(emptyPlan.ShapeKey, "n=0"), "arity-0 shape explained: "+emptyPlan.ShapeKey)
+
+	// ANALYZE: actuals for a SELECT; every ANALYZE runs inside a
+	// rolled-back transaction (from *sql.DB, *sql.Conn) or savepoint
+	// (inside a caller's *sql.Tx).
+	aplan, err := q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	expect(aplan.Analyzed && strings.Contains(aplan.Output, "actual time"), "analyze reports actuals: "+aplan.Output)
+	nicknameOf := func(qq *gen.Queries) string {
+		r, err := qq.FindUserByEmail(ctx, gen.FindUserByEmailParams{Email: "bob@example.com"})
+		die(err)
+		row, err := r.Take()
+		die(err)
+		return row.Nickname.TakeOr("<null>")
+	}
+	before := nicknameOf(q)
+	_, err = q.ExplainUpdateUserProfile(ctx,
+		gen.UpdateUserProfileParams{ID: 2, Nickname: sqletch.Present(optional.Some("analyzed"))},
+		sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	expect(nicknameOf(q) == before, "explain analyze left the row untouched")
+	// MySQL 8.4 refuses EXPLAIN ANALYZE FORMAT=JSON under its default
+	// explain_json_format_version; the server's error is returned as-is.
+	_, err = q.ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Analyze: true, Format: sqletchruntime.ExplainJSON})
+	expect(err != nil && !errors.Is(err, sqletchruntime.ErrExplainUnsupported), "server decides ANALYZE+JSON")
+
+	sconn, err := db.Conn(ctx)
+	die(err)
+	_, err = gen.New(sconn).ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	die(sconn.Close())
+
+	tx, err := db.BeginTx(ctx, nil)
+	die(err)
+	qtx := q.WithTx(tx)
+	_, err = qtx.UpdateUserProfile(ctx, gen.UpdateUserProfileParams{ID: 2, Nickname: sqletch.Present(optional.Some("in-tx"))})
+	die(err)
+	_, err = qtx.ExplainUpdateUserProfile(ctx,
+		gen.UpdateUserProfileParams{ID: 2, Nickname: sqletch.Present(optional.Some("savepoint"))},
+		sqletchruntime.ExplainOptions{Analyze: true})
+	die(err)
+	expect(nicknameOf(qtx) == "in-tx", "savepoint kept the caller's own write")
+	die(tx.Rollback())
+	expect(nicknameOf(q) == before, "caller's tx rolled back cleanly after the savepoint")
+
+	_, err = gen.New(noBegin{db}).ExplainUsersInStatuses(ctx, inArg, sqletchruntime.ExplainOptions{Analyze: true})
+	expect(errors.Is(err, sqletchruntime.ErrExplainNoTx), "ANALYZE without a transaction is refused")
+
 	fmt.Println("E2E-OK")
 }
+
+// noBegin hides BeginTx: only the DBTX methods remain.
+type noBegin struct{ gen.DBTX }
 `

@@ -12,6 +12,12 @@ JSON lines on stderr), `--version` (print the version and exit).
 | `sqletch lsp` | The language server over stdio ([editors](09-editors.md)). Strictly offline. |
 | `sqletch version` | Prints the version — the same line as `sqletch --version`. Build-time `-ldflags="-X main.version=…"` wins; otherwise it comes from the module build info, so `go install …@vX.Y.Z` reports the right version with no release tooling. |
 
+`generate` and `check` also take `--lint`: run the
+[performance lints](14-performance-lints.md) (`SQLETCHLnnn` warnings)
+for this invocation, overriding `lint:` in sqletch.yaml; `--lint=false`
+turns them off. Lint findings are warnings and never change the exit
+code.
+
 `generate` and `check` also take `--allow-server-drift`: accept a
 committed cache generated against a different server version than the
 one this run connects to, downgrading SQLETCH203 to a warning. See

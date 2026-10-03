@@ -142,6 +142,9 @@ type RunOptions struct {
 	// server in the record. The result is a cache no single
 	// environment produced — deliberate, and never the default.
 	AllowServerDrift bool
+	// Lint overrides sqletch.yaml's `lint` for this invocation (--lint /
+	// --lint=false); nil leaves the config's choice.
+	Lint *bool
 	// AllowDestructive confirms that the database at a user-supplied
 	// database.dsn is disposable, letting sqletch reset (drop and
 	// recreate) its schema. Without it a cold run against a
@@ -176,6 +179,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	res := &Result{Sources: map[string][]byte{}}
 	drv := driverFor(cfg)
 	profile := drv.profile
+	lintOn := cfg.Lint // performance lints are opt-in (design 24 §2)
+	if opts.Lint != nil {
+		lintOn = *opts.Lint
+	}
 	frontend := drv.frontend
 
 	// ---- schema fingerprint (offline) -----------------------------------
@@ -241,7 +248,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		slugs[i] = t.Slug()
 	}
 	for _, cq := range queries {
-		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes)
+		wres, rs, d, err := scanChecks(drv, pols, cq.q, cfg.Verification.MaxShapes, lintOn)
 		if err != nil {
 			return nil, err
 		}
@@ -360,7 +367,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 
 	// ---- catalog-dependent checks, types, nullability -------------------
 	for _, cq := range queries {
-		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat)
+		types, d, err := resolvedChecks(drv, cfg.Dialect, pols, cq.q, cq.rs, cq.descs, cat, lintOn)
 		if err != nil {
 			return nil, err
 		}
@@ -508,6 +515,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			Style:    drv.style,
 			// Codegen-only (design 23): never part of the fingerprint.
 			DefaultTimeout: cfg.QueryTimeout.DefaultDuration,
+			Explain:        drv.explain,
 		}, drv.typemap, inputsByTarget[ti])
 		res.Diags = append(res.Diags, diags...)
 		if diagnostics.HasErrors(res.Diags) || mode != ModeGenerate {

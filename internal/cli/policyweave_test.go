@@ -208,7 +208,7 @@ func TestResolvedChecks_PolicyEnforcement(t *testing.T) {
 			Columns: []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20, Name: "int8"}, SrcRel: 101, SrcAtt: 1}},
 		}
 	}
-	_, d, err := resolvedChecks(drv, "postgres", pols, file.Queries[0], rs, descs, hintCatalog())
+	_, d, err := resolvedChecks(drv, "postgres", pols, file.Queries[0], rs, descs, hintCatalog(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

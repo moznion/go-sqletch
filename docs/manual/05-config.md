@@ -47,6 +47,9 @@ query_timeout:                 # optional, baked into generated code
   default: 5s                  # deadline for methods without `-- @timeout`;
                                # absent = no default deadline
 
+lint: false                    # default; true runs the SQLETCHLnnn performance
+                               # lints (warnings); --lint / --lint=false override
+
 policies:                      # cross-query policies (see the policies chapter)
   - name: tenant_scope
     tables: [orders]
@@ -71,6 +74,13 @@ policies:                      # cross-query policies (see the policies chapter)
   the next cache miss after an upstream patch release stops with
   SQLETCH203. Changing the pin re-keys the cache (one cold
   `generate`).
+- **`lint`** opts the run into the [performance lints](14-performance-lints.md)
+  (SQLETCHL001–L006). Off by default. `generate --lint` / `check
+  --lint` turn them on for one run and `--lint=false` turns them off,
+  whatever the file says. The editor (LSP) follows this key. Lints only
+  add warnings: the key never changes renderings, the cache, or its
+  fingerprint, and `-- @nolint` directives are validated (SQLETCH016)
+  even when lints are off.
 - **`database.dsn`** is per-dialect: a PostgreSQL URL, a go-sql-driver
   MySQL DSN, or a SQLite file path. It is a **literal** string — no
   `${VAR}` expansion — so to source it from the environment, leave it
@@ -186,7 +196,7 @@ different outputs is an error too (SQLETCH314).
 
 **What stays global.** `schema`, `database`, `dialect`,
 `server_version`, `cache`, `verification`, `filter_tree_caps`,
-`overrides`, `static_expansion`, and `policies` apply to the whole
+`overrides`, `static_expansion`, `lint`, and `policies` apply to the whole
 run. That is the point of one config: however many packages you
 generate, there is **one** schema fingerprint, **one** committed
 cache, and **one** dev-database startup. Policies in particular weave

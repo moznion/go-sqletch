@@ -1,8 +1,12 @@
 {
   "format": 2,
   "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
-  "rendered_sql": "\n-- audit_logs sits on the null-extended side here, so the policy\n-- weaves into the JOIN's ON clause: every user row survives, and only\n-- the tenant's audit rows join (a WHERE conjunct would have turned\n-- the LEFT JOIN into an inner join).\nSELECT u.id, a.action\nFROM users AS u\nLEFT JOIN audit_logs AS a ON a.actor_id = u.id AND (a.tenant_id = $1)\nORDER BY u.id, a.id;\n",
+  "rendered_sql": "\n-- audit_logs sits on the null-extended side here, so the policy\n-- weaves into the JOIN's ON clause: every user row survives, and only\n-- the tenant's audit rows join (a WHERE conjunct would have turned\n-- the LEFT JOIN into an inner join).\nSELECT u.id, a.action\nFROM users AS u\nLEFT JOIN audit_logs AS a ON a.actor_id = u.id AND (a.tenant_id = $1)\nORDER BY u.id, a.id\nLIMIT $2;\n",
   "params": [
+    {
+      "oid": 20,
+      "name": "int8"
+    },
     {
       "oid": 20,
       "name": "int8"

@@ -42,7 +42,11 @@ func genTimeout(t *testing.T, style runtime.Style, def time.Duration, src string
 		in.Columns = []dialect.ColumnDesc{{Name: "id", Type: typ}}
 		in.Nullable = []bool{false}
 	}
-	files, diags := Generate(Options{Package: "gen", Style: style, DefaultTimeout: def}, tm, []QueryInput{in})
+	opts := Options{Package: "gen", Style: style, DefaultTimeout: def}
+	if style == runtime.StyleQuestion {
+		opts.Explain = runtime.ExplainMySQL // design 22: required for the shared style
+	}
+	files, diags := Generate(opts, tm, []QueryInput{in})
 	if len(diags) != 0 {
 		t.Fatalf("generate: %+v", diags)
 	}
@@ -51,11 +55,18 @@ func genTimeout(t *testing.T, style runtime.Style, def time.Duration, src string
 
 const timeoutWrap = "\tctx, cancel := context.WithTimeout(ctx, "
 
+// queryMethod narrows a generated file to the query method Q's body: the
+// Explain sibling carries its own copy of the deadline.
+func queryMethod(t *testing.T, src string) string {
+	t.Helper()
+	return strings.Join(methodBody(t, src, "Q"), "\n") + "\n"
+}
+
 // Every annotation on both driver flavors wraps the context exactly
 // once, AFTER composition (rejects are not deadline-bound and observe
 // the caller's ctx) and BEFORE the exec clock and the database call,
 // with the cancel deferred so the deadline covers row iteration and
-// scanning too.
+// scanning too. (The Explain sibling's copy is TestGenerate_ExplainTimeout.)
 func TestGenerate_TimeoutPlacement(t *testing.T) {
 	bodies := map[string]string{
 		"many":     "-- name: Q :many\n-- @timeout 1500ms\nSELECT id FROM t WHERE id = :id;\n",
@@ -66,7 +77,7 @@ func TestGenerate_TimeoutPlacement(t *testing.T) {
 	}
 	for _, style := range []runtime.Style{runtime.StyleDollar, runtime.StyleQuestion} {
 		for name, src := range bodies {
-			got := genTimeout(t, style, 0, src)
+			got := queryMethod(t, genTimeout(t, style, 0, src))
 			want := timeoutWrap + "1500*time.Millisecond)\n\tdefer cancel()\n"
 			if strings.Count(got, timeoutWrap) != 1 || !strings.Contains(got, want) {
 				t.Errorf("%v/%s: want one %q\n----\n%s", style, name, want, got)
@@ -112,7 +123,7 @@ func TestGenerate_TimeoutDefault(t *testing.T) {
 	}
 
 	override := "-- name: Q :many\n-- @timeout 250ms\nSELECT id FROM t WHERE id = :id;\n"
-	got = genTimeout(t, runtime.StyleDollar, 2*time.Second, override)
+	got = queryMethod(t, genTimeout(t, runtime.StyleDollar, 2*time.Second, override))
 	if strings.Count(got, timeoutWrap) != 1 || !strings.Contains(got, timeoutWrap+"250*time.Millisecond)\n") {
 		t.Errorf("directive did not override the default\n----\n%s", got)
 	}
@@ -162,6 +173,73 @@ t.tenant_id = :scope_tenant_id
 	}
 }
 
+// The deadline declares `cancel` in the method's outermost scope, so a
+// required argument spelled `cancel` must be renamed — otherwise
+// `ctx, cancel := …` declares no new variable and the consumer's module
+// fails to compile. Both kinds of required argument are pinned, each
+// under one of the two deadline sources (directive, config default).
+func TestGenerate_TimeoutCancelArgCompiles(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		policy   string // non-empty: :cancel is a woven policy parameter
+		def      time.Duration
+		params   map[string]dialect.TypeRef
+		wantArg  string
+		wantWrap string
+	}{
+		{
+			name: "filter-tree under @timeout",
+			src: `-- name: Pick :many
+-- @timeout 3s
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree!(cancel)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`,
+			params:   map[string]dialect.TypeRef{"scope_tenant_id": {OID: 20}},
+			wantArg:  "cancelArg runtime.Tree",
+			wantWrap: timeoutWrap + "3*time.Second)\n",
+		},
+		{
+			name: "policy parameter under query_timeout.default",
+			src: `-- name: Pick :many
+SELECT t.id FROM t WHERE t.tenant_id = :cancel;
+`,
+			policy:   "tenant_scope",
+			def:      2 * time.Second,
+			params:   map[string]dialect.TypeRef{"cancel": {OID: 20}},
+			wantArg:  "cancelArg Cancel",
+			wantWrap: timeoutWrap + "2*time.Second)\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := scanOne(t, tc.src)
+			if tc.policy != "" {
+				// Stand in for the weaver, as TestGenerate_PolicyParamNamedTypes does.
+				q.Params["cancel"].Policy = tc.policy
+			}
+			files, diags := Generate(Options{Package: "gen", DefaultTimeout: tc.def}, postgres.TypeMap{}, []QueryInput{{
+				Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+				Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: tc.params,
+			}})
+			if len(diags) != 0 {
+				t.Fatalf("generate: %+v", diags)
+			}
+			src := string(files["pick.sql.gen.go"])
+			if !strings.Contains(src, tc.wantArg) || !strings.Contains(src, tc.wantWrap) {
+				t.Fatalf("expected %q and the deadline\n----\n%s", tc.wantArg, src)
+			}
+			buildGenerated(t, map[string]map[string][]byte{"gen": files})
+		})
+	}
+}
+
 // The literal is the largest unit that divides the duration exactly,
 // so it reads like the directive and is a pure function of the value.
 func TestDurationLiteral(t *testing.T) {
@@ -181,6 +259,43 @@ func TestDurationLiteral(t *testing.T) {
 	} {
 		if got := durationLiteral(d); got != want {
 			t.Errorf("durationLiteral(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// The Explain<Query> sibling (design 22 §6.1) carries the query
+// method's deadline — with opts.Analyze the statement really runs — and
+// emits it after the shared preamble, right before the explain hand-off.
+// No effective deadline emits nothing there either.
+func TestGenerate_ExplainTimeout(t *testing.T) {
+	cases := []struct {
+		name, src string
+		def       time.Duration
+		want      string // "" = no deadline
+	}{
+		{"directive", "-- name: Q :many\n-- @timeout 1500ms\nSELECT id FROM t WHERE id = :id;\n", 0, "1500*time.Millisecond"},
+		{"default", "-- name: Q :many\nSELECT id FROM t WHERE id = :id;\n", 2 * time.Second, "2*time.Second"},
+		{"exec", "-- name: Q :exec\n-- @timeout 3s\nDELETE FROM t WHERE id = :id;\n", 0, "3*time.Second"},
+		{"none", "-- name: Q :many\n-- @timeout none\nSELECT id FROM t WHERE id = :id;\n", 2 * time.Second, ""},
+		{"unset", "-- name: Q :many\nSELECT id FROM t WHERE id = :id;\n", 0, ""},
+	}
+	for _, style := range []runtime.Style{runtime.StyleDollar, runtime.StyleQuestion} {
+		for _, c := range cases {
+			got := genTimeout(t, style, c.def, c.src)
+			body := strings.Join(methodBody(t, got, "ExplainQ"), "\n") + "\n"
+			if c.want == "" {
+				if strings.Contains(body, "WithTimeout") || strings.Contains(body, "cancel") {
+					t.Errorf("%v/%s: unexpected deadline\n----\n%s", style, c.name, body)
+				}
+				continue
+			}
+			want := timeoutWrap + c.want + ")\n\tdefer cancel()\n\treturn q.explain("
+			if strings.Count(body, timeoutWrap) != 1 || !strings.Contains(body, want) {
+				t.Errorf("%v/%s: want one %q right before the hand-off\n----\n%s", style, c.name, want, body)
+			}
+			if i, j := strings.Index(body, "args := "), strings.Index(body, timeoutWrap); i < 0 || i > j {
+				t.Errorf("%v/%s: the preamble must precede the deadline\n----\n%s", style, c.name, body)
+			}
 		}
 	}
 }

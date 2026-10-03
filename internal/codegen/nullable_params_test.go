@@ -110,7 +110,7 @@ func TestGenerate_NullableParamsQuestionStyle(t *testing.T) {
 		"bio": text, "nickname": text, "email": text,
 		"id": {OID: 8, Name: "bigint"},
 	}
-	src := generatePatchUser(t, Options{Package: "gen", Style: runtime.StyleQuestion}, mysql.Profile{}, mysql.TypeMap{}, types,
+	src := generatePatchUser(t, Options{Package: "gen", Style: runtime.StyleQuestion, Explain: runtime.ExplainMySQL}, mysql.Profile{}, mysql.TypeMap{}, types,
 		map[string]bool{"bio": true, "nickname": true})
 	assertPatterns(t, src,
 		`Bio\s+optional\.Option\[string\]`,
