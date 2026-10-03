@@ -47,11 +47,11 @@ the PR to deviate.
 |---|---|
 | New or changed diagnostic / rejection | The rejected input asserted down to its `SQLETCHnnn` (or `SQLETCHLnnn`) code **and** its span; the accepted neighbor that must not fire. Assert codes and spans, not message prose. |
 | Rule granting narrowing / acceptance / credit | Positive cases, plus must-stay cases for each way the grant could be wrong (ambiguity, null-extension, guarded fragments, set operations, provenance through derived tables/CTEs/views). One per dialect whose frontend differs. |
-| Claim about engine behavior (nullability through attribution, planner index use, driver error shape) | Evidence against the real engine in the devdb suite (`nullability_soundness_devdb_test.go`, `perf_rewrite_devdb_test.go`, `TestQueryTimeout*`, …). A claim that only a unit test supports is an assumption. |
+| Claim about engine behavior (nullability through attribution, planner index use, driver error shape) | Evidence against the real engine in the devdb suite (§5; e.g. `nullability_soundness_devdb_test.go`, `perf_rewrite_devdb_test.go`, `TestQueryTimeout*`). A claim that only a unit test supports is an assumption. |
 | Hand-written walker or lexical scanner over a third-party AST/token stream | A position-coverage table: one case per node kind / syntactic position the walker must reach, each planting a sentinel and asserting it comes back (with offset and scope marking). When the upstream parser is upgraded, diff its node kinds against the walker's `switch`. |
 | Emission change (renderer, fragments, runtime composer) | Both sides of the Compose conformance invariant (`TestComposeConformance`, `FuzzComposeConformance`) plus regenerated examples. Never change one side alone. |
 | Cache / layout / oracle bytes | Byte-identity tests and, for oracle backends, a corpus case (`internal/corpus`) re-derived against the real server. |
-| Runtime behavior visible to generated code | Unit tests in `runtime/`, alloc tests where a hot path's allocation count is pinned, and coverage in the generated-module devdb run. |
+| Runtime behavior visible to generated code | Unit tests in `runtime/`, alloc tests where a hot path's allocation count is pinned, and the generated-module devdb loop (§5.1). |
 | Bug fix | A regression test that reproduces the bug (red before the fix), with a comment naming the audit/issue and the failure it prevents. |
 | Fuzz crasher | The crashing input committed under the package's `testdata/fuzz/<Target>/`. That file is the regression test; do not convert it into something weaker. |
 
@@ -96,7 +96,103 @@ branch, the author MUST check that it actually guards it:
   (`…NeverNarrows`, `…NeverServed`, `…Rejected`). Comments state the
   property and why it matters, not what the code does.
 
-## 5. Coverage
+## 5. Real-database E2E
+
+Unit tests prove the compiler is consistent with itself. Only a real
+engine proves the guarantee: that every shape sqletch accepts PREPAREs,
+that a column it calls non-null never yields NULL, that the SQL and
+binds the generated code hands the driver are the ones that were
+verified, and that a committed cache lets everything run offline. The
+devdb suite (`-tags devdb`: `internal/e2e`, `internal/corpus`, and the
+devdb-tagged tests in other packages) is therefore first-class, not an
+optional extra: a red devdb run blocks exactly like a red unit run.
+
+### 5.1 The standing suites
+
+These MUST stay green on every dialect that has them. A change that
+breaks one is not done, whatever the unit suites say.
+
+| Suite | Property | PostgreSQL | MySQL | SQLite |
+|---|---|---|---|---|
+| Shape property | every enumerable shape of the fixture templates PREPAREs and EXPLAINs | `TestPropertyAllShapesPrepareAndPlan` | `TestMySQLPropertyAllShapesPrepareAndPlan` | `TestSQLitePropertyAllShapesPrepareAndPlan` |
+| Verdict soundness property | every shape runs on NULL-heavy data; no column judged non-null returns NULL | `TestPropertyVerdictSoundness` | `TestMySQLPropertyVerdictSoundness` | `TestSQLitePropertyVerdictSoundness` |
+| Nullability counterexamples | the proven unsound narrowings stay nullable against the real engine | `TestNullabilitySoundnessAdversarial` | `TestMySQLNullabilitySoundnessAdversarial` | `TestSQLiteNullabilitySoundnessAdversarial` |
+| Generated-module full loop | real CLI generates cold, the generated package is compiled as its own module and run against the live database, scanning NULL-heavy seed data into generated structs | `TestGeneratedModuleEndToEnd` | `TestMySQLCLIAndGeneratedModule` | `TestSQLiteCLIAndGeneratedModule` |
+| Cold → warm offline round trip | after the cache is committed, `check`/`generate` succeed with an unreachable DSN | `TestCLIColdWarmRoundTrip` | inside the full loop | inside the full loop |
+| SQL-shape conformance | the exact SQL text and binds each generated call hands the driver, through the public API | `TestSQLShapesPostgres` | `TestSQLShapesMySQL` | `TestSQLShapesSQLite` |
+| Policy weaving | the woven query hides the other tenant; leak harness liveness + seeds | `TestPolicyWeavingEndToEnd`, `FuzzPolicyWeaveNoLeak_Postgres` | `TestMySQLPolicyWeaveCLI`, `FuzzPolicyWeaveNoLeak_MySQL` | `TestSQLitePolicyWeaveCLI`, `FuzzPolicyWeaveNoLeak_SQLite` |
+
+Cross-cutting suites with the same standing: the oracle ground truth
+(`TestMySQLCorpusGroundTruth`, `TestNativeDifferential` — the ONLY
+check that server-derived bytes equal the committed cache), the seams
+two consumers share (`TestLSPWarmCacheAgreesWithPipeline`,
+`TestLintParity*`, `TestGoSourceInputEquivalence`,
+`TestMultiTargetGeneratedModules`), and the documented driver/planner
+behaviors (`TestQueryTimeout*`, `TestPerfRewrites*`, `TestCLIServerDrift`,
+`TestCLIDestructiveResetGuard`).
+
+### 5.2 When E2E MUST be extended
+
+- **A new construct, annotation, or generated API** goes into the
+  generated-module loop and the SQL-shape case table of every dialect
+  that supports it. A dialect that does not support it asserts the
+  refusal (its `SQLETCHnnn`) instead — "unsupported" is behavior too.
+- **A change to what is accepted or how shapes are enumerated** gets a
+  fixture template that uses it: the shape and verdict properties only
+  quantify over the fixtures they are given.
+- **Nullability / provenance: counterexample first.** A suspected
+  unsound narrowing is first written as an adversarial devdb case that
+  fails against the current code (the real engine returning NULL where
+  sqletch said non-null), then fixed. The case stays forever.
+- **Oracle backends or cache bytes**: a corpus case
+  (`internal/corpus/testdata/<case>/`), re-derived against the server.
+- **A claim about engine or driver behavior** in the manual or a
+  diagnostic hint (index use, error shape on timeout, EXPLAIN output)
+  is pinned by a devdb test; changing the claim means changing that
+  test in the same PR.
+- **A runtime or codegen change visible to callers** runs through a
+  compiled generated module, not only through `runtime` unit tests.
+
+### 5.3 Rules for writing E2E tests
+
+- **Through the public surface.** Drive the real CLI pipeline and
+  compile the generated package as a separate module; do not reach
+  into internals. E2E exists to catch the wiring that unit tests
+  mock away.
+- **Adversarial seed data.** NULL in every nullable column, rows that
+  make each outer join null-extend, queries with empty results,
+  multibyte text, more than one tenant. Seeding only happy rows proves
+  nothing about nullability or scoping.
+- **Engine as oracle.** Assert what the database actually returned or
+  accepted, not what sqletch predicted it would.
+- **Disposable databases only.** Tests own their schema. With a
+  user-supplied `SQLETCH_TEST_DSN` / `SQLETCH_TEST_MYSQL_DSN`, schema
+  reset requires `AllowDestructive`; never point these at a database you
+  care about. Tests that share one server across processes isolate
+  themselves (own schema or own tables), as the leak fuzz does.
+- **Pinned engines.** Tests pin the server version they ran against
+  (`ServerVersion: "16"` PostgreSQL, `"8.4"` MySQL, `"3"` for the SQLite
+  embedded in the ncruces module); a behavior that depends on a finer
+  version says so and pins it.
+- **No skips.** Database-dependent tests sit behind the `devdb` build
+  tag, so plain `go test ./...` never needs a database; under the tag, an
+  unavailable database fails the run instead of quietly passing it. The
+  one sanctioned exception is an opt-in regeneration tool that is not a
+  test of behavior (`TestCaptureAdversarialCase`, run only with
+  `SQLETCH_UPDATE_CORPUS=1`).
+- **Byte identity where pinned.** Cold vs warm runs, `.sql` vs
+  `//sqletch:query` input, server vs native oracle backend: the outputs
+  are compared byte for byte, never "equivalently".
+
+### 5.4 Where it runs
+
+The `ci.yml` e2e job runs `internal/e2e`, `internal/corpus`, and the
+`internal/cli` policy-leak harness under `-tags devdb` on every PR;
+`fuzz-nightly.yml` fuzzes the server-dialect leak targets. Locally,
+`go test -tags devdb ./...` (part of the done gates, §8) needs Docker or
+the DSN environment variables.
+
+## 6. Coverage
 
 Coverage is a map for finding untested behavior, not a target. There is
 no percentage gate; there is a review obligation.
@@ -126,9 +222,9 @@ failures, defensive bounds checks on values the parser guarantees,
 (`docs/spec.md` §"Threat model / trust boundary": self-authored config
 and template DoS is a known limitation).
 
-## 6. Fuzzing
+## 7. Fuzzing
 
-### 6.1 What must have a fuzz target
+### 7.1 What must have a fuzz target
 
 1. Every scanner/parser of authored text (`FuzzScan`, `FuzzPattern`).
 2. Every differential invariant between two implementations
@@ -143,7 +239,7 @@ and template DoS is a known limitation).
 Inputs crossing the trust boundary (LSP inbound frames, committed cache
 files) SHOULD have robustness targets.
 
-### 6.2 What a target must contain
+### 7.2 What a target must contain
 
 - **A property beyond "no panic"**, stated in the target's doc comment.
 - **Structure-aware generation when raw bytes rarely reach the logic.**
@@ -161,7 +257,7 @@ files) SHOULD have robustness targets.
   one known bug of its class and record the time to detection in the
   PR. A target that cannot find a known bug is not yet a target.
 
-### 6.3 Where fuzzing runs
+### 7.3 Where fuzzing runs
 
 | Lane | Targets | Budget | Corpus |
 |---|---|---|---|
@@ -172,7 +268,7 @@ files) SHOULD have robustness targets.
 A nightly crasher fails the run and is uploaded as an artifact; it is
 committed (see §2) together with the fix.
 
-## 7. Gates before a change is "done"
+## 8. Gates before a change is "done"
 
 All of these, with zero findings:
 
@@ -188,7 +284,7 @@ plus, when the change touches a fuzzed package, its target for at least
 the CI duration locally. A task is never reported complete with a
 failing, skipped or missing test.
 
-## 8. Reviewer checklist
+## 9. Reviewer checklist
 
 - [ ] Each new test was shown red first (bug fixes: against the unfixed code).
 - [ ] Rejections asserted to code and span; accepted neighbors present.
@@ -196,6 +292,7 @@ failing, skipped or missing test.
 - [ ] Mutation checks listed for soundness-relevant tests; survivors explained.
 - [ ] Oracles are independent of the code under test.
 - [ ] Dialects whose frontends differ are each covered.
+- [ ] The devdb standing suites are green, and E2E was extended where §5.2 requires (construct → generated-module loop + SQL-shape table per dialect; nullability → counterexample first).
 - [ ] Zero-execution branches in soundness-critical packages are tested or justified.
 - [ ] New generators have a liveness test; new fuzz targets a demonstrated kill.
 - [ ] Crashers committed; design docs updated where the tests encode a decision.
