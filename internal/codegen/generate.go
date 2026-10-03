@@ -1222,7 +1222,9 @@ func (g *queryGen) writeFunc(w *strings.Builder, paramsName, rowName string,
 // call; the deferred cancel keeps the deadline over row iteration and
 // scanning. A caller's shorter deadline still wins, by context
 // semantics. Nothing is emitted when there is no deadline, so such
-// methods stay byte-identical to pre-design-23 output.
+// methods stay byte-identical to pre-design-23 output. The
+// Explain<Query> sibling (design 22) emits the same deadline right
+// before its hand-off to the explain helper.
 func (g *queryGen) writeTimeout(w *strings.Builder) {
 	d, source := g.defTimeout, fmt.Sprintf("query_timeout.default (%s)", g.defTimeout)
 	if td := g.in.Q.Timeout; td != nil {
@@ -1292,6 +1294,10 @@ func (g *queryGen) writeExplainFunc(w *strings.Builder, paramsName string, choos
 		}
 		fmt.Fprintf(w, "\tkey.Trees = []string{%s.Encode()}\n", treeField)
 	}
+	// The query method's deadline (design 23) bounds its EXPLAIN too:
+	// with opts.Analyze the statement really runs, and even a plain
+	// EXPLAIN is a round trip the caller budgeted for under this query.
+	g.writeTimeout(w)
 	fmt.Fprintf(w, "\treturn q.explain(ctx, %q, key.String(), opts, sqlText, args)\n}\n", q.Name)
 }
 

@@ -147,6 +147,22 @@ diagnostic call) is irrelevant.
 Rollback does not undo non-transactional effects (sequence advances,
 MyISAM tables, external side effects of functions). Documented.
 
+### 6.1 The query's deadline applies (design 23)
+
+`Explain<Query>` emits the same `-- @timeout` / `query_timeout.default`
+deadline as the query method (`queryGen.writeTimeout`, one writer),
+after the preamble and the `key.Trees` assignment and right before the
+`q.explain` hand-off — so it bounds the transaction begin, the EXPLAIN
+round trip and the row scan. With `Analyze` the statement really runs:
+an ANALYZE must not be the one way to execute a deadline-bound query
+without its deadline. It applies to plain EXPLAIN as well, for one
+rule rather than a mode-dependent one. `@timeout none` (or no
+effective deadline) emits nothing, as for the query method (design 23
+D6). Expiry surfaces exactly as design 23 §5 tabulates per driver; the
+rollback runs under `context.WithoutCancel`, so an expired deadline
+still rolls back, and the expiry error (not a rollback error) is what
+the caller sees.
+
 ## 7. Observability
 
 `Explain<Query>` calls neither the `OnQuery` hook nor the observer's
@@ -179,4 +195,7 @@ so a cache observer sees its compose hit/miss like any lookup.
   outputs; PG ANALYZE of an `UPDATE` leaves the row unchanged, from a
   Conn and from inside a caller's Tx (which stays usable); MySQL
   ANALYZE from `*sql.DB` and `*sql.Tx`; SQLite ANALYZE →
-  `ErrExplainUnsupported`.
+  `ErrExplainUnsupported`. The deadline (§6.1) is pinned in codegen
+  (`TestGenerate_ExplainTimeout`) and against real engines in
+  `TestQueryTimeout{Postgres,MySQL}` (an ANALYZE of the slow statement
+  expires with the driver's documented error).

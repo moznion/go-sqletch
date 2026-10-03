@@ -59,5 +59,8 @@ func (q *Queries) ExplainAllAuditActions(ctx context.Context, arg AllAuditAction
 	var key runtime.ShapeKey
 	sqlText, argIdx := q.cache.Get("AllAuditActions", allAuditActionsFrags, key)
 	args := runtime.BuildArgs(argIdx, []any{})
+	// Deadline from `-- @timeout 30s` (design 23).
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	return q.explain(ctx, "AllAuditActions", key.String(), opts, sqlText, args)
 }
