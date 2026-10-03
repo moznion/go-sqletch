@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.0.6](https://github.com/moznion/go-sqletch/compare/v0.0.5...v0.0.6) - 2026-10-03
+
+- e2e: per-dialect SQL-shape conformance through generated code by @moznion in https://github.com/moznion/go-sqletch/pull/151
+- Add per-query timeouts: -- @timeout and query_timeout.default (doc 23) by @moznion in https://github.com/moznion/go-sqletch/pull/153
+- Opt-in performance lints (SQLETCHL001–L006) with per-query @nolint (doc 24) by @moznion in https://github.com/moznion/go-sqletch/pull/154
+- codegen/runtime: generated Explain<Query> methods (design 22) by @moznion in https://github.com/moznion/go-sqletch/pull/155
+- codegen: reserve `cancel` in argIdent (@timeout collision) by @moznion in https://github.com/moznion/go-sqletch/pull/156
+- examples: pin server_version to the patch release (16.15 / 8.4.11) by @moznion in https://github.com/moznion/go-sqletch/pull/157
+- test: pin zero-execution soundness branches; fix default-order cache misses by @moznion in https://github.com/moznion/go-sqletch/pull/158
+- test: semantic tenant-leak fuzz for policy weaving (SQLite/PostgreSQL/MySQL) by @moznion in https://github.com/moznion/go-sqletch/pull/159
+- ci: nightly fuzzing with a persisted corpus by @moznion in https://github.com/moznion/go-sqletch/pull/160
+- docs: normative testing policy by @moznion in https://github.com/moznion/go-sqletch/pull/161
+- docs: normative real-database E2E section in the testing policy by @moznion in https://github.com/moznion/go-sqletch/pull/162
+
 ## [v0.0.5](https://github.com/moznion/go-sqletch/compare/v0.0.4...v0.0.5) - 2026-09-29
 
 - build(deps): bump github.com/ncruces/go-sqlite3 from 0.35.4 to 0.35.5 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/144
