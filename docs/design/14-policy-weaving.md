@@ -638,6 +638,21 @@ rejected inputs asserted down to their `SQLETCHnnn` code.
 - **Conformance**: `TestComposeConformance` must pass unchanged on woven
   templates; that it needs no modification is the evidence for §2's
   claim that the runtime is untouched.
+- **Semantic leak fuzz** (added 2026-10 after the audit series, whose
+  silent leaks #118–#124 all came from the hand-written clause scanners
+  that Enforce shares): `FuzzPolicyWeaveNoLeak_{SQLite,Postgres,MySQL}`
+  in `internal/cli` generate templates structure-aware from the fuzz
+  bytes, run them through `scanChecks` + `Enforce` exactly as the
+  pipeline does, and then EXECUTE every runtime shape of the woven query
+  against the two-tenant dataset above with tid = 1. The oracle is the
+  engine, never a re-reading of the text: a tenant-2 marker in a
+  projected `secret` (or a changed tenant-2 row after rolled-back DML) is
+  a leak, and Weave accepting what Enforce rejects is a failure too.
+  Re-injecting the historic bugs (dropped OR flag, the audit-16 bare
+  keyword column, a skipped ON conjunct, the removed wrong-join refusal)
+  is caught within seconds; `TestPolicyWeaveNoLeak_*Live` keeps the
+  generator from drifting into vacuity. SQLite runs in the CI fuzz smoke;
+  the server dialects need devdb.
 
 ## 9. Relationship to other mechanisms
 
