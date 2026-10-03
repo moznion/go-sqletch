@@ -155,6 +155,8 @@ CREATE INDEX p_f ON p (f);
 		{name: "int8_numeric", template: "id = :v::numeric", planSQL: "id = $1::numeric", flagged: true},
 		{name: "int8_float8", template: "id = :v::float8", planSQL: "id = $1::float8", flagged: true},
 		{name: "int4_numeric", template: "n < :v::numeric", planSQL: "n < $1::numeric", flagged: true},
+		// float4 too: the planner casts the column to double precision.
+		{name: "int4_float4", template: "n = :v::float4", planSQL: "n = $1::float4", flagged: true},
 		{name: "int8_inferred", template: "id = :v", planSQL: "id = $1::int8"},
 		{name: "int4_int8", template: "n = :v::int8", planSQL: "n = $1::int8"},
 		{name: "date_timestamp", template: "born < :v::timestamp", planSQL: "born < $1::timestamp"},

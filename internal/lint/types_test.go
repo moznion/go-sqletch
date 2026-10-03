@@ -2,6 +2,7 @@ package lint
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/moznion/go-sqletch/internal/ast"
@@ -150,6 +151,20 @@ func TestPerfTypes_Postgres(t *testing.T) {
 // know, so nothing is flagged (the resolver would otherwise hand back
 // the base table's types). A CTE with another name leaves base-table
 // columns judged as usual.
+// PostgreSQL casts an integer column to double precision for a float4
+// parameter too (it picks float84eq, (float8, float4)) — measured on
+// PG 16 and pinned by the devdb int4_float4 row — so the message names
+// double precision for both float widths.
+func TestPerfTypes_PostgresFloatMessage(t *testing.T) {
+	for _, p := range []dialect.TypeRef{{OID: 700, Name: "float4"}, {OID: pgFloat8, Name: "float8"}} {
+		src := "-- name: Q :one\nSELECT u.email FROM users AS u WHERE u.age = :p\n"
+		diags := perfTypes(t, "postgres", src, map[string]dialect.TypeRef{"p": p})
+		if len(diags) != 1 || !strings.Contains(diags[0].Message, "to double precision") {
+			t.Errorf("%s: got %+v", p.Name, diags)
+		}
+	}
+}
+
 func TestPerfTypes_CTEShadowsTable(t *testing.T) {
 	numeric := dialect.TypeRef{OID: pgNumeric, Name: "numeric"}
 	cases := []struct {

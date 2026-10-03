@@ -232,6 +232,9 @@ SELECT id FROM users WHERE lower(email) = :email;
   message spelling the sqletch form.
 - All-or-nothing: a directive naming any non-performance or unknown
   code records **none** of its codes.
+- A code repeated within one directive is recorded once (one span, so
+  one SQLETCHL006 at most); two directives naming the same code are two
+  entries, each judged on its own line.
 - Scope: the whole query (every rendering). It stays in the skeleton
   verbatim like every directive (so adding one re-keys that query's
   oracle entries — the rendered SQL changed).

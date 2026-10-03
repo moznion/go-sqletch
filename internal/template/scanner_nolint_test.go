@@ -38,6 +38,16 @@ func TestScan_NoLint(t *testing.T) {
 	}
 }
 
+// A code repeated within one directive is recorded once (one span, so
+// a second entry could only duplicate every verdict about it).
+func TestScan_NoLintDuplicateCodeRecordedOnce(t *testing.T) {
+	f := scanClean(t, "-- name: Q :many\n-- @nolint SQLETCHL001, SQLETCHL003, SQLETCHL001\nSELECT id FROM users\n")
+	got := f.Queries[0].NoLints
+	if len(got) != 2 || got[0].Code != "SQLETCHL001" || got[1].Code != "SQLETCHL003" {
+		t.Fatalf("nolints = %+v", got)
+	}
+}
+
 // The directive follows the shared attachment discipline: in the gap
 // before the next header it belongs to the FOLLOWING query.
 func TestScan_NoLintAttachesToFollowingQuery(t *testing.T) {

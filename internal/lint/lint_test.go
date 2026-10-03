@@ -573,6 +573,20 @@ SELECT id FROM users LIMIT 10
 	assertWarnings(t, diags)
 }
 
+// One stale code is one SQLETCHL006 per directive that names it: a
+// repeat inside a directive is not a second report, while two
+// directives naming it are two stale lines to delete.
+func TestPerf_NoLintUnusedReportedOncePerDirective(t *testing.T) {
+	src := "-- name: Q :many\n-- @nolint SQLETCHL002, SQLETCHL002\nSELECT id FROM users LIMIT 10\n"
+	if got := spanTexts(src, perfLint(t, "postgres", src), diagnostics.CodePerfNoLintUnused); len(got) != 1 {
+		t.Errorf("repeat in one directive: got %q", got)
+	}
+	src = "-- name: Q :many\n-- @nolint SQLETCHL002\n-- @nolint SQLETCHL002 (again)\nSELECT id FROM users LIMIT 10\n"
+	if got := spanTexts(src, perfLint(t, "postgres", src), diagnostics.CodePerfNoLintUnused); len(got) != 2 || got[0] == got[1] {
+		t.Errorf("two directives: got %q", got)
+	}
+}
+
 // SQLETCHL005 needs the catalog: the catalog-free pass never calls an
 // @nolint of it unused (that verdict belongs to CheckTypes).
 func TestPerf_NoLintOfTypeLintNotJudgedOffline(t *testing.T) {

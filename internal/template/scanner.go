@@ -523,7 +523,11 @@ func (fs *fileScan) applyNoLint(q *QueryTemplate, tok dialect.Token) {
 				WithHint("%s", hint))
 			return
 		}
-		codes = append(codes, c)
+		if !slices.Contains(codes, c) {
+			// A repeat shares the directive's span, so it could only
+			// duplicate every verdict about the code.
+			codes = append(codes, c)
+		}
 	}
 	reason := strings.TrimSpace(m[2])
 	for _, c := range codes {
