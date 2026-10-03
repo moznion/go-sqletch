@@ -37,9 +37,16 @@ go test ./internal/codegen  -run '^$' -fuzz=FuzzComposeConformance -fuzztime=15s
 go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=15s
 go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=15s
 go test ./internal/pathpat -run '^$' -fuzz=FuzzPattern -fuzztime=15s
+go test ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_SQLite -fuzztime=15s
+go test -tags devdb ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_Postgres -fuzztime=60s -parallel=4
+go test -tags devdb ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_MySQL -fuzztime=60s -parallel=4
 ```
 
-All five fuzz targets run in CI for 30s. A crasher is written to the
+The six plain fuzz targets run in CI for 30s. The policy-weave leak
+targets judge the woven SQL by executing it (a tenant-2 marker in a
+tid=1 result is a leak), never by re-reading it with the weaver's own
+scanners; the Postgres/MySQL variants need Docker or
+SQLETCH_TEST_DSN / SQLETCH_TEST_MYSQL_DSN. A crasher is written to the
 package's `testdata/fuzz/<target>/`; commit it — that file *is* the
 regression test.
 

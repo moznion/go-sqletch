@@ -96,6 +96,8 @@ jobs:
         run: go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=30s
       - name: Query-pattern robustness fuzz (30s)
         run: go test ./internal/pathpat -run '^$' -fuzz=FuzzPattern -fuzztime=30s
+      - name: Policy-weave tenant-leak fuzz, SQLite engine (30s)
+        run: go test ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_SQLite -fuzztime=30s
       # A crasher is written to testdata/fuzz/<target>/ inside the runner.
       # Without this the input is discarded with the runner and the finding
       # is unreproducible; commit the uploaded file to pin the regression.
@@ -110,6 +112,7 @@ jobs:
             internal/dialect/postgres/testdata/fuzz/
             internal/dialect/mysql/testdata/fuzz/
             internal/pathpat/testdata/fuzz/
+            internal/cli/testdata/fuzz/
           if-no-files-found: ignore
 
   grammars:
