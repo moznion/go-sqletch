@@ -46,6 +46,10 @@ jobs:
       # would pass CI silently.
       - name: Oracle ground-truth corpus (server re-derivation, -tags devdb)
         run: go test -tags devdb -v ./internal/corpus/
+      # The PostgreSQL/MySQL policy-weave leak harness: its liveness
+      # guard and committed seed inputs (fuzzing itself is nightly).
+      - name: Policy-weave leak harness on the server dialects (-tags devdb)
+        run: go test -tags devdb -run 'PolicyWeaveNoLeak' -v ./internal/cli/
       - name: Offline check against the committed example caches
         run: |
           for d in postgres mysql sqlite; do
