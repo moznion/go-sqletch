@@ -65,6 +65,7 @@ func TestArgIdent_ReservedLocals(t *testing.T) {
 		"n":          "nArg",
 		"rerr":       "rerrArg",
 		"tag":        "tagArg",
+		"cancel":     "cancelArg", // @timeout's context.WithTimeout cancel
 		"row":        "rowArg",
 		"rows":       "rowsArg",
 		"items":      "itemsArg",

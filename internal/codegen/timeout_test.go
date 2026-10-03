@@ -173,6 +173,73 @@ t.tenant_id = :scope_tenant_id
 	}
 }
 
+// The deadline declares `cancel` in the method's outermost scope, so a
+// required argument spelled `cancel` must be renamed — otherwise
+// `ctx, cancel := …` declares no new variable and the consumer's module
+// fails to compile. Both kinds of required argument are pinned, each
+// under one of the two deadline sources (directive, config default).
+func TestGenerate_TimeoutCancelArgCompiles(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		policy   string // non-empty: :cancel is a woven policy parameter
+		def      time.Duration
+		params   map[string]dialect.TypeRef
+		wantArg  string
+		wantWrap string
+	}{
+		{
+			name: "filter-tree under @timeout",
+			src: `-- name: Pick :many
+-- @timeout 3s
+SELECT t.id FROM t
+WHERE TRUE
+  AND @filter-tree!(cancel)
+@predicate(tenant)
+t.tenant_id = :scope_tenant_id
+@end;
+`,
+			params:   map[string]dialect.TypeRef{"scope_tenant_id": {OID: 20}},
+			wantArg:  "cancelArg runtime.Tree",
+			wantWrap: timeoutWrap + "3*time.Second)\n",
+		},
+		{
+			name: "policy parameter under query_timeout.default",
+			src: `-- name: Pick :many
+SELECT t.id FROM t WHERE t.tenant_id = :cancel;
+`,
+			policy:   "tenant_scope",
+			def:      2 * time.Second,
+			params:   map[string]dialect.TypeRef{"cancel": {OID: 20}},
+			wantArg:  "cancelArg Cancel",
+			wantWrap: timeoutWrap + "2*time.Second)\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := scanOne(t, tc.src)
+			if tc.policy != "" {
+				// Stand in for the weaver, as TestGenerate_PolicyParamNamedTypes does.
+				q.Params["cancel"].Policy = tc.policy
+			}
+			files, diags := Generate(Options{Package: "gen", DefaultTimeout: tc.def}, postgres.TypeMap{}, []QueryInput{{
+				Q: q, Frags: BuildFrags(postgres.Profile{}, q),
+				Columns:    []dialect.ColumnDesc{{Name: "id", Type: dialect.TypeRef{OID: 20}}},
+				Nullable:   []bool{false},
+				ParamTypes: tc.params,
+			}})
+			if len(diags) != 0 {
+				t.Fatalf("generate: %+v", diags)
+			}
+			src := string(files["pick.sql.gen.go"])
+			if !strings.Contains(src, tc.wantArg) || !strings.Contains(src, tc.wantWrap) {
+				t.Fatalf("expected %q and the deadline\n----\n%s", tc.wantArg, src)
+			}
+			buildGenerated(t, map[string]map[string][]byte{"gen": files})
+		})
+	}
+}
+
 // The literal is the largest unit that divides the duration exactly,
 // so it reads like the directive and is a pure function of the value.
 func TestDurationLiteral(t *testing.T) {
