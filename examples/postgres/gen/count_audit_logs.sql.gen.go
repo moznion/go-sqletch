@@ -42,3 +42,13 @@ func (q *Queries) CountAuditLogs(ctx context.Context, tenantID TenantID, arg Cou
 	q.observeExec(ctx, "CountAuditLogs", key, execStart, 1, nil)
 	return i, nil
 }
+
+// ExplainCountAuditLogs EXPLAINs the statement CountAuditLogs would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainCountAuditLogs(ctx context.Context, tenantID TenantID, arg CountAuditLogsParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, argIdx := q.cache.Get("CountAuditLogs", countAuditLogsFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{int64(tenantID)})
+	return q.explain(ctx, "CountAuditLogs", key.String(), opts, sqlText, args)
+}

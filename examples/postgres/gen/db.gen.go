@@ -4,6 +4,8 @@ package gen
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +113,54 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 		key.Trees = []string{t.Encode()}
 		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
+}
+
+// explain sends the EXPLAIN form of a composed statement (design doc
+// 22). Analyze always runs inside a transaction — a savepoint when the
+// DBTX is itself a pgx.Tx — that is rolled back, whatever the
+// statement; a DBTX that cannot begin one is refused.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (plan runtime.Plan, err error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainPostgres, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	db := q.db
+	if opts.Analyze {
+		b, ok := q.db.(interface {
+			Begin(context.Context) (pgx.Tx, error)
+		})
+		if !ok {
+			return runtime.Plan{}, fmt.Errorf("%s: %w", query, runtime.ErrExplainNoTx)
+		}
+		var tx pgx.Tx
+		if tx, err = b.Begin(ctx); err != nil {
+			return runtime.Plan{}, err
+		}
+		defer func() {
+			if rerr := tx.Rollback(context.WithoutCancel(ctx)); rerr != nil && err == nil {
+				plan, err = runtime.Plan{}, rerr
+			}
+		}()
+		db = tx
+	}
+	rows, err := db.Query(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err = rows.Scan(&line); err != nil {
+			return runtime.Plan{}, err
+		}
+		lines = append(lines, line)
+	}
+	if err = rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Analyzed: opts.Analyze, Output: strings.Join(lines, "\n")}, nil
 }
 
 // ShapeSpace describes each query's reachable shape space, computed

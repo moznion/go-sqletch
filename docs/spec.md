@@ -1526,6 +1526,15 @@ codebase and one transaction:
     the two. The scan path still hands the driver plain `*T`
     destinations and converts with `optional.FromNillable`, and every
     bind is a `*T` (nil for `NULL`), so driver behavior is unchanged.
+-   Every query method `Foo` has an `ExplainFoo` sibling (design 22)
+    taking the same arguments plus `runtime.ExplainOptions`. It
+    composes the statement exactly as `Foo` would — the same generated
+    preamble, so the SQL and binds are byte-identical — and sends it
+    behind a constant EXPLAIN prefix chosen from a closed vocabulary
+    (text/JSON, optional `ANALYZE`); no caller text reaches the SQL.
+    `ANALYZE` always runs inside a transaction or savepoint that is
+    rolled back, and is refused on a `DBTX` that can open neither.
+    The `Explain` methods are not part of `Querier`.
 -   Designed to run under `//go:generate sqletch generate`.
 
 ------------------------------------------------------------------------

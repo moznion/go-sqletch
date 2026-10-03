@@ -5,6 +5,9 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -123,6 +126,78 @@ func (q *Queries) observeExecTree(ctx context.Context, query string, key runtime
 		key.Trees = []string{t.Encode()}
 		(*o).ObserveExec(ctx, query, key.String(), time.Since(start), rows, err)
 	}
+}
+
+// explain sends the EXPLAIN form of a composed statement (design doc
+// 22). Analyze always runs inside a transaction (a savepoint inside a
+// caller's *sql.Tx) that is rolled back, whatever the statement; a DBTX
+// that can open neither is refused.
+func (q *Queries) explain(ctx context.Context, query, shapeKey string, opts runtime.ExplainOptions, sqlText string, args []any) (plan runtime.Plan, err error) {
+	stmt, err := runtime.ExplainStatement(runtime.ExplainMySQL, opts, sqlText)
+	if err != nil {
+		return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+	}
+	db := q.db
+	if opts.Analyze {
+		var done func() error
+		if db, done, err = q.explainTx(ctx); err != nil {
+			return runtime.Plan{}, fmt.Errorf("%s: %w", query, err)
+		}
+		defer func() {
+			// ErrTxDone: database/sql already rolled back (ctx ended);
+			// sqletch never commits, so the effects are gone either way.
+			if rerr := done(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) && err == nil {
+				plan, err = runtime.Plan{}, rerr
+			}
+		}()
+	}
+	rows, err := db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err = rows.Scan(&line); err != nil {
+			return runtime.Plan{}, err
+		}
+		lines = append(lines, line)
+	}
+	if err = rows.Err(); err != nil {
+		return runtime.Plan{}, err
+	}
+	return runtime.Plan{Query: query, ShapeKey: shapeKey, SQL: sqlText, Statement: stmt,
+		Format: opts.Format, Analyzed: opts.Analyze, Output: strings.Join(lines, "\n")}, nil
+}
+
+// explainTx opens the rolled-back scope an ANALYZE runs in: a
+// transaction on a *sql.DB or *sql.Conn, a savepoint inside a caller's
+// *sql.Tx. done rolls it back.
+func (q *Queries) explainTx(ctx context.Context) (DBTX, func() error, error) {
+	switch db := q.db.(type) {
+	case *sql.Tx:
+		if _, err := db.ExecContext(ctx, "SAVEPOINT sqletch_explain"); err != nil {
+			return nil, nil, err
+		}
+		return db, func() error {
+			c := context.WithoutCancel(ctx)
+			if _, err := db.ExecContext(c, "ROLLBACK TO SAVEPOINT sqletch_explain"); err != nil {
+				return err
+			}
+			_, err := db.ExecContext(c, "RELEASE SAVEPOINT sqletch_explain")
+			return err
+		}, nil
+	case interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	}:
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return tx, tx.Rollback, nil
+	}
+	return nil, nil, runtime.ErrExplainNoTx
 }
 
 // ShapeSpace describes each query's reachable shape space, computed

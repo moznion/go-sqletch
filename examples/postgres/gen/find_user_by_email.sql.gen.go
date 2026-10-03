@@ -51,3 +51,13 @@ func (q *Queries) FindUserByEmail(ctx context.Context, arg FindUserByEmailParams
 	q.observeExec(ctx, "FindUserByEmail", key, execStart, 1, nil)
 	return optional.Some(i), nil
 }
+
+// ExplainFindUserByEmail EXPLAINs the statement FindUserByEmail would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainFindUserByEmail(ctx context.Context, arg FindUserByEmailParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, argIdx := q.cache.Get("FindUserByEmail", findUserByEmailFrags, key)
+	args := runtime.BuildArgs(argIdx, []any{arg.Email})
+	return q.explain(ctx, "FindUserByEmail", key.String(), opts, sqlText, args)
+}

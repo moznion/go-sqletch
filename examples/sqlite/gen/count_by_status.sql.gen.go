@@ -53,3 +53,16 @@ func (q *Queries) CountByStatus(ctx context.Context, arg CountByStatusParams) ([
 	q.observeExec(ctx, "CountByStatus", key, execStart, int64(len(items)), rows.Err())
 	return items, rows.Err()
 }
+
+// ExplainCountByStatus EXPLAINs the statement CountByStatus would send for these
+// arguments instead of executing it (design doc 22); with
+// opts.Analyze it runs inside a transaction that is rolled back.
+func (q *Queries) ExplainCountByStatus(ctx context.Context, arg CountByStatusParams, opts runtime.ExplainOptions) (runtime.Plan, error) {
+	var key runtime.ShapeKey
+	sqlText, binds, err := q.cache.GetBindsStyle(runtime.StyleQuestion, "CountByStatus", countByStatusFrags, key)
+	if err != nil {
+		return runtime.Plan{}, err
+	}
+	args := runtime.ResolveArgs(binds, []any{arg.TenantID}, nil)
+	return q.explain(ctx, "CountByStatus", key.String(), opts, sqlText, args)
+}
