@@ -107,7 +107,9 @@ bullets below are its summary.
 - **Test-first; tests are the spec.** Every layer gets thorough tests;
   rejected inputs are asserted down to their `SQLETCHnnn` code. Never
   report a task complete with failing or missing tests.
-- **Real-DB E2E is first-class.** The devdb suite must stay green: the
+- **Real-DB E2E is first-class** (normative: `docs/development/testing.md`
+  §5 — standing suites per dialect, when E2E must be extended,
+  counterexample-first for nullability). The devdb suite must stay green: the
   property test (every enumerable shape PREPAREs and EXPLAINs), the
   generated-module run (NULL-heavy seed data scanning into generated
   structs), and the CLI cold→warm offline round-trip. Extend it when
