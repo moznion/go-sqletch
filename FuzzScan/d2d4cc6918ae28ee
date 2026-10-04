@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n:a0:a1:a2:a7:a8:a")

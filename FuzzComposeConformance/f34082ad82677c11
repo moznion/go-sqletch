@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n; 0 0 0 0 0 0 0 0 '' @if-present0 0 0 0 0 @end 0 0 0 0 0 0 0 0 0 0 0 @if-present0 0 0 0 0 @end @if-present0 0 0 0 0 @end 0 0 0 0 ")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT id FULL FROM users AS A WHERE(SELECT NULL FROM DUAL WHERE FALSE)")

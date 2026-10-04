@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n@in(0@in(0@in(")

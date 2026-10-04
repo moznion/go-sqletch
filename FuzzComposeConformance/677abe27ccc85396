@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n@when(A=00000000A@when(A=00000000")

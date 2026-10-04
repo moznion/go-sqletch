@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:ChAr(\xf1\x93\xed\x8d웊\xb1\xed\x81䜳Ɗ0Ι\xf0\xa80Ӧ0Ѝȴ\xe9\x960\xe1\xad0㰏)\nSELECT('')x")

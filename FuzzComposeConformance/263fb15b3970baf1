@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name: SBrc9XsY8s :many\nWHERE 7RE\n#@if-present(sXus)\n$ AND u.!\n@endif\n\n@if-present(eml_prefix)\n 9l_Yr'%'\n@endif%ORDER \x7f%\nORDER.BYlt+ORDER \nLIMIT :li')t!Y")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("dELETE FROM A ORDER BY 0.")
