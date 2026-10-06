@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n@if-present(A 0@if-present(A#@if-present(A!????????(@choose(A)\"0000000000000")

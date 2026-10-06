@@ -1,0 +1,2 @@
+go test fuzz v1
+string("x*00/*0/x*/x*/x*/x*/x*/x*/*0/x*/x*/x*/x*/x*/x*/x*/x*/x*/x*/x*/x*00/*0/x*/x*/x*/x*/x*/x*/x*/*0/x*")

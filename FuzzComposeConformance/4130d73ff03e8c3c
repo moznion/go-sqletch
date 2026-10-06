@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\nSELECT FROM WHERE SELECT SELECT FROM WHERE FROM WHERE")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\na𔍭\U0001bd1c\U00014d1d")
