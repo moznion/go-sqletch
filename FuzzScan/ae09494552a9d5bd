@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n:\U0009d953\U0009d953")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n-- @timeout \x1f\x0e\x0e\x0e\x0e\x0e\x1f\x1f\x1f\x1f\x1f")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT id FROM users#\rս:~:ץ a a a a a a ޠ a a a a a a a a Ĵ:A a a a`ʎϱиƄˁʘܙ\u0081щڶȋƧ`a a~a a:A a a a a")

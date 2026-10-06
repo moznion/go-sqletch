@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column total:int\nSELECT(0)total HAVING 0")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a:0 ܦ 0 0 0 ̢ؔ()0 ̜݁ رŝ ڗ ݉ 0 0 ѽ \u07fbԹ ƥޛ ӽܡ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\nSELECT('')")

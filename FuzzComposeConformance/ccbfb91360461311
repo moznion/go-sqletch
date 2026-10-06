@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nFROM@if-present(a)@endif@if-present(b)@endif@choose(a)@case(a)ORDER BY@default@end0e0")
