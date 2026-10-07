@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:ZZ1 :many\nF&OM@if-present(Y\xff\xff\x80)@endifZbB*89XZXdf@if-present(k1)\n\x0fi82I$")
