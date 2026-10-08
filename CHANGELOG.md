@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.0.7](https://github.com/moznion/go-sqletch/compare/v0.0.6...v0.0.7) - 2026-10-08
+
+- README: list shipped policies, native MySQL oracle, and runtime features by @moznion in https://github.com/moznion/go-sqletch/pull/163
+- cli: make TestScanSourceGoScalesLinearly deterministic (allocated bytes, not wall-clock) by @moznion in https://github.com/moznion/go-sqletch/pull/165
+- build(deps): bump Songmu/tagpr from 1.21.0 to 1.21.1 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/166
+- build(deps): bump the go-modules group across 2 directories with 6 updates by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/167
+
 ## [v0.0.6](https://github.com/moznion/go-sqletch/compare/v0.0.5...v0.0.6) - 2026-10-03
 
 - e2e: per-dialect SQL-shape conformance through generated code by @moznion in https://github.com/moznion/go-sqletch/pull/151
