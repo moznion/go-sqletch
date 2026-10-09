@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column total:int\nSELECT Count(0)total GROUP BY 0")

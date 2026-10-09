@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nFROM@choose(a)@case(a)ORDER BY @default@end?")

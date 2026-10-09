@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a:\x93\xea\xa5\n-- @column x:ChAr\nSELECT(0)x")
