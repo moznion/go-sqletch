@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\nINSERT(@if-present(A)@endif@if-present(A)0@endif@if-present(A)")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :one\n@if-present(A,B,A,C,A,A,A,X,A,A,A,A,A,A)")

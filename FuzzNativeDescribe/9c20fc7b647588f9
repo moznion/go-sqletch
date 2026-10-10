@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column total:int\nSELECt (0)total HAVING toTAl%A")

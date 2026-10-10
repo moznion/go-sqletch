@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:B :many\n-- name:C :many\n-- name:A :many")
