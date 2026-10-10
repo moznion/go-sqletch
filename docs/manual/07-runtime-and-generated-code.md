@@ -154,7 +154,9 @@ null-extension, and deliberately **never narrows based on optional
 fragments** — a guarded `INNER JOIN` does not make the FK non-null,
 because other shapes lack the join. When you know better (e.g. an
 application invariant), use `overrides` in sqletch.yaml rather than
-editing generated code.
+editing generated code. The full rules, how to see why a column was
+judged nullable, and the rewrites that avoid an override are in
+[Nullability](15-nullability.md).
 
 ## The runtime package
 
