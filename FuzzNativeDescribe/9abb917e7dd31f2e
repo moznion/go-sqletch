@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a:(\n-- @column x:C(00\nSELECT(0)A")

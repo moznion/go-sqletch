@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:z :many\n@if-present(Zt8a0s)\n '&'0@endif\n\n@if-present(ema,c0Z70)x0b8")
