@@ -1,0 +1,2 @@
+go test fuzz v1
+string("sELECT/*+0\xe4\xe4\xe4\xe4\xe4\xe4\xe4*/0")

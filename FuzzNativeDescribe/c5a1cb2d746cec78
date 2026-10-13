@@ -1,0 +1,2 @@
+go test fuzz v1
+string("sELECT/*+\xe40000*/0")

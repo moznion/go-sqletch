@@ -1,0 +1,2 @@
+go test fuzz v1
+string("`--name:A :many\n--@timeout 1s\n--name:A :one")

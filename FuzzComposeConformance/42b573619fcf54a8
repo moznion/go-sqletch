@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nWHERE@order-by(A)@key(A)@end@order-by(A)@key(A)")
