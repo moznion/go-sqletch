@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT Ӷ.*FROM users Ӷ0")

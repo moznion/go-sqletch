@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n:\u05f8\u05f8\u061c\u05f8\u061c\u05f8")
