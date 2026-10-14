@@ -23,6 +23,12 @@
 -- <---------- keyword.other.directive.sqletch
 --          ^^^^ constant.numeric.sqletch
 
+-- @nullable author_name: false
+-- <----------- keyword.other.directive.sqletch
+--           ^^^^^^^^^^^ variable.parameter.sqletch
+--                      ^ punctuation.separator.sqletch
+--                        ^^^^^ constant.language.boolean.sqletch
+
 @if-present(organization_id, status)
 -- <---------- keyword.control.sqletch
 --          ^^^^^^^^^^^^^^^ variable.parameter.sqletch

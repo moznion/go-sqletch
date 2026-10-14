@@ -54,8 +54,9 @@ reason names exactly which gate stopped the narrowing.
 
 For each result column, in order:
 
-1. **A config override** (`overrides` in sqletch.yaml, below) wins
-   outright.
+1. **A forced verdict** — a `-- @nullable` directive in the query or an
+   `overrides` entry in sqletch.yaml ([below](#overriding-a-verdict)) —
+   wins outright.
 2. **A direct column reference** (`u.email`) is non-null when
    *all* of these hold:
    - the column is `NOT NULL` in the catalog;
@@ -171,8 +172,21 @@ is a set operation", "… is exposed through a hazardous subquery", …).
 ## Overriding a verdict
 
 When an application invariant guarantees a column is non-null and the
-analysis cannot see it, override it in sqletch.yaml instead of editing
-generated code:
+analysis cannot see it, force the verdict instead of editing generated
+code. There are two spellings with identical meaning; pick one per
+column.
+
+In the template, next to the SQL whose invariant it states (preferred
+when the reason is local to the query):
+
+```sql
+-- name: ListMembers :many
+-- @nullable org_id: false
+SELECT u.id, u.org_id
+…
+```
+
+Or in sqletch.yaml:
 
 ```yaml
 overrides:
@@ -181,12 +195,29 @@ overrides:
     nullable: false
 ```
 
-`nullable: true` forces the other direction, which is always safe.
+`true` forces the other direction, which is always safe. Either way
+the verdict applies in every shape of the query, and `explain` names
+where it was declared:
 
-An override is **your** claim, not a proof: `nullable: false` on a
-column that does return NULL brings back exactly the failure the
-analysis exists to prevent. Prefer a rewrite that makes the fact
-visible to the analysis when one exists:
+```console
+    org_id: int8 (not null; forced by -- @nullable)
+    org_id: int8 (not null; forced by sqletch.yaml overrides)
+```
+
+A column's nullability is declared in exactly **one** place: the same
+query and column in both the directive and `overrides` is
+**SQLETCH319**, an error even when the two agree, so they can never
+drift apart on a later edit. Delete one of them. A malformed directive
+(a value other than lowercase `true`/`false`, or a second `@nullable`
+for the same column) is **SQLETCH018** and forces nothing. See
+[annotations](03-annotations.md) for the directive's full syntax.
+
+An override is **your** claim, not a proof: the compiler cannot check
+it. A wrong `nullable: false` on a column that does return NULL is
+not silent — every driver fails the scan with an error on the first
+NULL row (pinned by the dev-database suites) — but it turns a type you
+could handle into a runtime failure. Prefer a rewrite that makes the
+fact visible to the analysis when one exists:
 
 | Instead of overriding … | write |
 |---|---|
@@ -195,17 +226,23 @@ visible to the analysis when one exists:
 | an aggregate over a possibly-empty input | `coalesce(sum(x), 0) AS total` |
 | a PostgreSQL parent table with children | `FROM ONLY parent` |
 
-Overrides are keyed by query name and output column name:
+Both spellings are keyed by output column name:
 
-- an entry naming no result column is **SQLETCH312** (a warning: the
-  override is dead — usually a renamed alias);
-- an entry matching several same-named columns is **SQLETCH313**
+- an override naming no result column is **SQLETCH312** (a warning: the
+  override is dead — usually a renamed alias); reported at the
+  directive, or at the config file for an `overrides` entry;
+- one matching several same-named columns is **SQLETCH313**
   (it forces all of them; give them distinct aliases);
-- an entry naming a query that exists in several targets is
-  **SQLETCH317** (it applies to all of them).
+- an `overrides` entry naming a query that exists in several targets is
+  **SQLETCH317** (it applies to all of them). A directive belongs to
+  its own query and has no such ambiguity.
 
-Overrides are a code-generation input only: they never change
-renderings, the cache, or what is verified.
+Forced verdicts are a code-generation input only: they never change
+renderings or what is verified, and never enter the cache fingerprint.
+The one cache effect is the directive's: like every annotation its
+comment stays in the query text, so adding or editing a `@nullable`
+re-keys that query's oracle entries (one cold `generate`); an
+`overrides` edit re-keys nothing.
 
 ## Parameters
 

@@ -287,6 +287,18 @@ type QueryTemplate struct {
 	// performance lints (design 24), one entry per named code in
 	// declaration order. A suppression applies to the whole query.
 	NoLints []NoLint
+	// NullOverrides holds `-- @nullable name: true|false` directives
+	// (design 25): per-result-column nullability forced by the author,
+	// the in-template spelling of a sqletch.yaml `overrides` entry.
+	// Keyed by the result column's output name.
+	NullOverrides map[string]NullOverrideDirective
+}
+
+// NullOverrideDirective is one parsed `-- @nullable` directive. Span is
+// the whole directive comment.
+type NullOverrideDirective struct {
+	Nullable bool
+	Span     diagnostics.Span
 }
 
 // TimeoutDirective is one parsed `-- @timeout <duration>|none`. None

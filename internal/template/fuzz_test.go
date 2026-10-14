@@ -58,6 +58,7 @@ func FuzzScan(f *testing.F) {
 	// Directive-shaped comments, the annotation surface added in v0.4.
 	f.Add("-- name: M :many\n-- @param x: text\n-- @column n: bigint\nSELECT count(*) AS n FROM t WHERE t.x = :x;")
 	f.Add("-- name: N :many\n-- @param :\nSELECT 1;")
+	f.Add("-- name: N2 :many\n-- @nullable n: false\n-- @nullable n: true\n-- @nullable : x\nSELECT 1 AS n;")
 
 	// Constructs whose bodies carry their own spans.
 	f.Add("-- name: O :many\nSELECT 1 FROM t WHERE TRUE\n  AND @filter-tree!(s)\n@predicate(a)\nt.x = :s_x\n@end;")

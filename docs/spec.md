@@ -391,9 +391,12 @@ result), `:execrows` (affected count).
 Per-query directives follow the header as `-- @…` comments and, like
 the header, stay in the skeleton verbatim: `-- @param` / `-- @column`
 (types, Phase 3), `-- @policy-optout` / `-- @policy-apply` (Cross-Query
-Policies), and `-- @timeout <duration>|none` — a runtime deadline for
-the generated method (see Runtime Model § Query timeouts). None of
-them is ever dynamic.
+Policies), `-- @timeout <duration>|none` — a runtime deadline for
+the generated method (see Runtime Model § Query timeouts) — and
+`-- @nullable <column>: true|false`, the author's forced nullability of
+one result column (the in-template spelling of a config nullability
+override; a column is overridden in at most one of the two places).
+None of them is ever dynamic.
 
 ## Constructs
 
@@ -1459,7 +1462,7 @@ reachable shape, which is what licenses running the analysis once per
 query. It is the largest piece of compiler-owned analysis and
 historically the hardest part of tools in this space (sqlc included);
 the fallback is conservative (`nullable`), with per-column overrides
-available.
+available (config `overrides` or a `-- @nullable` directive).
 
 **The dev database is a hard dependency of a cold `generate`/`check` —
 a real DX regression versus sqlc's offline model, mitigated by
@@ -1772,7 +1775,10 @@ correct:
 -   **Soundness (the whole point of the tool).** Every reachable query
     shape must be statically verified. The tool must never emit typed
     Go that ships an unverified/guard-off shape, narrows nullability
-    unsoundly (letting a runtime NULL reach a non-`Option` field),
+    unsoundly (letting a runtime NULL reach a non-`Option` field —
+    an author-forced `nullable: false` override or `-- @nullable
+    col: false` directive is the author's assertion, not the tool's
+    narrowing, and a wrong one fails loudly at scan time),
     mis-places or drops a cross-query policy (tenant-scoping)
     conjunct, or mis-parses / mis-locates in a way that corrupts the
     analysis. A soundness hole is always a real defect, never "just
@@ -1831,7 +1837,9 @@ and substitute it into the output, so one entry generates one package
 per matched directory), dev database strategy (auto-managed ephemeral
 instance or user-supplied DSN), cache path (committed to the
 repository), filter-tree caps, per-query static expansion, and
-per-column nullability overrides. Everything but the targets is global
+per-column nullability overrides (also expressible per query as
+`-- @nullable` directives; one declaration per column). Everything
+but the targets is global
 to the run: however many packages a config generates, there is one
 schema fingerprint, one committed cache, one dev database, and one
 policy set — a query name is unique within its target, everything else
