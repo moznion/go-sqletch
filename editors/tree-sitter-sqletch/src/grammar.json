@@ -30,6 +30,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "nullable_directive"
+        },
+        {
+          "type": "SYMBOL",
           "name": "_construct"
         },
         {
@@ -246,6 +250,57 @@
             },
             "named": true,
             "value": "timeout_value"
+          }
+        }
+      ]
+    },
+    "nullable_directive": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "TOKEN",
+            "content": {
+              "type": "PREC",
+              "value": 3,
+              "content": {
+                "type": "PATTERN",
+                "value": "--[ \\t]*@nullable"
+              }
+            }
+          },
+          "named": true,
+          "value": "directive_marker"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "ALIAS",
+            "content": {
+              "type": "PATTERN",
+              "value": "[A-Za-z_][A-Za-z0-9_]*"
+            },
+            "named": true,
+            "value": "column_name"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "ALIAS",
+            "content": {
+              "type": "PATTERN",
+              "value": "[^\\n]+"
+            },
+            "named": true,
+            "value": "nullable_value"
           }
         }
       ]

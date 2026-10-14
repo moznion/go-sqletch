@@ -193,6 +193,10 @@
           "named": true
         },
         {
+          "type": "nullable_directive",
+          "named": true
+        },
+        {
           "type": "order_by_block",
           "named": true
         },
@@ -400,6 +404,42 @@
     "type": "literal",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "nullable_directive",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "column_name",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "nullable_value",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "directive_marker",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "order_by_block",
@@ -739,6 +779,10 @@
   },
   {
     "type": "key_name",
+    "named": true
+  },
+  {
+    "type": "nullable_value",
     "named": true
   },
   {
