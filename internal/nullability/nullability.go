@@ -65,7 +65,7 @@ var strictAggs = map[string]bool{
 //     TestNullabilitySoundnessAdversarial. An unrecognized or
 //     unresolvable source OID therefore fails SAFE to nullable.
 func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
-	cat *cache.Catalog, overrides map[string]bool) []bool {
+	cat *cache.Catalog, overrides map[string]Verdict) []bool {
 
 	vs := AnalyzeVerdicts(maxTree, maxR, desc, cat, overrides)
 	out := make([]bool, len(vs))
@@ -77,16 +77,20 @@ func Analyze(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
 
 // Verdict couples the per-column decision with the reason it was
 // reached — surfaced by `explain` so a conservative verdict is
-// auditable (and a null_overrides entry can be written with
-// confidence) instead of opaque.
+// auditable (and an `overrides` entry or `-- @nullable` directive can
+// be written with confidence) instead of opaque.
 type Verdict struct {
 	Nullable bool
 	Reason   string
 }
 
-// AnalyzeVerdicts is Analyze with reasons.
+// AnalyzeVerdicts is Analyze with reasons. An overrides entry (keyed by
+// result-column name) is the author-forced verdict for every column of
+// that name, adopted verbatim: its Reason names where it was declared
+// (sqletch.yaml `overrides` or a `-- @nullable` directive, design 25),
+// which only the caller knows.
 func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc,
-	cat *cache.Catalog, overrides map[string]bool) []Verdict {
+	cat *cache.Catalog, overrides map[string]Verdict) []Verdict {
 
 	// Statement-wide kill-switches no recursion can lift: a top-level
 	// set operation (engines may attribute the output to a branch's
@@ -187,7 +191,7 @@ func AnalyzeVerdicts(maxTree dialect.Tree, maxR ast.Rendering, desc dialect.Desc
 	out := make([]Verdict, len(desc.Columns))
 	for i, col := range desc.Columns {
 		if v, ok := overrides[col.Name]; ok {
-			out[i] = Verdict{Nullable: v, Reason: "forced by null_overrides"}
+			out[i] = v
 			continue
 		}
 		// Direct column reference: catalog NOT NULL, provided the
@@ -659,7 +663,7 @@ func poison(refs []dialect.TableRef, cat *cache.Catalog, present map[uint32]*pre
 // review counterexample F1c). Renderings must already have passed the
 // column-agreement check (equal lengths).
 func AnalyzeAll(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
-	cat *cache.Catalog, overrides map[string]bool) ([]bool, error) {
+	cat *cache.Catalog, overrides map[string]Verdict) ([]bool, error) {
 
 	vs, err := AnalyzeAllVerdicts(fe, rs, descs, cat, overrides)
 	if err != nil {
@@ -676,7 +680,7 @@ func AnalyzeAll(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
 // first rendering's reason while a column stays non-nullable and
 // adopts the flipping rendering's reason when one turns it nullable.
 func AnalyzeAllVerdicts(fe dialect.Frontend, rs []ast.Rendering, descs []dialect.Desc,
-	cat *cache.Catalog, overrides map[string]bool) ([]Verdict, error) {
+	cat *cache.Catalog, overrides map[string]Verdict) ([]Verdict, error) {
 
 	var out []Verdict
 	for i, r := range rs {

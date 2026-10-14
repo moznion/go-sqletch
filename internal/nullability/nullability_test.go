@@ -28,7 +28,7 @@ func cat() *cache.Catalog {
 
 // analyze compiles a template through scan+render+parse and runs
 // Analyze with a fabricated Desc.
-func analyze(t *testing.T, src string, desc dialect.Desc, overrides map[string]bool) []bool {
+func analyze(t *testing.T, src string, desc dialect.Desc, overrides map[string]Verdict) []bool {
 	t.Helper()
 	f, diags := template.NewScanner(postgres.Profile{}).ScanFile("t.sql", []byte(src))
 	if len(diags) != 0 {
@@ -192,7 +192,7 @@ SELECT u.id, upper(u.email) AS e FROM users AS u;
 `
 	got := analyze(t, src, dialect.Desc{Columns: []dialect.ColumnDesc{
 		col("id", 100, 1), {Name: "e"},
-	}}, map[string]bool{"id": true, "e": false})
+	}}, map[string]Verdict{"id": {Nullable: true, Reason: "r1"}, "e": {Nullable: false, Reason: "r2"}})
 	assertNullable(t, got, []bool{true, false})
 }
 
@@ -769,12 +769,12 @@ FROM users AS u LEFT JOIN orgs AS o ON o.id = u.org_id;
 	got := AnalyzeVerdicts(tree, rs[0], dialect.Desc{Columns: []dialect.ColumnDesc{
 		col("id", 100, 1), col("name", 200, 2), col("org_id", 100, 3),
 		{Name: "e"}, {Name: "n"},
-	}}, cat(), map[string]bool{"e": false})
+	}}, cat(), map[string]Verdict{"e": {Nullable: false, Reason: "forced by -- @nullable"}})
 	want := []Verdict{
 		{Nullable: false, Reason: "users.id is NOT NULL in the catalog"},
 		{Nullable: true, Reason: "orgs.name is null-extended by an outer join"},
 		{Nullable: true, Reason: "users.org_id is nullable in the catalog"},
-		{Nullable: false, Reason: "forced by null_overrides"},
+		{Nullable: false, Reason: "forced by -- @nullable"},
 		{Nullable: false, Reason: "total function count()"},
 	}
 	if len(got) != len(want) {

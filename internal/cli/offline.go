@@ -346,6 +346,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				continue
 			}
 			byName[q.Name] = p
+			res.Diags[p] = append(res.Diags[p], nullOverrideConflictDiags(c.cfg, q)...)
 		}
 	}
 
@@ -522,6 +523,7 @@ func resolvedChecks(drv driver, dialectName string, pols []policy.Policy, q *tem
 	var diags []diagnostics.Diagnostic
 	diags = append(diags, rules.CheckResolved(drv.profile, q, rs[0], tree, cat)...)
 	diags = append(diags, policy.Enforce(drv.profile, drv.frontend, pols, q, tree, rs[0])...)
+	diags = append(diags, directiveHygieneDiags(q, descs[0])...)
 	paramTypes := map[string]dialect.TypeRef{}
 	if !drv.annotationsRequired {
 		// Tier 1: the oracle types parameters; agreement is checked
