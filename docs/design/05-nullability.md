@@ -190,7 +190,10 @@ must never vouch for a differently-indexed column.
 
 Per result column, in order:
 
-1. Config override (`nullable: true/false` per query.column) wins.
+1. Author override wins: a config `overrides` entry (`nullable:
+   true/false` per query.column) or a `-- @nullable column: true|false`
+   directive (design 25). A column may be overridden in only one of
+   the two (SQLETCH319); the forced verdict's reason names its source.
 2. `Desc.Columns[i].SourceRel` set (direct column reference — pgx
    gives TableOID/AttrNumber): look up `Catalog` column.
    - column `NotNull` **and** its relation is present and trusted

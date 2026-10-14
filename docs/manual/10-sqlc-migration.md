@@ -65,8 +65,8 @@ sees the `OR IS NULL` de-optimization.
   parameters written into nullable columns (`None` binds NULL).
   Optional (`@if-present`) parameters are `sqletch.Omittable[T]`.
   Nullability comes from catalog analysis with conservative treatment
-  of optional joins; use `overrides` for application-level
-  invariants.
+  of optional joins; use `-- @nullable column: false` (or `overrides`
+  in sqletch.yaml) for application-level invariants.
 
 ## Migration checklist
 

@@ -36,6 +36,7 @@ over SQL highlighting instead of re-implementing it**:
 | header annotation (`:many` …) | `storage.modifier.sqletch` | `@keyword.modifier` |
 | `-- @param` / `-- @column` directive keyword | `keyword.other.directive.sqletch` | `@keyword.directive` |
 | directive type names | `storage.type.sqletch` | `@type` |
+| `-- @nullable` keyword / column / `true`·`false` (design 25) | `keyword.other.directive.sqletch` / `variable.parameter.sqletch` / `constant.language.boolean.sqletch` | `@keyword.directive` / `@variable.member` / `@boolean` |
 | `@when` literals | `constant.sqletch` | `@constant` |
 
 ## 3. Testing
