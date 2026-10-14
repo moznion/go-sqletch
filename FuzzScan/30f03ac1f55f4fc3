@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\na\x90 a\xd5 a\xc5 a\xff a\xa0 a\xad a\x9a a\xdc a\xa9 a\xd0``a\xd90")

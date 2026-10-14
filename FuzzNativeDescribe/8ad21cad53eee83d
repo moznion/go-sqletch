@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xa0\xa0\xa0\xa0SELECT C.*FROM orgs C")
