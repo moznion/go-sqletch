@@ -156,7 +156,9 @@ because other shapes lack the join. When you know better (e.g. an
 application invariant), declare it with a
 [`-- @nullable column: false`](03-annotations.md) directive in the
 query or an `overrides` entry in sqletch.yaml rather than editing
-generated code.
+generated code. The full rules, how to see why a column was judged
+nullable, and the rewrites that avoid an override are in
+[Nullability](15-nullability.md).
 
 ## The runtime package
 

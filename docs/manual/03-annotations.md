@@ -120,7 +120,7 @@ WHERE a.id IS NOT NULL;
 ```
 
 Forces a result column's nullability, overriding the
-[analysis](07-runtime-and-generated-code.md#nullability): `false` makes
+[analysis](15-nullability.md): `false` makes
 the row field a plain `T`, `true` an `optional.Option[T]`. It is the
 in-template spelling of an [`overrides`](05-config.md#field-notes)
 entry in sqletch.yaml, with the same meaning — keep the declaration

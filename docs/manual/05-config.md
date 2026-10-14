@@ -117,8 +117,8 @@ policies:                      # cross-query policies (see the policies chapter)
   may each define `GetUser`.
 - **`overrides`** force a result column's nullability where the
   analysis is conservative (the analyzer never narrows from optional
-  fragments by design — see the manual's runtime chapter). The same
-  declaration can live in the template instead, as
+  fragments by design — see [Nullability](15-nullability.md#overriding-a-verdict)).
+  The same declaration can live in the template instead, as
   [`-- @nullable column: true|false`](03-annotations.md); a column
   declared in both places is SQLETCH319.
 - **`static_expansion`**: listed queries are materialized
