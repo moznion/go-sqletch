@@ -22,6 +22,7 @@
 (annotation) @keyword.modifier
 (type_name) @type
 (timeout_value) @number
+(nullable_value) @boolean
 
 (parameter) @variable.parameter
 (param_ref) @variable.parameter

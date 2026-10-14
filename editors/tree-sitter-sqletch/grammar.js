@@ -26,6 +26,7 @@ module.exports = grammar({
       $.param_directive,
       $.column_directive,
       $.timeout_directive,
+      $.nullable_directive,
       $._construct,
       $._sql_content,
     ),
@@ -67,6 +68,15 @@ module.exports = grammar({
     timeout_directive: $ => seq(
       alias(token(prec(3, /--[ \t]*@timeout/)), $.directive_marker),
       field('value', alias(/[^\n]+/, $.timeout_value)),
+    ),
+
+    // `-- @nullable col: true|false` (design 25). The value is taken
+    // verbatim; the scanner validates it (SQLETCH018).
+    nullable_directive: $ => seq(
+      alias(token(prec(3, /--[ \t]*@nullable/)), $.directive_marker),
+      field('name', alias(IDENT, $.column_name)),
+      ':',
+      field('value', alias(/[^\n]+/, $.nullable_value)),
     ),
 
     // ---- construct blocks ------------------------------------------

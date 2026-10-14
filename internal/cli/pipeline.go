@@ -91,46 +91,6 @@ func destructiveResetDiag(cfg config.Config, err error) (diagnostics.Diagnostic,
 	return d, true
 }
 
-// overrideHygieneDiags warns about null_overrides entries that cannot
-// do what the user intended: a key naming no result column is dead
-// config (a typo or a renamed column), and a key matching several
-// same-named result columns forces ALL of them — overrides are
-// name-keyed, not position-keyed.
-func overrideHygieneDiags(cfg config.Config, query string,
-	overrides map[string]bool, desc dialect.Desc) []diagnostics.Diagnostic {
-
-	if len(overrides) == 0 {
-		return nil
-	}
-	count := map[string]int{}
-	for _, c := range desc.Columns {
-		count[c.Name]++
-	}
-	names := make([]string, 0, len(overrides))
-	for name := range overrides {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var diags []diagnostics.Diagnostic
-	for _, name := range names {
-		switch {
-		case count[name] == 0:
-			diags = append(diags, diagnostics.Warnf(diagnostics.CodeOverrideUnknownColumn,
-				diagnostics.Span{File: cfg.Path},
-				"null_overrides for query %q names column %q, which is not a result column — the override is dead",
-				query, name).
-				WithHint("check for a typo or a renamed output alias"))
-		case count[name] > 1:
-			diags = append(diags, diagnostics.Warnf(diagnostics.CodeOverrideAmbiguousColumn,
-				diagnostics.Span{File: cfg.Path},
-				"null_overrides for query %q matches %d result columns named %q — overrides are name-keyed and force all of them",
-				query, count[name], name).
-				WithHint("give the columns distinct output aliases and override the intended one"))
-		}
-	}
-	return diags
-}
-
 // RunOptions carries the per-invocation switches that are not
 // sqletch.yaml's business — things a user opts into for one command,
 // which must stay visible on the command line rather than being
@@ -235,6 +195,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 				}
 				names[q.Name] = p
 				queryTargets[q.Name] = append(queryTargets[q.Name], t.Path)
+				res.Diags = append(res.Diags, nullOverrideConflictDiags(cfg, q)...)
 				queries = append(queries, &compiledQuery{q: q, target: ti})
 			}
 		}
@@ -382,8 +343,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			return nil, fmt.Errorf("internal: maximal rendering re-parse: %w", err)
 		}
 		cq.nullableParams = rules.DeriveNullableParams(profile, cq.q, cq.rs[0], maxTree, cat)
-		overrides := cfg.NullOverridesFor(cq.q.Name)
-		verdicts, err := nullability.AnalyzeAllVerdicts(frontend, cq.rs, cq.descs, cat, overrides)
+		verdicts, err := nullability.AnalyzeAllVerdicts(frontend, cq.rs, cq.descs, cat, effectiveNullOverrides(cfg, cq.q))
 		if err != nil {
 			return nil, err
 		}
@@ -393,7 +353,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			cq.nullable[i] = v.Nullable
 			cq.nullReasons[i] = v.Reason
 		}
-		res.Diags = append(res.Diags, overrideHygieneDiags(cfg, cq.q.Name, overrides, cq.descs[0])...)
+		res.Diags = append(res.Diags, overrideHygieneDiags(cfg, cq.q.Name, cfg.NullOverridesFor(cq.q.Name), cq.descs[0])...)
 	}
 	if diagnostics.HasErrors(res.Diags) {
 		return res, nil

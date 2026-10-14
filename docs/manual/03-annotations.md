@@ -1,8 +1,10 @@
 # Type annotations
 
 Annotations are ordinary SQL comments inside a query (they stay in the
-emitted SQL verbatim). They exist because not every database tells the
-compiler every type.
+emitted SQL verbatim). Most exist because not every database tells the
+compiler every type; the rest declare what the compiler cannot know
+(a nullability invariant, a policy exemption, a deadline, a lint
+suppression).
 
 ## `-- @param name: type`
 
@@ -106,6 +108,41 @@ The timeout is a runtime property only: it changes no rendering and no
 verification. Like every annotation, the comment stays in the skeleton
 verbatim, so editing it re-keys the query's oracle cache entries (one
 cold `generate`).
+
+## `-- @nullable column: true|false`
+
+```sql
+-- name: BooksWithAuthor :many
+-- @nullable author_name: false
+SELECT b.id, a.name AS author_name
+FROM books AS b LEFT JOIN authors AS a ON a.id = b.author_id
+WHERE a.id IS NOT NULL;
+```
+
+Forces a result column's nullability, overriding the
+[analysis](07-runtime-and-generated-code.md#nullability): `false` makes
+the row field a plain `T`, `true` an `optional.Option[T]`. It is the
+in-template spelling of an [`overrides`](05-config.md#field-notes)
+entry in sqletch.yaml, with the same meaning — keep the declaration
+next to the SQL whose invariant it states.
+
+- One result column per directive, named by its output name (the
+  alias, if any), lowercase like `@column`. The value is the lowercase
+  literal `true` or `false`. Anything else, or a second `@nullable`
+  for the same column, is SQLETCH018 and overrides nothing.
+- It applies in every shape of the query, like a config override.
+- A column's nullability is declared in exactly ONE place: the same
+  query and column in sqletch.yaml's `overrides` as well is SQLETCH319
+  — even when the two agree.
+- A directive naming no result column is SQLETCH312 (a warning — the
+  override is dead); one matching several same-named columns forces
+  all of them and is SQLETCH313.
+- It is an assertion the compiler cannot check. A wrong `false`
+  surfaces at run time as the driver's scan error on the first NULL
+  (never a silent zero value); a wrong `true` only loosens the type.
+- Like every annotation, the comment stays in the skeleton verbatim, so
+  adding or editing one re-keys the query's oracle cache entries (one
+  cold `generate`).
 
 ## `-- @nolint CODE[, CODE…] (reason)`
 

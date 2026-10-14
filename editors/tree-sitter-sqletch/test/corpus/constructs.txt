@@ -319,3 +319,30 @@ SELECT 2;
     (timeout_value))
   (sql_token)
   (sql_token))
+
+===================
+nullable directives
+===================
+
+-- name: Books :many
+-- @nullable author_name: false
+-- @nullable title: true
+SELECT 1;
+
+---
+
+(document
+  (header
+    (header_marker)
+    (query_name)
+    (annotation))
+  (nullable_directive
+    (directive_marker)
+    (column_name)
+    (nullable_value))
+  (nullable_directive
+    (directive_marker)
+    (column_name)
+    (nullable_value))
+  (sql_token)
+  (sql_token))

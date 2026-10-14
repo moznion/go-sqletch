@@ -42,6 +42,9 @@ overrides:                   # per-query escape hatches
     nullable: true
 ```
 
+(`overrides` entries may instead be written in the template as
+`-- @nullable column: true|false` directives — design 25.)
+
 `internal/config.Load` performs strict decoding (unknown keys and
 duplicate keys are `SQLETCH300`; goccy/go-yaml with
 `DisallowUnknownField` — migrated off the archived gopkg.in/yaml.v3,

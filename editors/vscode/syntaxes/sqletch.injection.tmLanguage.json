@@ -7,6 +7,7 @@
     { "include": "#header" },
     { "include": "#directive" },
     { "include": "#timeout-directive" },
+    { "include": "#nullable-directive" },
     { "include": "#if-present" },
     { "include": "#when" },
     { "include": "#named-clause" },
@@ -37,6 +38,15 @@
       "captures": {
         "1": { "name": "keyword.other.directive.sqletch" },
         "2": { "name": "constant.numeric.sqletch" }
+      }
+    },
+    "nullable-directive": {
+      "match": "(--[ \\t]*@nullable)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]*(:)[ \\t]*(true|false)[ \\t]*$",
+      "captures": {
+        "1": { "name": "keyword.other.directive.sqletch" },
+        "2": { "name": "variable.parameter.sqletch" },
+        "3": { "name": "punctuation.separator.sqletch" },
+        "4": { "name": "constant.language.boolean.sqletch" }
       }
     },
     "if-present": {
