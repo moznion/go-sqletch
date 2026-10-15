@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT B FRO,B0 AS B0")
