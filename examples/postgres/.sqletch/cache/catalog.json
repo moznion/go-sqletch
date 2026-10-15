@@ -1,11 +1,11 @@
 {
   "format": 2,
-  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
+  "schema_fp": "dc4c6e0c460fe97b58bfbfbed47598bf248e0adb1090e4e2d4e648ee3d092ede",
   "tables": [
     {
       "schema": "public",
       "name": "audit_logs",
-      "oid": 16403,
+      "oid": 16410,
       "cols": [
         {
           "name": "id",
@@ -40,8 +40,16 @@
           "has_default": false
         },
         {
-          "name": "created_at",
+          "name": "severity",
           "att": 5,
+          "type_oid": 16403,
+          "type_name": "audit_severity",
+          "not_null": true,
+          "has_default": true
+        },
+        {
+          "name": "created_at",
+          "att": 6,
           "type_oid": 1184,
           "type_name": "timestamptz",
           "not_null": true,

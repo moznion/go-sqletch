@@ -175,7 +175,7 @@ var ShapeSpace = map[string]runtime.ShapeSpaceInfo{
 	"FilterUsers":       {Enumerable: 1, Exact: true, Unbounded: true},
 	"FindUserByEmail":   {Enumerable: 1, Exact: true, Unbounded: false},
 	"GetUserProfile":    {Enumerable: 2, Exact: true, Unbounded: false},
-	"ListAuditLogs":     {Enumerable: 2, Exact: true, Unbounded: false},
+	"ListAuditLogs":     {Enumerable: 4, Exact: true, Unbounded: false},
 	"ListUsersSorted":   {Enumerable: 26, Exact: true, Unbounded: false},
 	"SearchUsers":       {Enumerable: 64, Exact: true, Unbounded: false},
 	"UpdateUserProfile": {Enumerable: 4, Exact: true, Unbounded: false},
