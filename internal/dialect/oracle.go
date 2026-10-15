@@ -12,7 +12,28 @@ import (
 type TypeRef struct {
 	OID  uint32
 	Name string
+	// Ext describes a user-defined type (design 26 §4.1). Only the
+	// PostgreSQL oracle sets it — for EVERY OID >= 16384 and for no
+	// built-in — so "user-defined and no Ext" can only be an oracle
+	// entry written before Ext existed (D4).
+	Ext *TypeExt
 }
+
+// TypeExt is the oracle's description of a user-defined type.
+type TypeExt struct {
+	Schema string
+	// Kind is pg_type.typtype: "e" enum, "b" base (an array of an enum,
+	// an extension type), "d" domain, "c" composite, "r" range, …
+	Kind string
+	// Labels are an enum's labels in enumsortorder; empty otherwise.
+	Labels []string
+}
+
+// TypeKindEnum is TypeExt.Kind for an enum.
+const TypeKindEnum = "e"
+
+// IsEnum reports whether t is a user-defined enum the oracle described.
+func (t TypeRef) IsEnum() bool { return t.Ext != nil && t.Ext.Kind == TypeKindEnum }
 
 // ColumnDesc describes one result column. SrcRel/SrcAtt tie a direct
 // column reference back to its catalog column (0 when the column is a

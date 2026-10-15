@@ -260,9 +260,16 @@ func Fingerprint(dialectName, serverVersion string, files []SchemaFile) string {
 // EntryType / EntryColumn mirror dialect.TypeRef / dialect.ColumnDesc
 // without importing the dialect package (cache is a leaf; dialect
 // imports cache for the Catalog model).
+//
+// The user-defined-type fields (design 26 §4.2) are omitempty: an entry
+// whose types are all built-in serializes exactly as before they
+// existed, and no MySQL/SQLite entry ever sets them.
 type EntryType struct {
-	OID  uint32 `json:"oid"`
-	Name string `json:"name"`
+	OID    uint32   `json:"oid"`
+	Name   string   `json:"name"`
+	Schema string   `json:"schema,omitempty"`
+	Kind   string   `json:"kind,omitempty"`
+	Labels []string `json:"labels,omitempty"`
 }
 
 // EntryColumn records what the ORACLE said about a result column —
@@ -276,8 +283,13 @@ type EntryColumn struct {
 	Name     string `json:"name"`
 	OID      uint32 `json:"oid"`
 	TypeName string `json:"type_name"`
-	SrcRel   uint32 `json:"src_rel,omitempty"`
-	SrcAtt   int16  `json:"src_att,omitempty"`
+	// TypeSchema/TypeKind/TypeLabels mirror EntryType's
+	// user-defined-type fields for the column's type.
+	TypeSchema string   `json:"type_schema,omitempty"`
+	TypeKind   string   `json:"type_kind,omitempty"`
+	TypeLabels []string `json:"type_labels,omitempty"`
+	SrcRel     uint32   `json:"src_rel,omitempty"`
+	SrcAtt     int16    `json:"src_att,omitempty"`
 }
 
 // OracleEntry is one cached Describe result, self-describing with its

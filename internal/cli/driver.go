@@ -40,6 +40,11 @@ type driver struct {
 	// columnHintsRequired: the oracle cannot type expression result
 	// columns (SQLite decltype); they need `-- @column` annotations.
 	columnHintsRequired bool
+	// staleEntry, when set, rejects a committed oracle entry the
+	// dialect's current Describe could not have written, so it is
+	// re-described like a miss (design 26 D4). Every cache read goes
+	// through loadOracleEntry, which applies it.
+	staleEntry func(*cache.OracleEntry) bool
 	// acquire constructs the oracle backend. Schema inputs arrive as
 	// files (path + content): server backends execute the contents,
 	// the native backend parses them and needs the paths for
@@ -159,6 +164,7 @@ func driverFor(cfg config.Config) driver {
 		writableName: postgres.TypeMap{}.WritableName,
 		style:        runtime.StyleDollar,
 		explain:      runtime.ExplainPostgres,
+		staleEntry:   postgres.StaleEntry,
 		acquire: func(ctx context.Context, cfg config.Config, schema []cache.SchemaFile, allowDestructive bool, det *devdb.Detected) (dialect.Oracle, func(), error) {
 			conn, cleanup, err := devdb.Acquire(ctx, devdb.Config{
 				DSN:              cfg.Database.DSN,
@@ -173,4 +179,15 @@ func driverFor(cfg config.Config) driver {
 			return postgres.NewOracle(conn), cleanup, nil
 		},
 	}
+}
+
+// loadOracleEntry is the one committed-cache read of an oracle entry
+// for pipeline.Run and the OfflineChecker: the store's key comparison,
+// then the dialect's staleness rule.
+func loadOracleEntry(drv driver, store *cache.Store, ref cache.OracleRef, fp, renderedSQL string) (*cache.OracleEntry, bool) {
+	e, ok := store.LoadOracle(ref, fp, renderedSQL)
+	if !ok || (drv.staleEntry != nil && drv.staleEntry(e)) {
+		return nil, false
+	}
+	return e, true
 }
