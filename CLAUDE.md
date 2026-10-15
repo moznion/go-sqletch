@@ -461,6 +461,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   entries instead of re-keying all of them; one committed cache
   describes one schema state (branches with different DDL no longer
   share a cache — accepted).
+- One database EPOCH per run (design 04 §4, owner decision
+  2026-10-16): a connected run re-snapshots and reuses committed
+  entries only if `catalog.json` is byte-identical to the live
+  snapshot; otherwise it adopts the snapshot and re-describes EVERY
+  rendering. SrcRel / user-type OIDs are meaningless across epochs (a
+  configured PG DSN is reset → new OIDs every run). Never "optimize" a
+  connected run back to snapshot-only-when-missing.
 - The path is a NAME, never a key. `LoadOracle` still compares the
   stored `(schema_fp, rendered_sql)` byte-wise, so an entry found at a
   ref's path that does not match is a miss and gets rewritten. Never

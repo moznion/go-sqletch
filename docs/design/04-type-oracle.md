@@ -241,11 +241,34 @@ descs := map[rendering]Desc{}
 misses := renderings whose oracle entry misses/mismatches
 if !ok || len(misses) > 0 {
     conn := devdb.Acquire(...)          // the only DB touchpoint
-    if !ok { cat = oracle.Snapshot(); cache.SaveCatalog(cat) }
+    live := oracle.Snapshot()
+    if !ok || bytes(live) != bytes(cat) {  // another database epoch
+        cat = live; cache.SaveCatalog(cat)
+        misses = every rendering          // re-describe all
+    }
     for r := range misses { descs[r] = oracle.Describe(r.SQL); save }
 }
 load remaining descs from cache
 ```
+
+**One epoch per run.** Entries and the catalog share object
+identities: provenance (`SrcRel`) and user-defined type OIDs only mean
+something against the catalog they were described with. A reset dev
+database — every connected run against a configured PostgreSQL DSN
+(the reset drops and recreates `public`) — assigns fresh OIDs, so a
+connected run snapshots the live database and reuses committed entries
+only when the committed catalog is byte-identical to that snapshot.
+Otherwise it adopts the snapshot and re-describes every rendering.
+Before this rule (fixed 2026-10-16) a run that added one query
+described it under new OIDs against the old catalog: provenance missed
+and its NOT NULL columns silently widened to `Option`; a hit and a miss
+of one query could also disagree on a user-defined type's OID
+(SQLETCH210/211). A fresh container per run (empty DSN), MySQL, and
+SQLite produce identical identities for identical DDL, so they keep
+their hits; a configured PostgreSQL DSN rewrites the cache's OIDs on
+every connected run — the price of correctness, accepted (owner
+decision 2026-10-16) over translating identities across epochs inside
+the provenance check. Pinned by `TestCatalogEpoch_*` (cli, devdb).
 
 Describe errors are mapped through the rendering's source map; the
 postgres driver pattern-matches "could not determine data type of
