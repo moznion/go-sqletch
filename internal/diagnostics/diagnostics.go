@@ -59,6 +59,7 @@ const (
 	CodeWhenStringLiteral  Code = "SQLETCH015" // @when string literal is not a plain single-quoted SQL string (delimiters/escapes would survive into the generated guard)
 	CodeBadNoLint          Code = "SQLETCH016" // malformed `-- @nolint`, or it names a code that is not a performance lint
 	CodeBadTimeout         Code = "SQLETCH017" // `-- @timeout` malformed, non-positive, or repeated (docs/design/23-query-timeout.md)
+	CodeBadNullable        Code = "SQLETCH018" // `-- @nullable` malformed, or repeated for one column (docs/design/25-nullable-directive.md)
 )
 
 // Go-source input codes: templates authored in a `//sqletch:query`
@@ -168,12 +169,18 @@ const (
 	CodeSourceUnreadable        Code = "SQLETCH308" // a glob-matched template file could not be read (LSP degrades past it)
 	CodeNameCollision           Code = "SQLETCH310" // generated Go identifiers collide
 	CodeUnsupportedType         Code = "SQLETCH311" // no Go mapping for a database type
-	// null_overrides hygiene: overrides are the analyzer's escape
-	// hatch and are applied by RESULT-COLUMN NAME, so a key that
-	// matches nothing is dead config and a key matching several
-	// same-named columns forces all of them at once.
-	CodeOverrideUnknownColumn   Code = "SQLETCH312" // null_overrides names no result column of the query
-	CodeOverrideAmbiguousColumn Code = "SQLETCH313" // null_overrides matches multiple same-named result columns
+	// Nullability-override hygiene (sqletch.yaml `overrides` and
+	// `-- @nullable` directives alike): overrides are the analyzer's
+	// escape hatch and are applied by RESULT-COLUMN NAME, so a key that
+	// matches nothing is dead and a key matching several same-named
+	// columns forces all of them at once.
+	CodeOverrideUnknownColumn   Code = "SQLETCH312" // a nullability override names no result column of the query
+	CodeOverrideAmbiguousColumn Code = "SQLETCH313" // a nullability override matches multiple same-named result columns
+	// A result column's nullability is forced from two places at once
+	// (sqletch.yaml `overrides` AND a `-- @nullable` directive), even
+	// when they agree: one declaration per column, so a reviewer never
+	// has to reconcile two (docs/design/25-nullable-directive.md).
+	CodeNullOverrideConflict Code = "SQLETCH319"
 
 	// Multi-target resolution (docs/design/19-multi-target-output.md §4).
 	// A template file belongs to exactly one generated package, and an

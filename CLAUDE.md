@@ -608,6 +608,28 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   → `sqlite3.INTERRUPT` and NOT the ctx error (asserted both ways so a
   driver upgrade is noticed). Portable check: `ctx.Err() != nil`.
 
+## Known decisions: @nullable directive (doc 25)
+
+- Owner decisions 2026-10-14: `-- @nullable <column>: true|false` is the
+  in-template spelling of a sqletch.yaml `overrides` entry (separate
+  directive, NOT an `@column` extension — types vs nullability). The
+  same (query, column) in both places is SQLETCH319 EVEN WHEN THEY
+  AGREE (one declaration per column, no precedence rule). `overrides`
+  stays, not deprecated.
+- Malformed / non-boolean / repeated-column = SQLETCH018 (records
+  nothing; first stands). Directive dead/ambiguous columns reuse
+  SQLETCH312/313 (warnings) at the directive span, computed in
+  `cli.resolvedChecks` (so the LSP shows them); config hygiene stays in
+  pipeline.Run at the config path. SQLETCH319 is catalog-free and runs
+  in BOTH pipeline.Run and OfflineChecker (`nullOverrideConflictDiags`).
+- `cli.effectiveNullOverrides` is the one merge seam; `nullability`
+  takes `map[string]Verdict` and adopts it verbatim, so `explain` names
+  the source. A forced verdict is an author ASSERTION (outside the
+  soundness argument, like the config); a wrong `false` fails loudly
+  at scan time on every driver — pinned in `TestNullableDirective*`
+  (devdb). Never let it narrow anything but the named result column
+  (param nullability, doc 20, is untouched).
+
 ## Known decisions: runtime EXPLAIN (doc 22)
 
 - Owner decisions 2026-10-02: explicit `Explain<Query>(…, opts

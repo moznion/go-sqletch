@@ -35,7 +35,11 @@ var (
 	// form, whose argument is then parsed by time.ParseDuration.
 	timeoutRe     = regexp.MustCompile(`^--\s*@timeout\b`)
 	timeoutFormRe = regexp.MustCompile(`^--\s*@timeout\s+(\S+)\s*$`)
-	optOutFormRe  = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
+	// nullableRe/nullableFormRe are the same split for `-- @nullable`
+	// (design 25): one column per directive, a lowercase boolean value.
+	nullableRe     = regexp.MustCompile(`^--\s*@nullable\b`)
+	nullableFormRe = regexp.MustCompile(`^--\s*@nullable\s+([a-z][a-z0-9_]*)\s*:\s*(true|false)\s*$`)
+	optOutFormRe   = regexp.MustCompile(`^--\s*@policy-optout:\s*([a-z][a-z0-9_]*)\s+\((.+)\)\s*$`)
 	// applyRe/applyFormRe are the same split for @policy-apply, the
 	// acknowledgment half of `require_annotation` (design 14 §12). The
 	// trailing reason is OPTIONAL: an acknowledgment claims no
@@ -421,8 +425,8 @@ func (fs *fileScan) handleToken(file *QueryFile, tok dialect.Token) {
 
 // isDirectiveComment reports whether a line comment is one of the
 // per-query directives (`-- @param`, `-- @column`, `-- @policy-optout`,
-// `-- @policy-apply`, `-- @timeout`, `-- @nolint`), including a malformed
-// policy or @nolint annotation (which still targets a query, so its
+// `-- @policy-apply`, `-- @timeout`, `-- @nolint`, `-- @nullable`),
+// including a malformed policy, @nolint or @nullable annotation (which still targets a query, so its
 // diagnostic must attach there too).
 func isDirectiveComment(text string) bool {
 	return paramHintRe.MatchString(text) ||
@@ -430,7 +434,8 @@ func isDirectiveComment(text string) bool {
 		optOutRe.MatchString(text) ||
 		applyRe.MatchString(text) ||
 		timeoutRe.MatchString(text) ||
-		nolintRe.MatchString(text)
+		nolintRe.MatchString(text) ||
+		nullableRe.MatchString(text)
 }
 
 // applyDirectives attaches every buffered directive to q (in source
@@ -488,7 +493,34 @@ func (fs *fileScan) applyDirective(q *QueryTemplate, tok dialect.Token) {
 	}
 	if nolintRe.MatchString(tok.Text) {
 		fs.applyNoLint(q, tok)
+		return
 	}
+	if nullableRe.MatchString(tok.Text) {
+		fs.applyNullable(q, tok)
+	}
+}
+
+// applyNullable parses one `-- @nullable` directive. Every malformed
+// form is an error that records nothing: silently keeping the
+// analyzer's verdict would generate a type the author believes was
+// overridden.
+func (fs *fileScan) applyNullable(q *QueryTemplate, tok dialect.Token) {
+	span := fs.span(tok.Start, tok.End)
+	m := nullableFormRe.FindStringSubmatch(tok.Text)
+	if m == nil {
+		fs.errorf(diagnostics.CodeBadNullable, span,
+			"malformed @nullable; the form is `-- @nullable column_name: true|false`, one result column per directive")
+		return
+	}
+	if _, dup := q.NullOverrides[m[1]]; dup {
+		fs.errorf(diagnostics.CodeBadNullable, span,
+			"duplicate @nullable for column %q of query %s; a column has one declared nullability, and with two the effective one would depend on source order", m[1], q.Name)
+		return
+	}
+	if q.NullOverrides == nil {
+		q.NullOverrides = map[string]NullOverrideDirective{}
+	}
+	q.NullOverrides[m[1]] = NullOverrideDirective{Nullable: m[2] == "true", Span: span}
 }
 
 // applyNoLint records one `-- @nolint` directive. It is all-or-nothing:

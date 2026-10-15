@@ -34,7 +34,7 @@ The extension in `editors/vscode` bundles both halves:
 
 - construct highlighting as an injection over the built-in SQL
   grammar (`@…` constructs, `:param` refs, `-- name:` / `-- @param` /
-  `-- @column` / `-- @timeout` directives);
+  `-- @column` / `-- @timeout` / `-- @nullable` directives);
 - an LSP client for `sqletch lsp` (`sqletch.path` to locate the
   binary, `sqletch.lsp.enabled` to toggle).
 
