@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.0.8](https://github.com/moznion/go-sqletch/compare/v0.0.7...v0.0.8) - 2026-10-16
+
+- feat: map PostgreSQL enums to generated named types (design 26) by @moznion in https://github.com/moznion/go-sqletch/pull/170
+- fix: never mix database epochs in one run's oracle cache by @moznion in https://github.com/moznion/go-sqletch/pull/171
+- build(deps): bump Songmu/tagpr from 1.21.1 to 1.21.2 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/172
+- build(deps): bump actions/setup-node from 7.0.0 to 7.1.0 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/173
+- build(deps): bump actions/download-artifact from 8.0.1 to 8.0.2 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/174
+- build(deps): bump actions/upload-artifact from 7.0.1 to 7.0.2 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/175
+
 ## [v0.0.7](https://github.com/moznion/go-sqletch/compare/v0.0.6...v0.0.7) - 2026-10-14
 
 - README: list shipped policies, native MySQL oracle, and runtime features by @moznion in https://github.com/moznion/go-sqletch/pull/163
