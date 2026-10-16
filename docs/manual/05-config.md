@@ -89,7 +89,12 @@ policies:                      # cross-query policies (see the policies chapter)
   a disposable container (PostgreSQL/MySQL) or a temp file (SQLite).
   Whatever it points at is treated as **disposable** — sqletch resets
   it (drops the public schema / all tables) before applying
-  `schema.files`. Never point it at data you care about.
+  `schema.files`. Never point it at data you care about. On
+  PostgreSQL that reset hands out new object identities (OIDs), which
+  the committed cache records; so with a configured DSN, any run that
+  has to reach the database re-describes every query and rewrites the
+  cache's OIDs, not only the entries it was missing. The empty
+  (container) default reproduces identical OIDs and keeps its hits.
 - **`database.oracle`** selects the type-oracle backend: `server`
   (default) or `native` — sqletch's own corpus-validated inference,
   MySQL only, no server anywhere (setting a `dsn` alongside it is a

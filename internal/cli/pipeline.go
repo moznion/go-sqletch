@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -299,15 +300,32 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		if err != nil {
 			return nil, err
 		}
-		if !haveCat {
-			cat, err = o.Snapshot(ctx)
-			if err != nil {
-				return nil, err
-			}
-			cat.SchemaFP = fp
+		// The catalog and every entry this run uses must come from ONE
+		// database epoch: provenance (SrcRel) and user-defined type OIDs
+		// key on object identities, and a reset dev database — every
+		// connected run against a configured PostgreSQL DSN — assigns
+		// fresh ones. Snapshot the live database and keep the committed
+		// hits only when the committed catalog is byte-identical to it
+		// (a fresh container, MySQL and SQLite always are); otherwise
+		// adopt the snapshot and re-describe every rendering.
+		live, err := o.Snapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		live.SchemaFP = fp
+		if !haveCat || !sameCatalog(cat, live) {
+			cat = live
 			if err := store.SaveCatalog(cat); err != nil {
 				return nil, err
 			}
+			misses = misses[:0]
+			for _, cq := range queries {
+				for i := range cq.rs {
+					misses = append(misses, miss{cq, i})
+				}
+			}
+			res.OracleMiss += res.OracleHits
+			res.OracleHits = 0
 		}
 		for _, m := range misses {
 			r := m.cq.rs[m.ri]
@@ -841,4 +859,12 @@ func PrintDiags(w io.Writer, res *Result, jsonFormat bool) {
 		}
 		fmt.Fprintln(w, d.RenderExcerptWith(res.Sources[d.Span.File], lm))
 	}
+}
+
+// sameCatalog reports whether two snapshots describe the same database
+// objects under the same identities, compared as their committed bytes.
+func sameCatalog(a, b *cache.Catalog) bool {
+	ab, errA := cache.EncodeCatalog(a)
+	bb, errB := cache.EncodeCatalog(b)
+	return errA == nil && errB == nil && bytes.Equal(ab, bb)
 }
