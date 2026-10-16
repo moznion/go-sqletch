@@ -655,6 +655,34 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   TREE prints `<not executable by iterator executor>` for single-table
   UPDATE/DELETE; `EXPLAIN ANALYZE FORMAT=JSON` is ERROR 1235 by default.
 
+## Known decisions: PostgreSQL enums (doc 26)
+
+- Owner decisions 2026-10-15: an enum param/column maps to a generated
+  named string type + one constant per label, declared once per package
+  in `enums.gen.go` (D1); labels without distinct Go identifiers ⇒ type
+  without constants + SQLETCH320 WARNING (D2); NO `Valid()` — the
+  server (22P02) owns the value set, and `ADD VALUE` must work without
+  regenerating (D3); arrays of enums (so PG `@in` on enums), domains,
+  composites, enum `@param` hints stay SQLETCH311 (D5); same `typname`
+  in two schemas = SQLETCH310 (D6).
+- The oracle, not the catalog, carries the facts: `TypeRef.Ext`
+  (schema, `typtype`, labels in `enumsortorder`) is set for EVERY
+  user-defined OID (>= 16384) and no built-in — keyed on the OID range,
+  never on TypeMap membership, so cold Describe bytes don't depend on
+  the static table. Entry fields are omitempty: built-in-only entries
+  (all MySQL/SQLite) are byte-identical to before.
+- D4: an entry with a user-defined OID but no kind predates doc 26 and
+  is a MISS (`postgres.StaleEntry` via `cli.loadOracleEntry`, the one
+  committed oracle read for pipeline.Run AND the OfflineChecker) — never
+  a FormatVersion bump, never a hit misread as SQLETCH311.
+- Codegen resolves types ONLY through `queryGen.resolveType` (static
+  TypeMap, then enum); never call `tm.GoType` directly at a new site.
+  Enum names are claimed package-wide in `checkEnumNames`, including
+  against @choose/@order-by constants (`pkgConsts`).
+- Driver boundary pinned (`TestPgEnumDriverBoundary`): pgx falls back to
+  the Go value's codec for an unregistered enum OID, through the
+  underlying type of `type T string`.
+
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 
 - `EXPLAIN (GENERIC_PLAN)` requires PostgreSQL 16+.

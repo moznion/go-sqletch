@@ -100,6 +100,8 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	typeNames := map[string]string{}        // generated type name -> query
 	fileStems := map[string]string{}        // generated file stem -> query
 	policyTypes := map[string]*policyType{} // named type -> policy parameter
+	enums := map[string]*enumType{}         // Go type name -> enum (design 26)
+	pkgConsts := map[string]string{}        // @choose/@order-by constant -> query
 	var querier []string
 	var shapeSpaces []string // rendered ShapeSpace entries, in query order
 	sigImports := map[string]bool{}
@@ -120,7 +122,7 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 	}
 
 	for _, in := range sorted {
-		g := &queryGen{in: in, tm: tm, pkg: opts.Package, caps: caps, style: opts.Style,
+		g := &queryGen{in: in, tm: tm, enums: enums, pkgConsts: pkgConsts, pkg: opts.Package, caps: caps, style: opts.Style,
 			defTimeout: opts.DefaultTimeout, sigImports: map[string]bool{}}
 		src, sig, ds := g.emit(typeNames, policyTypes)
 		for imp := range g.sigImports {
@@ -158,6 +160,9 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		}
 	}
 
+	enumConsts, enumDiags := checkEnumNames(enums, typeNames, policyTypes, pkgConsts)
+	diags = append(diags, enumDiags...)
+
 	if !diagnostics.HasErrors(diags) {
 		// hookTree is only emitted for packages that actually have a
 		// @filter-tree query; emitting it always would leave an unused
@@ -178,6 +183,9 @@ func Generate(opts Options, tm dialect.TypeMap, queries []QueryInput) (map[strin
 		files["querier.gen.go"] = []byte(querierFile(opts.Package, querier, sigImports))
 		if len(policyTypes) > 0 {
 			files["policy.gen.go"] = []byte(policyFile(opts.Package, policyTypes))
+		}
+		if len(enums) > 0 {
+			files["enums.gen.go"] = []byte(enumsFile(opts.Package, enums, enumConsts))
 		}
 	}
 
@@ -231,6 +239,13 @@ type queryGen struct {
 	sigImports map[string]bool
 	in         QueryInput
 	tm         dialect.TypeMap
+	// enums is the package's enum set (design 26), shared by every
+	// query; resolveType registers into it.
+	enums map[string]*enumType
+	// pkgConsts records the package-level constants the query declares
+	// (@choose / @order-by keys) -> query, so enum constants can be
+	// checked against them.
+	pkgConsts  map[string]string
 	pkg        string
 	caps       runtime.TreeCaps
 	defTimeout time.Duration
@@ -341,7 +356,11 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		tr, ok := g.in.ParamTypes[name]
 		switch {
 		case ok:
-			goType, tok := g.tm.GoType(tr.OID)
+			goType, tok, eds := g.resolveType(tr)
+			diags = append(diags, eds...)
+			if len(eds) > 0 {
+				continue
+			}
 			if !tok {
 				fail(diagnostics.CodeUnsupportedType, paramSpanOf(q, name),
 					"no Go mapping for type %s (oid %d) of parameter %q; add an explicit cast to a supported type", tr.Name, tr.OID, name)
@@ -522,7 +541,11 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		claimType(rowName)
 		colNames := map[string]string{}
 		for i, col := range g.in.Columns {
-			goType, ok := g.tm.GoType(col.Type.OID)
+			goType, ok, eds := g.resolveType(col.Type)
+			diags = append(diags, eds...)
+			if len(eds) > 0 {
+				continue
+			}
 			if !ok {
 				fail(diagnostics.CodeUnsupportedType, q.HeaderSpan,
 					"no Go mapping for type %s (oid %d) of result column %q; add an explicit cast to a supported type",
@@ -598,6 +621,10 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		}
 		for _, cs := range cm.c.Cases {
 			fmt.Fprintf(w, "\t%s%s\n", cm.enumName, GoName(cs.Name))
+			g.pkgConsts[cm.enumName+GoName(cs.Name)] = q.Name
+		}
+		if cm.c.Default != nil {
+			g.pkgConsts[cm.enumName+"Default"] = q.Name
 		}
 		fmt.Fprint(w, ")\n\n")
 	}
@@ -607,6 +634,8 @@ func (g *queryGen) emit(typeNames map[string]string, policyTypes map[string]*pol
 		for i, k := range om.o.Keys {
 			fmt.Fprintf(w, "\t%s%sAsc %s = %d\n", prefix, GoName(k.Name), om.typeName, i*2)
 			fmt.Fprintf(w, "\t%s%sDesc %s = %d\n", prefix, GoName(k.Name), om.typeName, i*2+1)
+			g.pkgConsts[prefix+GoName(k.Name)+"Asc"] = q.Name
+			g.pkgConsts[prefix+GoName(k.Name)+"Desc"] = q.Name
 		}
 		fmt.Fprint(w, ")\n\n")
 	}
@@ -835,7 +864,12 @@ func (g *queryGen) writeFilterConstructors(w *strings.Builder, filter *template.
 				ok = false
 				continue
 			}
-			goType, tok := g.tm.GoType(tr.OID)
+			goType, tok, eds := g.resolveType(tr)
+			*diags = append(*diags, eds...)
+			if len(eds) > 0 {
+				ok = false
+				continue
+			}
 			if !tok {
 				*diags = append(*diags, diagnostics.Errorf(diagnostics.CodeUnsupportedType, pr.Span,
 					"no Go mapping for type %s (oid %d) of predicate parameter %q", tr.Name, tr.OID, name))

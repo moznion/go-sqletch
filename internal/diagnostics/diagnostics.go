@@ -195,6 +195,11 @@ const (
 	// CodeBadDefaultTimeout: query_timeout.default is not a positive Go
 	// duration (docs/design/23-query-timeout.md).
 	CodeBadDefaultTimeout Code = "SQLETCH318"
+
+	// CodeEnumLabelIdent (warning): a database enum's labels do not map
+	// to distinct Go identifiers, so its generated type carries no
+	// constants (docs/design/26-postgres-enum-types.md D2).
+	CodeEnumLabelIdent Code = "SQLETCH320"
 )
 
 type Diagnostic struct {

@@ -13,7 +13,8 @@ import (
 
 type ListAuditLogsParams struct {
 	TenantID int64
-	AfterID  sqletch.Omittable[int64] // zero value omits the guarded fragment(s)
+	AfterID  sqletch.Omittable[int64]         // zero value omits the guarded fragment(s)
+	Severity sqletch.Omittable[AuditSeverity] // zero value omits the guarded fragment(s)
 	Limit    int64
 }
 
@@ -21,13 +22,16 @@ type ListAuditLogsRow struct {
 	ID        int64
 	ActorID   optional.Option[int64]
 	Action    string
+	Severity  AuditSeverity
 	CreatedAt time.Time
 }
 
 var listAuditLogsFrags = []runtime.Frag{
-	{Kind: runtime.Skel, Text: "\nSELECT a.id, a.actor_id, a.action, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = :tenant_id\n\n", ParamSpans: []runtime.Span{{Start: 90, End: 100}}, ParamIdx: []int16{0}},
+	{Kind: runtime.Skel, Text: "\nSELECT a.id, a.actor_id, a.action, a.severity, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = :tenant_id\n\n", ParamSpans: []runtime.Span{{Start: 102, End: 112}}, ParamIdx: []int16{0}},
 	{Kind: runtime.Guarded, GuardMask: 0x1, Sep: runtime.SepAnd, Text: "a.id < :after_id", ParamSpans: []runtime.Span{{Start: 7, End: 16}}, ParamIdx: []int16{1}},
-	{Kind: runtime.Skel, Text: "\n\nORDER BY a.id DESC\nLIMIT :limit;\n\n", ParamSpans: []runtime.Span{{Start: 27, End: 33}}, ParamIdx: []int16{2}},
+	{Kind: runtime.Skel, Text: "\n\n"},
+	{Kind: runtime.Guarded, GuardMask: 0x2, Sep: runtime.SepAnd, Text: "a.severity = :severity", ParamSpans: []runtime.Span{{Start: 13, End: 22}}, ParamIdx: []int16{2}},
+	{Kind: runtime.Skel, Text: "\n\nORDER BY a.id DESC\nLIMIT :limit;\n\n", ParamSpans: []runtime.Span{{Start: 27, End: 33}}, ParamIdx: []int16{3}},
 }
 
 func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
@@ -35,8 +39,11 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	if arg.AfterID.IsPresent() {
 		key.Guards |= 1 << 0
 	}
+	if arg.Severity.IsPresent() {
+		key.Guards |= 1 << 1
+	}
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Limit})
+	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Severity.Ptr(), arg.Limit})
 	q.hook(key, sqlText)
 	var execStart time.Time
 	if q.obs.Load() != nil {
@@ -52,7 +59,7 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 	for rows.Next() {
 		var i ListAuditLogsRow
 		var nul0 *int64
-		if err := rows.Scan(&i.ID, &nul0, &i.Action, &i.CreatedAt); err != nil {
+		if err := rows.Scan(&i.ID, &nul0, &i.Action, &i.Severity, &i.CreatedAt); err != nil {
 			q.observeExec(ctx, "ListAuditLogs", key, execStart, -1, err)
 			return nil, err
 		}
@@ -71,7 +78,10 @@ func (q *Queries) ExplainListAuditLogs(ctx context.Context, arg ListAuditLogsPar
 	if arg.AfterID.IsPresent() {
 		key.Guards |= 1 << 0
 	}
+	if arg.Severity.IsPresent() {
+		key.Guards |= 1 << 1
+	}
 	sqlText, argIdx := q.cache.Get("ListAuditLogs", listAuditLogsFrags, key)
-	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Limit})
+	args := runtime.BuildArgs(argIdx, []any{arg.TenantID, arg.AfterID.Ptr(), arg.Severity.Ptr(), arg.Limit})
 	return q.explain(ctx, "ListAuditLogs", key.String(), opts, sqlText, args)
 }

@@ -373,7 +373,7 @@ func (c *OfflineChecker) Check(overlay map[string][]byte) (WorkspaceCheck, error
 				if wq == nil {
 					wq = q
 				}
-				descs, hit := loadDescs(store, fp, fileTarget[p].slug, q.Name, rs)
+				descs, hit := loadDescs(c.drv, store, fp, fileTarget[p].slug, q.Name, rs)
 				if !hit {
 					continue
 				}
@@ -494,10 +494,10 @@ func (c *OfflineChecker) loadCatalog() (*cache.Catalog, *cache.Store, string, bo
 
 // loadDescs resolves every rendering through the committed oracle
 // cache; a single miss fails the whole query (all-or-nothing).
-func loadDescs(store *cache.Store, fp, slug, query string, rs []ast.Rendering) ([]dialect.Desc, bool) {
+func loadDescs(drv driver, store *cache.Store, fp, slug, query string, rs []ast.Rendering) ([]dialect.Desc, bool) {
 	descs := make([]dialect.Desc, len(rs))
 	for i, r := range rs {
-		e, ok := store.LoadOracle(oracleRef(slug, query, r), fp, r.SQL)
+		e, ok := loadOracleEntry(drv, store, oracleRef(slug, query, r), fp, r.SQL)
 		if !ok {
 			return nil, false
 		}

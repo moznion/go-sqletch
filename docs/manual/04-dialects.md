@@ -26,6 +26,16 @@ compiler for free, and the generated driver flavor.
   sqlc-generated code — satisfies it.
 - `numeric` maps to `float64` (documented lossy choice); cast in SQL
   for exact decimals.
+- Enums (`CREATE TYPE … AS ENUM`) bind and scan with no cast: each
+  enum a package uses becomes a named string type in `enums.gen.go`,
+  with one constant per label (`AuditSeverityWarning AuditSeverity =
+  "warning"`). Nullable and guarded positions wrap it as usual
+  (`optional.Option[AuditSeverity]`, `sqletch.Omittable[…]`). The type
+  does not close the value set: the server rejects an unknown label at
+  execution time (SQLSTATE 22P02), and a label added later with
+  `ALTER TYPE … ADD VALUE` works without regenerating. Arrays of
+  enums (including `@in` on an enum column), domains, and composite
+  types are not mapped (SQLETCH311).
 - When the oracle cannot type a parameter (SQLETCH201), add a cast:
   `:v::text`.
 

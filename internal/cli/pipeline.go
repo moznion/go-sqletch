@@ -233,7 +233,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	for _, cq := range queries {
 		cq.descs = make([]dialect.Desc, len(cq.rs))
 		for i, r := range cq.rs {
-			if e, ok := store.LoadOracle(oracleRef(cq.slug, cq.q.Name, r), fp, r.SQL); ok {
+			if e, ok := loadOracleEntry(drv, store, oracleRef(cq.slug, cq.q.Name, r), fp, r.SQL); ok {
 				cq.descs[i] = dialect.DescFromEntry(e)
 				res.OracleHits++
 			} else {

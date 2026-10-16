@@ -1,7 +1,7 @@
 {
   "format": 2,
-  "schema_fp": "3d824e75c151bae39b2e1c3954c5750921df372a25b1bffc176511d77d13498f",
-  "rendered_sql": "\nSELECT a.id, a.actor_id, a.action, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = $1\n\n\nAND (a.id \u003c $2)\n\nORDER BY a.id DESC\nLIMIT $3;\n\n",
+  "schema_fp": "dc4c6e0c460fe97b58bfbfbed47598bf248e0adb1090e4e2d4e648ee3d092ede",
+  "rendered_sql": "\nSELECT a.id, a.actor_id, a.action, a.severity, a.created_at\nFROM audit_logs AS a\nWHERE a.tenant_id = $1\n\n\nAND (a.id \u003c $2)\n\n\nAND (a.severity = $3)\n\nORDER BY a.id DESC\nLIMIT $4;\n\n",
   "params": [
     {
       "oid": 20,
@@ -10,6 +10,17 @@
     {
       "oid": 20,
       "name": "int8"
+    },
+    {
+      "oid": 16403,
+      "name": "audit_severity",
+      "schema": "public",
+      "kind": "e",
+      "labels": [
+        "info",
+        "warning",
+        "critical"
+      ]
     },
     {
       "oid": 20,
@@ -21,29 +32,43 @@
       "name": "id",
       "oid": 20,
       "type_name": "int8",
-      "src_rel": 16403,
+      "src_rel": 16410,
       "src_att": 1
     },
     {
       "name": "actor_id",
       "oid": 20,
       "type_name": "int8",
-      "src_rel": 16403,
+      "src_rel": 16410,
       "src_att": 3
     },
     {
       "name": "action",
       "oid": 25,
       "type_name": "text",
-      "src_rel": 16403,
+      "src_rel": 16410,
       "src_att": 4
+    },
+    {
+      "name": "severity",
+      "oid": 16403,
+      "type_name": "audit_severity",
+      "type_schema": "public",
+      "type_kind": "e",
+      "type_labels": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "src_rel": 16410,
+      "src_att": 5
     },
     {
       "name": "created_at",
       "oid": 1184,
       "type_name": "timestamptz",
-      "src_rel": 16403,
-      "src_att": 5
+      "src_rel": 16410,
+      "src_att": 6
     }
   ]
 }
