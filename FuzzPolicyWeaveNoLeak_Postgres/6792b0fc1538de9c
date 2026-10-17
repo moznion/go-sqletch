@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("A21\x00\x007")

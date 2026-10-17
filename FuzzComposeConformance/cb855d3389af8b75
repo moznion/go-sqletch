@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:z :many\nFROM @if-present(a,b)@sc)(0@e(bifB@endifC")
