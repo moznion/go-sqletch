@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:y :many\nFROM.@if-present(x,cx)+*01@endifB")
