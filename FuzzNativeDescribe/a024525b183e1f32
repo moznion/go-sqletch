@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:ChAr\nSELECT('ǼͶɤѡ£νϨ\u061cܳƫ̉ƌŻ՜\u07ba˫߉θ¿ηӧǰЫҙ0\u05f5ڮߖɅԙ炲͓ӡЁ')x")

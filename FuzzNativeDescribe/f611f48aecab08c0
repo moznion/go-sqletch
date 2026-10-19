@@ -1,0 +1,2 @@
+go test fuzz v1
+string("UPDATE _𖹖𖹖𖹖𖹖𖹖\U00039596𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖𖹖 SET A=0")
