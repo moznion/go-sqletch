@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:ChAr(\r/\xaa)\nSELECT('0000000000000000000000000000000.00000000000000000000')x")
