@@ -45,7 +45,69 @@ var infixOperandKeywords = map[string]bool{
 	// `INTERVAL <qty> <unit>` and the `BINARY <expr>` cast both take an
 	// operand to their right (audit-18).
 	"INTERVAL": true, "BINARY": true,
+	// The second word of `IS [NOT] DISTINCT FROM <operand>` and PG
+	// `SIMILAR TO <operand>`: without them a bare keyword-column there
+	// (`end` on SQLite) would sit in operator position and could be read
+	// as a CASE-closing END (F14) or a clause terminator.
+	"FROM": true, "TO": true,
 }
+
+// caseNest tracks CASE … END nesting at a clause's own paren depth
+// (security finding F14). A CASE expression is ONE operand, exactly like
+// a parenthesized expression: an AND/OR inside its arms is not a
+// top-level conjunct boundary or disjunction, and a keyword inside it
+// never ends the clause. Without this, `WHERE CASE WHEN :mine THEN
+// o.tenant_id = :t AND o.active ELSE o.is_public END` yielded a
+// "top-level" segment `o.tenant_id = :t`, so the weaver skipped the
+// splice and Enforce credited a conjunct that scopes only one arm.
+//
+// Keyword spelling: CASE, WHEN, THEN and ELSE are reserved on all three
+// dialects (never a bare column); END is reserved on PostgreSQL but a
+// legal bare column on MySQL (non-reserved) and SQLite (ID fallback).
+// The END that closes a CASE always follows a complete value, i.e. it is
+// in OPERATOR position; an END in OPERAND position is therefore a column.
+// Callers feed only undotted identifiers (`o.end`/`o.case` are columns).
+//
+// Fail-closed: anything the counter cannot balance — an operator-position
+// END with no open CASE, an arm keyword outside a CASE, a construct item
+// inside a CASE, or a CASE still open when the clause ends — marks the
+// clause unreadable (clauseScan.lexOK = false): the weaver refuses
+// (SQLETCH125) and Enforce credits nothing (SQLETCH124). A mis-tracked
+// operand position can only leave a CASE open (→ unreadable) or close it
+// early, and an early close is caught by the real END / arm keywords that
+// must then follow at depth 0.
+type caseNest struct {
+	depth int
+	bad   bool
+}
+
+// ident consumes one undotted identifier at the clause's paren depth;
+// expectOperand is the operand-position state BEFORE the token.
+func (c *caseNest) ident(up string, expectOperand bool) {
+	switch up {
+	case "CASE":
+		c.depth++
+	case "END":
+		if expectOperand {
+			return // a bare column named `end` (MySQL/SQLite)
+		}
+		if c.depth == 0 {
+			c.bad = true
+			return
+		}
+		c.depth--
+	case "WHEN", "THEN", "ELSE":
+		if c.depth == 0 {
+			c.bad = true
+		}
+	}
+}
+
+// inCase reports whether the scan is inside an open CASE expression.
+func (c *caseNest) inCase() bool { return c.depth > 0 }
+
+// balanced reports whether the clause's CASE nesting was read cleanly.
+func (c *caseNest) balanced() bool { return !c.bad && c.depth == 0 }
 
 // afterOperand reports the operand-position state produced by consuming
 // tok, given the current state. It returns true when the NEXT depth-0
@@ -124,6 +186,9 @@ func looseOrOperator(tok dialect.Token, up string, dotted, pipesOr bool) bool {
 // MySQL's `||` — see looseOrOperator) is present (segment
 // matching would mis-model precedence, and an appended conjunct would
 // bind below the OR — the caller must wrap), and the clause's extent.
+// "Depth 0" means outside every parenthesis AND every CASE … END
+// (caseNest). lexOK is false when the clause could not be lexed or its
+// CASE nesting could not be balanced; such a clause credits nothing.
 type clauseScan struct {
 	segs  [][]string
 	hasOR bool
@@ -187,6 +252,9 @@ type exprScan struct {
 	expectOperand bool
 	// pipesOr: the dialect parses `||` as logical OR (dialect.PipesOr).
 	pipesOr bool
+	// cases tracks CASE … END nesting: inside a CASE nothing splits,
+	// flags OR, or ends the clause (F14).
+	cases caseNest
 }
 
 // newExprScan starts a WHERE expression (the WHERE keyword itself is
@@ -206,6 +274,9 @@ func newExprScan(profile dialect.LexerProfile) *exprScan {
 // collected.
 func (e *exprScan) step(tok dialect.Token, up string, abs int, depth0, dotted bool) bool {
 	if depth0 && tok.Kind == dialect.KindIdent && !dotted {
+		e.cases.ident(up, e.expectOperand)
+	}
+	if depth0 && tok.Kind == dialect.KindIdent && !dotted && !e.cases.inCase() {
 		// AND/OR are reserved in every dialect and can never be a
 		// bare column, so they are recognized regardless of the
 		// operand-position state. This makes a keyword-column
@@ -232,7 +303,7 @@ func (e *exprScan) step(tok dialect.Token, up string, abs int, depth0, dotted bo
 			return true
 		}
 	}
-	if depth0 && looseOrOperator(tok, up, dotted, e.pipesOr) {
+	if depth0 && !e.cases.inCase() && looseOrOperator(tok, up, dotted, e.pipesOr) {
 		e.col.cs.hasOR = true
 	}
 	e.expectOperand = afterOperand(tok, up, e.expectOperand)
@@ -244,6 +315,11 @@ func (e *exprScan) step(tok dialect.Token, up string, abs int, depth0, dotted bo
 // returns true when the item ends the clause (an ORDER BY/GROUP BY
 // replacement); a conjunct-slot construct is clause content.
 func (e *exprScan) construct(it template.Item) bool {
+	if e.cases.inCase() {
+		// A construct inside a CASE arm: the arm's extent is no longer
+		// lexically knowable — fail closed.
+		e.cases.bad = true
+	}
 	e.col.flush()
 	e.expectOperand = false
 	if whereBoundary(it) {
@@ -256,7 +332,11 @@ func (e *exprScan) construct(it template.Item) bool {
 // result flushes the pending segment and returns the scan.
 func (e *exprScan) result() clauseScan {
 	e.col.flush()
-	return e.col.cs
+	cs := e.col.cs
+	if !e.cases.balanced() {
+		cs.lexOK = false
+	}
+	return cs
 }
 
 // whereClause scans the query's WHERE clause: segments for the
@@ -439,9 +519,15 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	prevDot := false
 	expectOperand := false
 	pipesOr := dialect.PipesAreOr(profile)
+	// cases: CASE … END nesting inside the ON expression, as in exprScan
+	// (F14) — inside a CASE nothing splits, flags OR, or ends the ON.
+	var cases caseNest
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
+		if inOn && !cases.balanced() {
+			res.cs.lexOK = false
+		}
 		res.found = inOn
 		res.noOn = !inOn
 		if inOn {
@@ -551,6 +637,9 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 					}
 				}
 				if depth == 0 && inOn && !dotted {
+					cases.ident(up, expectOperand)
+				}
+				if depth == 0 && inOn && !dotted && !cases.inCase() {
 					// AND/OR are reserved in every dialect and never a bare
 					// column, so recognize them regardless of operand
 					// position — a keyword-column mis-classification can't
@@ -577,7 +666,7 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 				}
 			}
 			if inOn {
-				if depth == 0 && looseOrOperator(tok, up, dotted, pipesOr) {
+				if depth == 0 && !cases.inCase() && looseOrOperator(tok, up, dotted, pipesOr) {
 					col.cs.hasOR = true // XOR / MySQL `||` (security F2/F3)
 				}
 				expectOperand = afterOperand(tok, up, expectOperand)

@@ -902,6 +902,37 @@ only a redundant wrap. The MySQL lexer munches operator runs greedily
 pinned by execution in `FuzzPolicyWeaveNoLeak_MySQL`'s seeds
 (`mysqlLeakSeeds`) and the generator emits both operators on MySQL.
 
+### 11.8 "Depth 0" excludes CASE … END (security finding F14)
+
+A `CASE` expression is one operand, exactly like a parenthesized
+expression. The clause readers (`exprScan` for statement and branch
+WHERE clauses, `joinOn` for ON expressions) therefore track CASE
+nesting at the clause's paren depth (`caseNest`): inside a CASE no
+`AND` splits a segment, no `OR` sets the wrap flag, and no keyword ends
+the clause. Before this, `WHERE CASE WHEN :mine THEN o.owner_id = :uid
+AND o.tenant_id = :t AND o.active ELSE o.is_public END` yielded the
+"top-level" segment `o.tenant_id = :t`: the weaver skipped the splice
+and Enforce credited it, so `mine = false` read every tenant's public
+rows.
+
+- `CASE`/`WHEN`/`THEN`/`ELSE` are reserved on all three dialects. `END`
+  is a legal bare column on MySQL and SQLite, so an `END` closes a CASE
+  only in operator position (the closer always follows a complete
+  value); in operand position it is a column. Dotted names (`o.end`)
+  are never counted. `FROM`/`TO` (`IS DISTINCT FROM x`, `SIMILAR TO x`)
+  are operand-introducing so a bare `end` there stays an operand.
+- Fail-closed: an operator-position `END` with no open CASE, an arm
+  keyword outside a CASE, a construct inside a CASE arm, or a CASE
+  still open at clause end marks the clause unreadable
+  (`clauseScan.lexOK = false`). The weaver refuses with `SQLETCH125`
+  (WHERE and ON alike); Enforce credits nothing (`SQLETCH124`).
+- An OR inside a CASE arm no longer triggers the wrap — correct, since
+  the CASE binds as one operand; an OR after the CASE still does.
+- Pinned by `internal/policy/case_arm_conjunct_test.go` and the
+  `FuzzPolicyWeaveNoLeak_*` CASE-arm seed (the generator now emits a
+  hand-written scoping conjunct between two ANDs of one CASE arm, and
+  `end` is a quirk column on SQLite/MySQL).
+
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
 **Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy
