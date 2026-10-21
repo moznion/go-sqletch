@@ -277,8 +277,19 @@ func (t *tree) HasConflictUpdate() bool {
 		return false
 	}
 	// ON DUPLICATE KEY UPDATE populates OnDuplicate (a list of
-	// assignments); it modifies rows on a unique-key collision.
-	return len(ins.OnDuplicate) > 0
+	// assignments); it modifies rows on a unique-key collision. REPLACE
+	// (IsReplace, every form: VALUES, SET, SELECT) deletes the colliding
+	// row — whoever owns it — and inserts the new one: the existing row
+	// is replaced, so it is row-modifying too (security finding F10).
+	return ins.IsReplace || len(ins.OnDuplicate) > 0
+}
+
+// HasConflictDelete implements dialect.ConflictDeleter: REPLACE resolves
+// a unique-key collision by DELETING the existing row, so a policy
+// covering `delete` governs it as well (design 14 §5, F10).
+func (t *tree) HasConflictDelete() bool {
+	ins, ok := t.first().(*ast.InsertStmt)
+	return ok && ins.IsReplace
 }
 
 // ValueTargets reports design 20's direct value positions: VALUES items

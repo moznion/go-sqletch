@@ -239,6 +239,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   ordinary-parameter binding (D3a; the D3b ambient design is settled
   in doc 14 but unscheduled); empty guard set; hybrid span attribution
   (303 → config path, 124/125 → query).
+- Row-modifying conflict arms on a designated INSERT target are
+  refused (audit-12 M10): DO UPDATE / ON DUPLICATE KEY UPDATE when the
+  policy covers update; MySQL `REPLACE` (F10, deletes the colliding
+  row) when it covers update OR delete (optional
+  `dialect.ConflictDeleter`; `policy.conflictArm.governedBy` is the one
+  rule Weave and Enforce share).
 - Nullable-outer-join sides weave into THAT JOIN's ON clause (D2a
   refinement, second settlement 2026-08-02) — WHERE would inner-join
   them. USING/NATURAL joins on a nullable side stay SQLETCH125 (no ON

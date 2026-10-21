@@ -43,7 +43,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	kind := tree.Kind()
 	rels, nBranches := topRelations(tree)
 	deep := tree.DeepTables()
-	upsert := tree.HasConflictUpdate()
+	conflict := conflictArmOf(tree)
 	// Independently re-derive the non-maximal overread set (a designated
 	// read living only in a non-first @choose alternative or @order-by
 	// @default). A correct weaver refuses these at weave time (SQLETCH125,
@@ -53,7 +53,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	over, overNested := overreadDeep(profile, fe, q, deep)
 	nested := append(tree.NestedDML(), overNested...)
 	applies := func(p *Policy) bool {
-		return analyzeApplicability(p, kind, rels, deep, upsert, nested).active || len(designatedOverread(p, over, kind)) > 0
+		return analyzeApplicability(p, kind, rels, deep, conflict, nested).active || len(designatedOverread(p, over, kind)) > 0
 	}
 
 	byName := map[string]*Policy{}
@@ -131,7 +131,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
-		a := analyzeApplicability(p, kind, rels, deep, upsert, nested)
+		a := analyzeApplicability(p, kind, rels, deep, conflict, nested)
 		if _, ok := optOutFor(q, p.Name); ok {
 			continue
 		}
@@ -162,12 +162,13 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 			// an INSERT … ON CONFLICT DO UPDATE on a designated target
 			// should have been REFUSED at weave time (SQLETCH125). If it
 			// reached here it ships an unscoped row-modifying arm, so report
-			// it (SQLETCH124) rather than silently pass.
-			if upsert && len(a.topOcc) > 0 && p.appliesTo(dialect.StmtUpdate) {
+			// it (SQLETCH124) rather than silently pass. MySQL REPLACE
+			// (F10) follows the same rule via conflictArm.governedBy.
+			if len(a.topOcc) > 0 && conflict.governedBy(p) {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
-					"query upserts into policy-designated table %q via ON CONFLICT DO UPDATE, which policy %q cannot scope",
-					a.topOcc[0].Table, p.Name).
-					WithHint("an upsert's DO UPDATE arm modifies rows but cannot carry a scoping conjunct; restructure or opt out with `-- @policy-optout: %s (reason)`", p.Name))
+					"query writes policy-designated table %q via an %s, which policy %q cannot scope",
+					a.topOcc[0].Table, conflict.construct(), p.Name).
+					WithHint("a conflict arm that modifies an existing row cannot carry a scoping conjunct; restructure or opt out with `-- @policy-optout: %s (reason)`", p.Name))
 			}
 			continue
 		}
