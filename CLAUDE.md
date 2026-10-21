@@ -35,6 +35,7 @@ go run ./cmd/sqletch generate --config examples/postgres/sqletch.yaml
 go test ./internal/template -run '^$' -fuzz=FuzzScan -fuzztime=15s
 go test ./internal/codegen  -run '^$' -fuzz=FuzzComposeConformance -fuzztime=15s
 go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=15s
+go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzLexerVsPgScan -fuzztime=15s
 go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=15s
 go test ./internal/pathpat -run '^$' -fuzz=FuzzPattern -fuzztime=15s
 go test ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_SQLite -fuzztime=15s
@@ -42,9 +43,9 @@ go test -tags devdb ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_Postgre
 go test -tags devdb ./internal/cli -run '^$' -fuzz=FuzzPolicyWeaveNoLeak_MySQL -fuzztime=60s -parallel=4
 ```
 
-The six plain fuzz targets run in CI for 30s per PR (smoke, empty
+The seven plain fuzz targets run in CI for 30s per PR (smoke, empty
 corpus). `.github/workflows/fuzz-nightly.yml` is the depth half: all
-eight targets (server dialects included) for 10m each, nightly and on
+nine targets (server dialects included) for 10m each, nightly and on
 demand, with each target's corpus committed to the orphan branch
 `fuzz-corpus` (one directory per target, Go fuzz-cache format; restored
 via `-test.fuzzcachedir`), so coverage compounds and never expires. Only

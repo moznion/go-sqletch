@@ -44,6 +44,15 @@ The profile is intentionally *not* a full SQL lexer: it only needs to
 be correct about token *boundaries* (so constructs, params, and clause
 keywords are never found inside strings/comments/identifiers).
 
+Where a literal, comment, or whitespace starts and ends must match
+PostgreSQL's `scan.l` byte for byte, because the lexical policy
+scanners read everything outside them as SQL (F16): dollar-quote tags
+use `dolq_start [A-Za-z\200-\377_]` / `dolq_cont` (so `$é$…$é$` is one
+string), whitespace is `[ \t\n\r\f\v]`, and an `E'…'` string absorbs
+its quote continuations (`E'a'<newline>'\''` is one literal whose
+continued segments keep backslash escapes). `FuzzLexerVsPgScan`
+checks these classes against `pg_query.Scan`.
+
 **Line comments end where the dialect's engine ends them** (security
 audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and
 pg_query, which shares it) ends a `--` comment at `\n` **or** `\r`

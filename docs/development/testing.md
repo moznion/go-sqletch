@@ -228,7 +228,8 @@ and template DoS is a known limitation).
 
 1. Every scanner/parser of authored text (`FuzzScan`, `FuzzPattern`).
 2. Every differential invariant between two implementations
-   (`FuzzComposeConformance`: runtime composer vs reference renderer).
+   (`FuzzComposeConformance`: runtime composer vs reference renderer;
+   `FuzzLexerVsPgScan`: PostgreSQL lexer profile vs `pg_query.Scan`).
 3. Hand-written readers over a third-party AST, against an independent
    reading of the same AST (`FuzzProvenanceFlags`: facade vs protobuf
    reflection).
@@ -261,8 +262,8 @@ files) SHOULD have robustness targets.
 
 | Lane | Targets | Budget | Corpus |
 |---|---|---|---|
-| PR smoke (`ci.yml`) | the six plain targets | 30 s each | empty every run |
-| Nightly (`fuzz-nightly.yml`) | all eight, server dialects included | 10 min each (dispatchable) | committed to the `fuzz-corpus` branch, compounding |
+| PR smoke (`ci.yml`) | the seven plain targets | 30 s each | empty every run |
+| Nightly (`fuzz-nightly.yml`) | all nine, server dialects included | 10 min each (dispatchable) | committed to the `fuzz-corpus` branch, compounding |
 | Seeds in `go test` | every target | — | `f.Add` + `testdata/fuzz/` |
 
 A nightly crasher fails the run and is uploaded as an artifact; it is

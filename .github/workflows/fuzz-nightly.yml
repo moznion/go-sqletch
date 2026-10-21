@@ -50,6 +50,7 @@ jobs:
           - { pkg: ./internal/template, target: FuzzScan }
           - { pkg: ./internal/codegen, target: FuzzComposeConformance }
           - { pkg: ./internal/dialect/postgres, target: FuzzProvenanceFlags }
+          - { pkg: ./internal/dialect/postgres, target: FuzzLexerVsPgScan }
           - { pkg: ./internal/dialect/mysql, target: FuzzNativeDescribe }
           - { pkg: ./internal/pathpat, target: FuzzPattern }
           - { pkg: ./internal/cli, target: FuzzPolicyWeaveNoLeak_SQLite }

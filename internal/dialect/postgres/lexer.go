@@ -3,6 +3,8 @@
 package postgres
 
 import (
+	"bytes"
+
 	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
@@ -16,7 +18,12 @@ var (
 // PlaceholderStyle declares PostgreSQL's numbered-with-reuse binding.
 func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.PlaceholderDollar }
 
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+// isSpace is scan.l's {space} class, [ \t\n\r\f\v] (scansup.c's
+// scanner_isspace must match it): form feed and vertical tab separate
+// tokens exactly like a blank.
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
+}
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80
@@ -88,7 +95,7 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		return mk(dialect.KindString, end)
 
 	case (c == 'e' || c == 'E') && pos+1 < len(src) && src[pos+1] == '\'':
-		end, err := lexQuoted(src, pos+2, '\'', true)
+		end, err := lexEString(src, pos)
 		if err != nil {
 			return dialect.Token{}, err
 		}
@@ -208,31 +215,63 @@ func lexQuoted(src []byte, i int, q byte, backslashEsc bool) (int, error) {
 	return 0, &dialect.LexError{Pos: start - 1, Msg: "unterminated quoted token"}
 }
 
+// lexEString lexes an E'…' string starting at pos (the E) including
+// its quote continuations: scan.l joins `'…'<whitespace with a
+// newline>'…'` into ONE literal, and the continued segments keep the
+// first segment's escape mode. Lexing a continuation as a plain '…'
+// string would end it at a backslash-escaped quote PostgreSQL reads as
+// literal text (E'a' <newline> '\' AND p AND \' plus a closing quote is
+// one string to the server), exposing its body to the lexical policy
+// scanners (F16). Plain
+// strings need no join: a continued plain segment lexes identically as
+// its own token. The server also accepts `--` comments inside the
+// separator, but pg_query (the frontend every query is parsed with)
+// does not: it sees two adjacent literals, a syntax error, so that
+// form never reaches the server.
+func lexEString(src []byte, pos int) (int, error) {
+	end, err := lexQuoted(src, pos+2, '\'', true)
+	for err == nil {
+		j, newline := end, false
+		for j < len(src) && isSpace(src[j]) {
+			newline = newline || src[j] == '\n' || src[j] == '\r'
+			j++
+		}
+		if !newline || j >= len(src) || src[j] != '\'' {
+			break
+		}
+		end, err = lexQuoted(src, j+1, '\'', true)
+	}
+	return end, err
+}
+
+// Dollar-quote tag classes, exactly scan.l's
+// dolq_start [A-Za-z\200-\377_] and dolq_cont [A-Za-z\200-\377_0-9]:
+// any byte >= 0x80 is a tag byte, so $é$…$é$ is ONE string literal to
+// PostgreSQL and must be one here; otherwise predicate-shaped text in
+// its body is exposed to the lexical policy scanners (F16).
+func isDolqStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80
+}
+func isDolqCont(c byte) bool { return isDolqStart(c) || isDigit(c) }
+
 // lexDollarQuote reports whether src[pos:] starts a dollar-quoted
 // string ($$ or $tag$). Returns (end, true) on a dollar quote; end is
-// -1 if unterminated. Returns (0, false) if not a dollar quote.
+// -1 if unterminated. Returns (0, false) if not a dollar quote. A tag
+// never starts with a digit ($1 is a positional parameter).
 func lexDollarQuote(src []byte, pos int) (int, bool) {
 	i := pos + 1
-	for i < len(src) && (src[i] == '_' || isDigit(src[i]) ||
-		(src[i] >= 'a' && src[i] <= 'z') || (src[i] >= 'A' && src[i] <= 'Z')) {
-		// tag may not start with a digit per PG, but for boundary
-		// purposes accepting it is harmless: $1$ is not matched below
-		// because we require the closing '$' here AND digits alone are
-		// handled by the caller before… so exclude digit-leading tags:
-		if i == pos+1 && isDigit(src[i]) {
-			return 0, false
-		}
+	if i < len(src) && isDolqStart(src[i]) {
 		i++
+		for i < len(src) && isDolqCont(src[i]) {
+			i++
+		}
 	}
 	if i >= len(src) || src[i] != '$' {
 		return 0, false
 	}
-	tag := string(src[pos : i+1]) // "$tag$" or "$$"
-	body := i + 1
-	for j := body; j+len(tag) <= len(src); j++ {
-		if string(src[j:j+len(tag)]) == tag {
-			return j + len(tag), true
-		}
+	tag := src[pos : i+1] // "$tag$" or "$$"
+	if j := bytes.Index(src[i+1:], tag); j >= 0 {
+		return i + 1 + j + len(tag), true
 	}
 	return -1, true
 }
