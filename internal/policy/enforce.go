@@ -162,14 +162,26 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 			// an INSERT … ON CONFLICT DO UPDATE on a designated target
 			// should have been REFUSED at weave time (SQLETCH125). If it
 			// reached here it ships an unscoped row-modifying arm, so report
-			// it (SQLETCH124) rather than silently pass. MySQL REPLACE
-			// (F10) follows the same rule via conflictArm.governedBy.
+			// it (SQLETCH124) rather than silently pass. MySQL REPLACE (F10)
+			// and SQLite REPLACE (F17) follow the same rule via
+			// conflictArm.governedBy.
 			if len(a.topOcc) > 0 && conflict.governedBy(p) {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
 					"query writes policy-designated table %q via an %s, which policy %q cannot scope",
 					a.topOcc[0].Table, conflict.construct(), p.Name).
 					WithHint("a conflict arm that modifies an existing row cannot carry a scoping conjunct; restructure or opt out with `-- @policy-optout: %s (reason)`", p.Name))
 			}
+			continue
+		}
+		if tgt, ok := updateConflictTarget(p, kind, rels, conflict); ok {
+			// Weaver-regression backstop for SQLite UPDATE OR REPLACE
+			// (F17): even a present scoping conjunct scopes only the rows
+			// the UPDATE selects, never the colliding row the REPLACE
+			// deletes, so conjunct presence must not credit it.
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+				"query updates policy-designated table %q via UPDATE OR REPLACE, whose conflict handling deletes rows policy %q cannot scope",
+				tgt.Table, p.Name).
+				WithHint("UPDATE OR REPLACE deletes whichever row the new values collide with; use a plain UPDATE (or OR ABORT/FAIL/IGNORE/ROLLBACK), or opt out with `-- @policy-optout: %s (reason)`", p.Name))
 			continue
 		}
 		if !a.active || a.hidden {

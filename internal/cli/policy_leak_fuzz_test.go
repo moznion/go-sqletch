@@ -62,6 +62,10 @@ type leakDialect struct {
 	updateFrom    bool
 	deleteUsing   bool
 	multiTableDML bool
+	// orReplace enables SQLite's REPLACE conflict algorithm (INSERT OR
+	// REPLACE, UPDATE OR REPLACE): it deletes whichever row collides on
+	// the PRIMARY KEY, another tenant's included (F17).
+	orReplace bool
 	// tableSuffix renames orders/acc (orders_<suffix>, …) where a
 	// fuzz worker process cannot get a schema of its own (MySQL test
 	// users cannot CREATE DATABASE).
@@ -411,6 +415,20 @@ func (g *leakGen) generate() leakCase {
 		case g.d.multiTableDML && g.pick(2) == 0:
 			rels := []rel{{"o", true}, {"a", false}}
 			s = "UPDATE acc AS a JOIN orders AS o ON o.acc_id = a.id SET o.v = 9" + g.where(rels)
+		case g.d.orReplace && g.pick(3) == 0:
+			// Tenant 1 owns ids 1..18 and tenant 2 ids 19..36 (leakData):
+			// shifting a tenant-1 id by 18, or inserting id 19, collides
+			// with a tenant-2 row, which the REPLACE algorithm deletes
+			// however the statement's WHERE is scoped (F17).
+			rels := []rel{{"orders", true}}
+			switch g.pick(3) {
+			case 0:
+				s = "UPDATE OR REPLACE orders SET id = id + 18" + g.where(rels)
+			case 1:
+				s = "INSERT OR REPLACE INTO orders (id, tenant_id, secret) VALUES (19, 1, 'T1')"
+			default:
+				s = "REPLACE INTO orders (id, tenant_id, secret) VALUES (19, 1, 'T1')"
+			}
 		default:
 			rels := []rel{{"orders", true}}
 			s = "UPDATE orders SET v = 9" + g.where(rels)
@@ -586,6 +604,7 @@ var sqliteLeakDialect = leakDialect{
 	paramType:  "integer",
 	quirkCols:  []string{"offset", "window", "fetch", "end"},
 	updateFrom: true,
+	orReplace:  true,
 }
 
 type sqliteLeakEngine struct{ conn *sqlite3.Conn }
@@ -663,6 +682,9 @@ func leakSeeds() [][]byte {
 		{0, 9, 1, 0, 0},             // set operation
 		{0, 0, 0, 1, 2, 0, 0, 3},    // bare quirk column before OR
 		{0, 0, 12, 1},               // nested join: null-extended from outside
+		{0, 7, 1, 0, 0, 0, 1},       // SQLite UPDATE OR REPLACE, woven WHERE only (F17)
+		{0, 7, 1, 0, 1},             // SQLite INSERT OR REPLACE (F17)
+		{0, 7, 1, 0, 2},             // SQLite REPLACE INTO (F17)
 		// F11/F12: `-- note<CR>` before WHERE (expression / anchor with a
 		// guarded conjunct) and before the ORDER BY / LIMIT tail.
 		{0xF2, 0, 0, 1, 2, 0, 0},

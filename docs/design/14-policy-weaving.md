@@ -565,8 +565,30 @@ shared by Weave and Enforce). Each arm answers only to its own kind: a
 delete-only policy still leaves `ON DUPLICATE KEY UPDATE` /
 `DO UPDATE` alone (they never delete), and a select-only policy governs
 neither. `INSERT IGNORE` touches no existing row and stays a
-non-target. SQLite's `REPLACE` / `INSERT OR REPLACE` is handled
-separately (F17).
+non-target. SQLite's `REPLACE` algorithm is handled the same way
+(F17, next paragraph).
+
+*SQLite `REPLACE` algorithm (security finding F17).* `INSERT OR
+REPLACE`, `REPLACE INTO` (rqlite `InsertOrReplace` / `Replace`) and
+`UPDATE OR REPLACE` (`UpdateOrReplace`) resolve a UNIQUE/PRIMARY KEY
+collision by DELETING the existing row — whoever owns it: with a
+request-supplied key, one tenant replaces another's row, and an
+`UPDATE OR REPLACE` whose `WHERE` is tenant-scoped still deletes the
+OTHER tenant's row its new values collide with. The SQLite facade
+reports all three through `HasConflictUpdate()` and the optional
+`dialect.ConflictDeleter` capability (`HasConflictDelete()`); the
+refusal (weave `SQLETCH125`, Enforce `SQLETCH124`) fires when the
+policy covers `update` **or** `delete` (`policy.conflictArm.governedBy`,
+shared by Weave and Enforce) and the statement's TARGET is designated.
+For `UPDATE OR REPLACE` this refusal precedes weaving, and Enforce does
+not credit a present scoping conjunct: the conjunct scopes the selected
+rows, never the deleted one. Each arm answers only to its own kind: a
+delete-only policy still leaves `DO UPDATE` alone (it never deletes),
+and a select-only policy governs neither. `OR IGNORE`/`ABORT`/`FAIL`/
+`ROLLBACK` touch no existing row: such INSERTs stay non-targets, such
+UPDATEs are woven normally. Not covered: a table-level
+`… ON CONFLICT REPLACE` constraint clause in the DDL makes a PLAIN
+INSERT/UPDATE replace; that is a schema property no statement shows.
 
 ## 6. Enforcement
 

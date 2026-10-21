@@ -1199,8 +1199,10 @@ policies:
   cannot carry a scoping conjunct, so it is likewise rejected
   (`SQLETCH125`) when the policy covers `update` (owner decision
   2026-08-21); `DO NOTHING` modifies nothing and stays a non-target.
-  MySQL `REPLACE` deletes the colliding row before inserting, so it is
-  rejected likewise when the policy covers `update` or `delete`.
+  MySQL `REPLACE` and SQLite's `REPLACE` algorithm (`INSERT OR
+  REPLACE`, `REPLACE INTO`, `UPDATE OR REPLACE`) delete the colliding
+  row — another tenant's included, whatever the statement's `WHERE` — so
+  they are rejected likewise when the policy covers `update` or `delete`.
   Opt out or restructure.
 
 ## Weaving semantics
