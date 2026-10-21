@@ -87,10 +87,41 @@ func afterOperand(tok dialect.Token, up string, cur bool) bool {
 	return cur
 }
 
+// looseOrOperator reports whether a depth-0 token is a boolean operator
+// other than OR that binds at OR's level — LOOSER than AND — so an
+// appended ` AND conj` would bind below it exactly as below an OR
+// (security F2/F3: `WHERE a XOR b` woven unwrapped became
+// `((tenant) AND a) XOR b`, a cross-tenant leak):
+//
+//   - XOR (an undotted identifier). Reserved in MySQL; no operator at all
+//     on PostgreSQL/SQLite, where reading a column named `xor` as OR-class
+//     only costs a redundant wrap. Like OR it is recognized regardless of
+//     operand position (audit-19).
+//   - `||` on a dialect that parses it as logical OR (dialect.PipesOr:
+//     MySQL). The MySQL lexer munches operator runs greedily, so
+//     `a = 1 ||-b` lexes `||-` as one token: any operator token
+//     containing `||` counts. Elsewhere `||` is concatenation, binding
+//     tighter than AND, and must not poison idempotence matching.
+//
+// Unlike OR, such a token is NOT a segment separator and stays clause
+// content: the clause extent (the wrap's open parenthesis) must cover it
+// even where it is the first token (a SQLite column named `xor`), and
+// segments are unused once hasOR is set.
+func looseOrOperator(tok dialect.Token, up string, dotted, pipesOr bool) bool {
+	switch tok.Kind {
+	case dialect.KindIdent:
+		return up == "XOR" && !dotted
+	case dialect.KindOperator:
+		return pipesOr && strings.Contains(tok.Text, "||")
+	}
+	return false
+}
+
 // clauseScan is the shared result of lexically scanning a clause
 // region (a WHERE clause or one join's ON expression) of a template's
 // item stream: its depth-0 AND-separated conjunct segments in
-// normalized token form, whether a depth-0 OR is present (segment
+// normalized token form, whether a depth-0 OR-class operator (OR, XOR,
+// MySQL's `||` — see looseOrOperator) is present (segment
 // matching would mis-model precedence, and an appended conjunct would
 // bind below the OR — the caller must wrap), and the clause's extent.
 type clauseScan struct {
@@ -154,12 +185,18 @@ type exprScan struct {
 	// ends the scan early and hides a following depth-0 OR, so the weave
 	// is not wrapped and the OR escapes the tenant scope (audit-15/16).
 	expectOperand bool
+	// pipesOr: the dialect parses `||` as logical OR (dialect.PipesOr).
+	pipesOr bool
 }
 
 // newExprScan starts a WHERE expression (the WHERE keyword itself is
 // not fed): an operand is expected first.
-func newExprScan() *exprScan {
-	return &exprScan{col: &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}}, expectOperand: true}
+func newExprScan(profile dialect.LexerProfile) *exprScan {
+	return &exprScan{
+		col:           &segCollector{cs: clauseScan{lexOK: true, start: -1, end: -1}},
+		expectOperand: true,
+		pipesOr:       dialect.PipesAreOr(profile),
+	}
 }
 
 // step consumes one significant token of the expression. depth0 reports
@@ -194,6 +231,9 @@ func (e *exprScan) step(tok dialect.Token, up string, abs int, depth0, dotted bo
 			e.col.flush()
 			return true
 		}
+	}
+	if depth0 && looseOrOperator(tok, up, dotted, e.pipesOr) {
+		e.col.cs.hasOR = true
 	}
 	e.expectOperand = afterOperand(tok, up, e.expectOperand)
 	e.col.content(tok, abs)
@@ -281,7 +321,7 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 			}
 			if ex == nil {
 				if depth == 0 && tok.Kind == dialect.KindIdent && up == "WHERE" && !dotted {
-					ex = newExprScan()
+					ex = newExprScan(profile)
 				}
 				continue
 			}
@@ -398,6 +438,7 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 	// in operand position must not end the ON and hide a following OR.
 	prevDot := false
 	expectOperand := false
+	pipesOr := dialect.PipesAreOr(profile)
 	finish := func() joinOnResult {
 		col.flush()
 		res.cs = col.cs
@@ -536,6 +577,9 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 				}
 			}
 			if inOn {
+				if depth == 0 && looseOrOperator(tok, up, dotted, pipesOr) {
+					col.cs.hasOR = true // XOR / MySQL `||` (security F2/F3)
+				}
 				expectOperand = afterOperand(tok, up, expectOperand)
 				col.content(tok, abs)
 			}

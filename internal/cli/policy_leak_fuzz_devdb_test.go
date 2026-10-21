@@ -39,15 +39,6 @@ var postgresLeakDialect = leakDialect{
 	deleteUsing: true,
 }
 
-var mysqlLeakDialect = leakDialect{
-	name:          "mysql",
-	paramType:     "bigint",
-	quirkCols:     []string{"offset", "returning"},
-	rightJoin:     true,
-	mysqlOps:      true,
-	multiTableDML: true,
-}
-
 type pgLeakEngine struct {
 	ctx  context.Context
 	conn *pgx.Conn
@@ -205,7 +196,7 @@ func FuzzPolicyWeaveNoLeak_Postgres(f *testing.F) {
 }
 
 func FuzzPolicyWeaveNoLeak_MySQL(f *testing.F) {
-	for _, s := range leakSeeds() {
+	for _, s := range append(leakSeeds(), mysqlLeakSeeds()...) {
 		f.Add(s)
 	}
 	eng := newMySQLLeakEngine(f)
