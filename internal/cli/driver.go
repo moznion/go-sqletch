@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -118,6 +119,9 @@ func driverFor(cfg config.Config) driver {
 					AllowDestructive: allowDestructive,
 					Detected:         det,
 				})
+				if fae, ok := errors.AsType[*devdb.SQLiteFileAccessError](err); ok && fae.Input < len(schema) {
+					fae.File = schema[fae.Input].Path // SQLETCH322's span
+				}
 				if err != nil {
 					return nil, cleanup, err
 				}

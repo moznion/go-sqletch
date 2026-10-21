@@ -2,6 +2,7 @@ package devdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,30 @@ import (
 
 	sqlite3 "github.com/ncruces/go-sqlite3"
 	"github.com/ncruces/go-sqlite3/ext/fts5"
+
+	"github.com/moznion/go-sqletch/internal/dialect/sqlite"
 )
+
+// SQLiteFileAccessError reports a schema statement refused because it
+// names a database file (ATTACH, VACUUM INTO, …): the SQLite engine
+// runs in-process over the host filesystem, so repo-controlled DDL
+// could otherwise create or overwrite files outside the project
+// (security audit F15; SQLETCH322 at the CLI layer). Nothing was
+// written: the statement is denied before SQLite opens the file.
+type SQLiteFileAccessError struct {
+	Input  int    // index into Config.SchemaSQL
+	Pos    int    // byte offset of the refused statement within that input
+	Action string // "ATTACH", "DETACH", "VACUUM", "PRAGMA <name>"
+	Target string // the named file, when SQLite saw it as a literal
+	// File is the schema file path; devdb only sees SQL text, so the
+	// caller that read the files fills it in.
+	File string
+}
+
+func (e *SQLiteFileAccessError) Error() string {
+	return fmt.Sprintf("schema input %d at byte %d: %s", e.Input, e.Pos,
+		(&sqlite.FileAccessError{Action: e.Action, Target: e.Target}).Error())
+}
 
 // AcquireSQLite opens (or creates) the SQLite dev database — fully
 // in-process, nothing external. DSN is a database file path; empty
@@ -44,6 +68,13 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 		closeAll()
 		return nil, func() {}, fmt.Errorf("register SQLite FTS5 extension: %w", err)
 	}
+	// Restrict BEFORE any repo-controlled SQL runs; the restriction
+	// stays on the returned connection, which becomes the oracle's.
+	guard, err := sqlite.Restrict(conn)
+	if err != nil {
+		closeAll()
+		return nil, func() {}, err
+	}
 
 	if cfg.wantVersion() {
 		actual, err := querySQLiteVersion(conn)
@@ -72,8 +103,11 @@ func AcquireSQLite(ctx context.Context, cfg Config) (*sqlite3.Conn, func(), erro
 			if strings.TrimSpace(stmt) == "" {
 				continue
 			}
-			if err := conn.Exec(stmt); err != nil {
+			if err := guard.Exec(stmt); err != nil {
 				closeAll()
+				if fae, ok := errors.AsType[*sqlite.FileAccessError](err); ok {
+					return nil, func() {}, &SQLiteFileAccessError{Input: i, Pos: fae.Pos, Action: fae.Action, Target: fae.Target}
+				}
 				return nil, func() {}, fmt.Errorf("apply schema input %d: %w", i, err)
 			}
 		}

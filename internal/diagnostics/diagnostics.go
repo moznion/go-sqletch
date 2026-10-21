@@ -200,6 +200,13 @@ const (
 	// to distinct Go identifiers, so its generated type carries no
 	// constants (docs/design/26-postgres-enum-types.md D2).
 	CodeEnumLabelIdent Code = "SQLETCH320"
+
+	// CodeSQLiteFileAccess: a SQLite schema statement names a database
+	// file (ATTACH, VACUUM INTO, a directory-redirecting PRAGMA). The
+	// engine runs in-process over the host filesystem, so it would
+	// write outside the project, bypassing SQLETCH306 (security audit
+	// F15).
+	CodeSQLiteFileAccess Code = "SQLETCH322"
 )
 
 type Diagnostic struct {

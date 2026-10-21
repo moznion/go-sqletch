@@ -67,6 +67,25 @@ func Acquire(ctx context.Context, cfg config.Database)
 `Acquire` is called lazily: only when a cache miss occurs (see §4
 flow). `check` on a warm cache never calls it.
 
+### 2.0 SQLite file-access restriction (`SQLETCH322`)
+
+The SQLite engine runs in-process over the host filesystem, so a
+repo-controlled schema statement naming a database file (`ATTACH`,
+`VACUUM INTO`) would create or overwrite it outside the project —
+the SQLETCH306 path-escape policy covers only the DSN (security audit
+F15). `sqlite.Restrict` (internal/dialect/sqlite/restrict.go) is the one
+seam: `SQLITE_LIMIT_ATTACHED = 0` plus an authorizer denying
+ATTACH/DETACH (an ATTACH authorized while *stepping* is VACUUM's
+internal attach, so all VACUUMs are refused) and the
+`temp_store_directory`/`data_store_directory` pragmas. `AcquireSQLite`
+installs it before any repo SQL runs and applies schema inputs through
+`Guard.Exec` (statement-at-a-time, so a refusal carries its offset) →
+`devdb.SQLiteFileAccessError` → `SQLETCH322` at the statement
+(`cli.sqliteFileAccessDiag`, pipeline.Run and explain --analyze).
+`sqlite.NewOracle` re-installs it, so a template doing the same fails
+its prepare as SQLETCH202. Loadable extensions and fileio functions do
+not exist in the engine build (pinned by `TestRestrict_NoFileFunctions`).
+
 ### 2.1 Destructive-reset guard (`SQLETCH204`)
 
 Applying the schema first **resets** it — `DROP SCHEMA public CASCADE`
