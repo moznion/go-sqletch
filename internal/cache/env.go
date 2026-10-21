@@ -90,7 +90,7 @@ func (s *Store) SaveEnv(e *Env) error {
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.envPath(), data)
+	return s.writeFile(EnvFile, data)
 }
 
 // EncodeEnv returns the exact canonical bytes SaveEnv writes, stamping
