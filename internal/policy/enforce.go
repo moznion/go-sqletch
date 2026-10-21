@@ -171,6 +171,17 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		// WHERE presence for every occurrence of such a predicate.
 		hasPlaceholder := strings.Contains(p.Predicate, Placeholder)
 		for _, r := range a.topOcc {
+			if hasPlaceholder && unquotedFoldChanges(profile, boundName(r.RelRef)) {
+				// F7: the bound name folds to a different identifier
+				// unquoted, so no conjunct built from it scopes this
+				// occurrence — never credit one (the weaver refuses the
+				// same occurrence with SQLETCH125).
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+					"query touches policy-designated table %q, but policy %q cannot be proved to scope it: %s",
+					r.Table, p.Name, foldChangeWhy(boundName(r.RelRef))).
+					WithHint("%s, or opt out with `-- @policy-optout: %s (reason)`", foldChangeHint, p.Name))
+				break
+			}
 			conjunct := strings.ReplaceAll(p.Predicate, Placeholder, boundName(r.RelRef))
 			present := false
 			if r.NullableSide && hasPlaceholder {

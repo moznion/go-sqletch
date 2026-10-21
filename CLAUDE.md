@@ -256,7 +256,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   depend on config); a broken policy set (any SQLETCH303) disables ALL
   policies for the run — never half-woven output.
 - `{}` binds to alias-else-table and must be a bare identifier; no
-  dialect quoting facility exists (deliberate, doc 14 §11.3).
+  dialect quoting facility exists (deliberate, doc 14 §11.3). On
+  PostgreSQL (no `CaseInsensitiveIdents`) a bound name not already in
+  folded form (quoted `"A"`) is SQLETCH125 and never credited by
+  Enforce (SQLETCH124): unquoted it folds to `a` and can scope another
+  relation (F7, owner decision 2026-10-21: fail closed, still no
+  quoting). `policy.unquotedFoldChanges` is the one check both share.
 - Enforcement (SQLETCH124) re-derives conjunct presence from the woven
   template inside cli.resolvedChecks — do not "optimize" it into
   trusting the weaver's own record; catching weaver regressions is its

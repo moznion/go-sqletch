@@ -626,6 +626,9 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 		case !bareIdentRe.MatchString(boundName(r)):
 			return fail(w.unweavable(p, w.relSpan(r),
 				fmt.Sprintf("the name bound to the predicate placeholder (%q) is not a bare identifier", boundName(r))))
+		case strings.Contains(p.Predicate, Placeholder) && unquotedFoldChanges(w.profile, boundName(r)):
+			return fail(w.unweavable(p, w.relSpan(r), foldChangeWhy(boundName(r))).
+				WithHint("%s, or opt out explicitly with `-- @policy-optout: %s (reason)`", foldChangeHint, p.Name))
 		case r.NullableSide:
 			relOff, ok := w.relTemplateOff(r)
 			if !ok {

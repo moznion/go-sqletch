@@ -75,6 +75,34 @@ func (p *Policy) designates(table string) bool {
 // must need no dialect quoting.
 var bareIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// unquotedFoldChanges reports whether the bound name, substituted
+// UNQUOTED (§11.3: no quoting facility), would name a different
+// identifier than the relation it was bound from. On a dialect that
+// folds unquoted identifiers and compares case-sensitively (PostgreSQL:
+// the profile does not implement dialect.CaseInsensitiveIdents, and its
+// facade reports quoted names case-preserved), a name not already in
+// folded form — e.g. the alias `"A"` — becomes `a` once unquoted and
+// can bind to another relation in scope (security finding F7, CWE-178;
+// owner decision 2026-10-21: fail closed, no quoting). bareIdentRe has
+// already restricted the name to ASCII, so ASCII lower-casing is
+// PostgreSQL's folding exactly. Case-insensitive dialects (MySQL,
+// SQLite) resolve both spellings to the same relation: never refused.
+func unquotedFoldChanges(profile dialect.LexerProfile, name string) bool {
+	if p, ok := profile.(dialect.CaseInsensitiveIdents); ok && p.CaseInsensitiveIdents() {
+		return false
+	}
+	return strings.ToLower(name) != name
+}
+
+// foldChangeWhy states the rule and its rationale for a bound name
+// unquotedFoldChanges rejects; shared by SQLETCH125 and SQLETCH124.
+func foldChangeWhy(name string) string {
+	return fmt.Sprintf("the name bound to the predicate placeholder (%q) is a quoted mixed-case identifier; the conjunct substitutes it unquoted, and PostgreSQL folds an unquoted identifier to lower case (%q), which can name a different relation and leave this table unscoped", name, strings.ToLower(name))
+}
+
+// foldChangeHint is the compliant rewrite for foldChangeWhy.
+const foldChangeHint = "use a lower-case unquoted alias for the designated table (e.g. `FROM orders AS o`); sqletch never quotes the bound name (design 14 §11.3)"
+
 // lowerIdentRe is the shape required of policy names, table names,
 // and the parameter name in the config.
 var lowerIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
