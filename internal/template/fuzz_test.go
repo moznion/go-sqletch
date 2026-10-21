@@ -3,6 +3,7 @@ package template
 import (
 	"testing"
 
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/dialect/mysql"
 	"github.com/moznion/go-sqletch/internal/dialect/postgres"
@@ -32,7 +33,8 @@ var fuzzProfiles = []struct {
 //     file, because the excerpt renderer and the LSP's UTF-16 position
 //     conversion both index the source with it;
 //   - rendering a diagnostic is itself panic-free (its caret geometry
-//     does rune arithmetic over bytes that need not be valid UTF-8).
+//     does rune arithmetic over bytes that need not be valid UTF-8);
+//   - a SQLETCH024 span covers exactly one CR not followed by LF.
 func FuzzScan(f *testing.F) {
 	f.Add(useCase1)
 	f.Add("-- name: A :one\nSELECT 1;")
@@ -66,11 +68,14 @@ func FuzzScan(f *testing.F) {
 	f.Add("-- name: Q :many\nSELECT 1 FROM t\n@order-by(s)\n@key(a)\nt.a\n@default\nORDER BY t.id\n@end;")
 	f.Add("-- name: R :many\nSELECT 1 FROM t WHERE TRUE\n@when(f = false)\n  AND t.v\n@end;")
 
-	// Line-ending and byte-order-mark edges: a CR-only file must not
-	// swallow the whole source into one line comment, and a leading BOM
-	// must be skipped rather than lexed as stray content.
+	// Line-ending and byte-order-mark edges: a lone CR outside a string
+	// is SQLETCH024 (audit F11/F12 — engines disagree on whether it ends
+	// a line comment), CRLF and a CR inside a string are not, and a
+	// leading BOM must be skipped rather than lexed as stray content.
 	f.Add("-- name: S :one\rSELECT 1;\r")
 	f.Add("-- name: T :one\r\nSELECT 1;\r\n")
+	f.Add("-- name: S2 :many\nSELECT o.id FROM o WHERE o.s = :s -- c\r AND o.tid = :tid;\n")
+	f.Add("-- name: S3 :many\nSELECT 'a\rb', `c\rd`, [e\rf], \"g\rh\" FROM t -- c\rORDER BY 1;")
 	f.Add("\xef\xbb\xbf-- name: U :one\nSELECT 1;")
 
 	f.Fuzz(func(t *testing.T, src string) {
@@ -101,6 +106,13 @@ func FuzzScan(f *testing.F) {
 				}
 				// Must not panic on arbitrary (possibly invalid UTF-8) bytes.
 				_ = d.RenderExcerpt([]byte(src))
+				// SQLETCH024 points at exactly one CR that no LF follows.
+				if d.Code == diagnostics.CodeLoneCR {
+					if s.End != s.Start+1 || src[s.Start] != '\r' ||
+						(s.End < len(src) && src[s.End] == '\n') {
+						t.Fatalf("%s: SQLETCH024 span %+v is not a lone CR in %q", p.name, s, src)
+					}
+				}
 			}
 		}
 	})

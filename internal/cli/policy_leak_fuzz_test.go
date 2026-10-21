@@ -132,6 +132,30 @@ type leakGen struct {
 	b []byte
 	i int
 	d leakDialect
+	// crWhere / crTail put a `-- note<CR>` line comment directly before
+	// the WHERE keyword / the ORDER BY-LIMIT tail (security audit
+	// F11/F12: engines disagree on whether a lone CR ends the comment,
+	// so either the predicate or the weave point is comment text to the
+	// engine). Selected by raw[0] (0xF2 / 0xF4 / 0xF6 = both, low bit still picking
+	// the policy variant) so every pre-existing seed decodes unchanged
+	// and the liveness test sees them rarely.
+	crWhere, crTail bool
+}
+
+// newLeakGen decodes raw: raw[0] picks the policy variant and the
+// lone-CR comment placement, the rest drives the productions.
+func newLeakGen(raw []byte, d leakDialect) *leakGen {
+	sel := raw[0] & 0xFE
+	return &leakGen{b: raw[1:], d: d, crWhere: sel == 0xF2 || sel == 0xF6, crTail: sel == 0xF4 || sel == 0xF6}
+}
+
+// clauseLead is the separator before a clause keyword: a newline, or
+// a line comment ended by a lone CR when on is set.
+func clauseLead(on bool) string {
+	if on {
+		return "\n-- note\r"
+	}
+	return "\n"
 }
 
 func (g *leakGen) pick(n int) int {
@@ -312,12 +336,12 @@ func (g *leakGen) where(rels []rel) string {
 	var s strings.Builder
 	hasWhere := false
 	if g.pick(4) != 0 {
-		s.WriteString("\nWHERE " + g.expr(rels, 0))
+		s.WriteString(clauseLead(g.crWhere) + "WHERE " + g.expr(rels, 0))
 		hasWhere = true
 	}
 	if g.pick(3) == 0 {
 		if !hasWhere {
-			s.WriteString("\nWHERE TRUE")
+			s.WriteString(clauseLead(g.crWhere) + "WHERE TRUE")
 		}
 		s.WriteString("\n@if-present(f)\n  AND " + g.ref(rels) + " = :f\n@endif")
 	}
@@ -325,13 +349,14 @@ func (g *leakGen) where(rels []rel) string {
 }
 
 func (g *leakGen) tail(rels []rel) string {
+	lead := clauseLead(g.crTail)
 	switch g.pick(5) {
 	case 1:
-		return "\nORDER BY " + g.ref(rels)
+		return lead + "ORDER BY " + g.ref(rels)
 	case 2:
-		return "\nLIMIT 1000"
+		return lead + "LIMIT 1000"
 	case 3:
-		return "\nORDER BY 1 LIMIT 1000 OFFSET 0"
+		return lead + "ORDER BY 1 LIMIT 1000 OFFSET 0"
 	}
 	return ""
 }
@@ -419,7 +444,7 @@ func checkNoLeak(t *testing.T, d leakDialect, eng leakEngine, raw []byte) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	g := &leakGen{b: raw[1:], d: d}
+	g := newLeakGen(raw, d)
 	lc := g.generate()
 	lc.src = d.rename(lc.src)
 	pols := leakPolicies(d, int(raw[0]))
@@ -606,6 +631,13 @@ func leakSeeds() [][]byte {
 		{0, 9, 1, 0, 0},             // set operation
 		{0, 0, 0, 1, 2, 0, 0, 3},    // bare quirk column before OR
 		{0, 0, 12, 1},               // nested join: null-extended from outside
+		// F11/F12: `-- note<CR>` before WHERE (expression / anchor with a
+		// guarded conjunct) and before the ORDER BY / LIMIT tail.
+		{0xF2, 0, 0, 1, 2, 0, 0},
+		{0xF2, 0, 0, 0, 0},
+		{0xF4, 0, 0, 0, 1, 1},
+		{0xF4, 0, 0, 0, 1, 2},
+		{0xF6, 0, 0, 1, 6, 0, 1, 0, 0, 1, 1, 0, 1, 0},
 	}
 }
 
@@ -634,7 +666,7 @@ func TestPolicyWeaveNoLeak_GeneratorIsLive(t *testing.T) {
 			continue
 		}
 		usable++
-		g := &leakGen{b: raw[1:], d: d}
+		g := newLeakGen(raw, d)
 		lc := g.generate()
 		if lc.dml {
 			continue

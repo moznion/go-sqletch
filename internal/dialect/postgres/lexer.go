@@ -51,6 +51,9 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		}
 		return mk(dialect.KindWhitespace, i)
 
+	// A line comment ends at '\n' or '\r', exactly as PostgreSQL's own
+	// scanner (scan.l: non_newline = [^\n\r]) — which pg_query shares.
+	// (MySQL/SQLite end only at '\n'; lone CRs are SQLETCH024 everywhere.)
 	case c == '-' && pos+1 < len(src) && src[pos+1] == '-':
 		i := pos + 2
 		for i < len(src) && src[i] != '\n' && src[i] != '\r' {
