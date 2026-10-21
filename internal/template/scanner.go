@@ -147,7 +147,7 @@ type fileScan struct {
 	// pendingDirectives buffers directive comments (`-- @param`,
 	// `-- @column`, `-- @policy-optout`, `-- @nolint`, …) until their target query is
 	// known. A directive attaches to a query only once a real SQL token
-	// of that query is seen (in-body directives) or, in the gap before
+	// or construct of that query is seen (in-body directives) or, in the gap before
 	// the next `-- name:` header, to the FOLLOWING query — never the
 	// previous one, whose queryBuilder is still current at that point.
 	pendingDirectives []dialect.Token
@@ -912,6 +912,13 @@ func (fs *fileScan) handleConstruct(name string, pos, nameEnd int) int {
 		}
 		return nameEnd
 	}
+	// A construct is part of the current query's body exactly like a
+	// real SQL token, so it claims any buffered directives: the body
+	// continues past them. Otherwise a directive placed before a
+	// trailing construct (no `;`) stays pending until the next header
+	// and lands on the FOLLOWING query — an opt-out scoping the wrong
+	// query.
+	fs.applyDirectives(fs.qb.q)
 	switch name {
 	case "if-present":
 		return fs.parseIfPresent(pos, nameEnd)
