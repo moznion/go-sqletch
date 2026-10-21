@@ -534,9 +534,11 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		return nil, err
 	}
 	res.Diags = append(res.Diags, pruneDiags...)
-	if err := writeExplainData(cfg, resolution, queries); err != nil {
+	explainDiags, err := writeExplainData(cfg, resolution, queries)
+	if err != nil {
 		return nil, err
 	}
+	res.Diags = append(res.Diags, explainDiags...)
 	return res, nil
 }
 
@@ -691,8 +693,12 @@ func policyCoverageOf(cq *compiledQuery) []policyCoverage {
 	return out
 }
 
-func writeExplainData(cfg config.Config, resolution config.Resolution, queries []*compiledQuery) error {
-	root := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "explain"))
+func writeExplainData(cfg config.Config, resolution config.Resolution, queries []*compiledQuery) ([]diagnostics.Diagnostic, error) {
+	w, err := openExplainWriter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer w.close()
 	drv := driverFor(cfg)
 	for _, cq := range queries {
 		d := explainData{Name: cq.q.Name, ShapeCount: shape.CountExpand(cq.q, drv.expandIn).String(),
@@ -743,18 +749,13 @@ func writeExplainData(cfg config.Config, resolution config.Resolution, queries [
 		}
 		data, err := json.MarshalIndent(d, "", "  ")
 		if err != nil {
-			return err
+			return nil, err
 		}
-		dir := filepath.Join(root, filepath.FromSlash(resolution.Targets[cq.target].Slug()))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		path := filepath.Join(dir, cq.q.Name+".json")
-		if err := cache.WriteFileAtomic(path, append(data, '\n'), 0o644); err != nil {
-			return err
+		if err := w.write(resolution.Targets[cq.target].Slug(), cq.q.Name+".json", append(data, '\n')); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return w.diags, nil
 }
 
 // nameScopeDiags warns when a query name that `overrides` or

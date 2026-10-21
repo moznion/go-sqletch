@@ -69,6 +69,17 @@ only **warns**; in-tree relative paths are unaffected. Combined with the
 symlink-safe writes in design 04 §3, this closes the arbitrary-overwrite
 surface for an untrusted cloned repository.
 
+The derived `explain/<target-slug>/<query>.json` tree (next to the
+cache) is written through an `os.Root` anchored at the project
+directory (or at the cache's parent for an absolute, out-of-project
+`cache.path`), and every existing component of the destination
+directory is `Lstat`ed first: a symlink anywhere on that path — even
+one pointing back inside the project — refuses the write with a
+`SQLETCH306` **error** rather than following it (security finding F5:
+a committed `.sqletch/explain/r -> /` plus `output.path:
+r/home/runner/.docker` would otherwise atomically replace a file
+outside the repository). `cli.explainWriter` is that seam.
+
 The loaded config carries its own canonical hash — a config
 change that affects renderings or keys (dialect, server_version,
 schema) invalidates cache naturally through the fingerprint.
