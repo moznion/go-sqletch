@@ -5,10 +5,12 @@ package devdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/moznion/go-sqletch/internal/cache"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
@@ -16,7 +18,10 @@ import (
 )
 
 type Config struct {
-	// DSN, when set, is used as-is instead of starting a container.
+	// DSN, when set, is used instead of starting a container. On
+	// PostgreSQL it first passes the dev-database DSN policy
+	// (postgres.DevConnConfig: allow-listed keys, one host, ambient
+	// passwords only for loopback, SCRAM-only elsewhere).
 	// The referenced database MUST be disposable: whenever SchemaSQL
 	// is non-empty, sqletch resets the public schema (DROP SCHEMA
 	// public CASCADE) before applying it, so repeated runs are
@@ -142,8 +147,24 @@ func AcquireDSN(ctx context.Context, cfg Config) (string, func(), error) {
 // closing the connection.
 func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 	stopContainer := func() {}
-	dsn := cfg.DSN
-	if dsn == "" {
+	var connCfg *pgx.ConnConfig
+	ambientDropped := false
+	if cfg.DSN != "" {
+		// A user-supplied DSN is repo-controlled: it goes through the
+		// dev-database DSN policy (security audit F4) — restricted keys,
+		// one host, ambient passwords only for loopback, SCRAM-only
+		// elsewhere — BEFORE anything is dialed. A refusal is a
+		// *postgres.DSNPolicyError (SQLETCH321 at the CLI layer).
+		var err error
+		connCfg, ambientDropped, err = postgres.DevConnConfig(cfg.DSN)
+		if err != nil {
+			var pe *postgres.DSNPolicyError
+			if errors.As(err, &pe) {
+				return nil, func() {}, err
+			}
+			return nil, func() {}, fmt.Errorf("parse database.dsn: %w", err)
+		}
+	} else {
 		image := "postgres:16-alpine"
 		if cfg.ServerVersion != "" {
 			image = "postgres:" + cfg.ServerVersion + "-alpine"
@@ -158,16 +179,27 @@ func Acquire(ctx context.Context, cfg Config) (*pgx.Conn, func(), error) {
 			return nil, func() {}, fmt.Errorf("start dev database container: %w", err)
 		}
 		stopContainer = func() { _ = testcontainers.TerminateContainer(ctr) }
-		dsn, err = ctr.ConnectionString(ctx, "sslmode=disable")
+		// sqletch's own container DSN (it states its password) is not
+		// repo-controlled and needs no policy.
+		dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+		if err == nil {
+			connCfg, err = pgx.ParseConfig(dsn)
+		}
 		if err != nil {
 			stopContainer()
 			return nil, func() {}, err
 		}
 	}
 
-	conn, err := pgx.Connect(ctx, dsn)
+	conn, err := pgx.ConnectConfig(ctx, connCfg)
 	if err != nil {
 		stopContainer()
+		if ambientDropped {
+			// The password that would have authenticated a local server
+			// was deliberately withheld; say so rather than leave a bare
+			// authentication failure to puzzle over.
+			return nil, func() {}, fmt.Errorf("connect to dev database: %w (note: sqletch did not use the password from PGPASSWORD/.pgpass/service file because database.dsn's host is not loopback — state the password in database.dsn or use a loopback host)", err)
+		}
 		return nil, func() {}, fmt.Errorf("connect to dev database: %w", err)
 	}
 	closeAll := func() {

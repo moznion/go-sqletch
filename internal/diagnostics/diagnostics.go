@@ -207,6 +207,12 @@ const (
 	// constants (docs/design/26-postgres-enum-types.md D2).
 	CodeEnumLabelIdent Code = "SQLETCH320"
 
+	// CodeDevDSNPolicy: a PostgreSQL database.dsn is refused by the
+	// dev-database DSN policy — a key outside the allow-list, or more
+	// than one host (security audit F4; docs/design/07-cli-config.md
+	// "Dev-database DSN policy").
+	CodeDevDSNPolicy Code = "SQLETCH321"
+
 	// CodeSQLiteFileAccess: a SQLite schema statement names a database
 	// file (ATTACH, VACUUM INTO, a directory-redirecting PRAGMA). The
 	// engine runs in-process over the host filesystem, so it would
