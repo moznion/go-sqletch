@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a:()ף\u0379̶əʐ̿ʃҌȕՉ̑ۏيľ߰ȸǚūƗʁᛇܥՒȥ݃\u05ec˒ںƄԑל\nSELECT('')")
