@@ -245,6 +245,18 @@ type Tree interface {
 	// woven WHERE that scopes the conflict, so refusal is the sound
 	// minimum.
 	HasConflictUpdate() bool
+	// NestedDML reports every data-modifying statement nested inside
+	// this one — PostgreSQL's data-modifying CTEs (`WITH d AS (DELETE
+	// … RETURNING …) …`), at any depth — as (kind, target table)
+	// pairs, in document order. An INSERT whose conflict arm modifies
+	// rows (`ON CONFLICT … DO UPDATE`) is reported with Upsert set; a
+	// plain nested INSERT is reported with Upsert false. The top-level
+	// statement itself is never listed. The policy weaver refuses a
+	// designated target of a nested UPDATE/DELETE/upsert whose kind the
+	// policy covers, whatever the outer statement's kind (design 14
+	// §D6, owner decision 2026-10-21). MySQL and SQLite admit only
+	// SELECT bodies in WITH, so their facades report nothing.
+	NestedDML() []NestedDML
 	// ValueTargets reports every direct value position (design 20 §3.1)
 	// of the statement: a placeholder that is the whole value of an
 	// INSERT VALUES item paired with an explicit column list, or of a
@@ -255,6 +267,18 @@ type Tree interface {
 	// over-report: an unlisted position keeps its parameter a plain
 	// value, while a wrongly listed one could make it nullable.
 	ValueTargets() []ValueTarget
+}
+
+// NestedDML is one data-modifying statement nested inside the parsed
+// statement (see Tree.NestedDML).
+type NestedDML struct {
+	Kind   StmtKind // StmtUpdate, StmtDelete, or StmtInsert
+	Table  string   // target relation name
+	Schema string   // explicit schema qualifier, "" when unqualified
+	// Upsert marks a nested INSERT whose conflict arm modifies rows
+	// (ON CONFLICT … DO UPDATE) — an update-shaped modification.
+	Upsert bool
+	Loc    int // byte offset of the target relation in the parsed SQL
 }
 
 // ValueTarget is one direct value position: the placeholder at Loc (a

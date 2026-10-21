@@ -85,7 +85,9 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 		onInfo:       map[int]*joinOnResult{},
 		nBranches:    nBranches,
 	}
-	w.overread = overreadDeep(profile, fe, q, w.deep)
+	var overNested []dialect.NestedDML
+	w.overread, overNested = overreadDeep(profile, fe, q, w.deep)
+	w.nested = append(tree.NestedDML(), overNested...)
 	if nBranches > 0 {
 		so := scanSetOp(profile, q)
 		w.setop = &so
@@ -307,6 +309,11 @@ type weaver struct {
 	// ON DUPLICATE KEY UPDATE) arm modifies rows — refused on a
 	// designated target (audit-12 M10).
 	upsertUpdate bool
+	// nested is every data-modifying statement nested inside this one
+	// (PostgreSQL wCTEs), in the maximal rendering or any non-maximal
+	// verified rendering — refused on a designated target whose kind
+	// the policy covers (finding F9, owner decision 2026-10-21).
+	nested []dialect.NestedDML
 
 	// overread is the set of lowercased base-table names that some
 	// non-maximal verified rendering reads more often than the maximal
@@ -328,10 +335,40 @@ type applicability struct {
 	topOcc []topRel // designated top-level occurrences, document order
 	hidden bool     // designated occurrences beyond the top level
 	active bool     // the policy applies to this query at all
+	// nestedHit is the first nested data-modifying statement (a
+	// PostgreSQL wCTE body) whose target the policy designates and
+	// whose kind it covers — nil when there is none. Its presence makes
+	// the policy active regardless of the outer kind, and it is never
+	// weavable (SQLETCH125; Enforce: SQLETCH124).
+	nestedHit *dialect.NestedDML
 }
 
-func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, upsertUpdate bool) applicability {
+// coversNested reports whether the policy covers a nested DML's kind:
+// a nested UPDATE/DELETE by its own kind, a nested upsert (ON CONFLICT
+// DO UPDATE) as an update — the M10 rule — and a plain nested INSERT
+// never (no rows are filtered).
+func (p *Policy) coversNested(d dialect.NestedDML) bool {
+	switch {
+	case d.Kind == dialect.StmtInsert:
+		return d.Upsert && p.appliesTo(dialect.StmtUpdate)
+	case d.Kind == dialect.StmtUpdate || d.Kind == dialect.StmtDelete:
+		return p.appliesTo(d.Kind)
+	}
+	return false
+}
+
+func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, upsertUpdate bool, nested []dialect.NestedDML) applicability {
 	var a applicability
+	// A data-modifying CTE modifies rows under its OWN kind, whatever
+	// the outer statement is (finding F9, owner decision 2026-10-21):
+	// keying only on the outer kind let `WITH d AS (DELETE FROM t …)
+	// INSERT …` escape an `applies_to: [update, delete]` policy.
+	for i := range nested {
+		if d := nested[i]; d.Table != "" && p.designates(d.Table) && p.coversNested(d) {
+			a.nestedHit = &nested[i]
+			break
+		}
+	}
 	topCount := map[string]int{}
 	for _, r := range rels {
 		if r.Table != "" && p.designates(r.Table) {
@@ -363,6 +400,9 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 	} else {
 		a.active = p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)
 	}
+	if a.nestedHit != nil {
+		a.active = true
+	}
 	return a
 }
 
@@ -380,12 +420,18 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 // set, which this scan never builds. A rendering that fails to render or
 // parse is skipped: the ordinary pipeline diagnostics own that failure,
 // and an unparseable alternative cannot ship valid unscoped SQL.
-func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template.QueryTemplate, maxDeep []dialect.TableRef) map[string]bool {
+//
+// The second result is every nested data-modifying statement those
+// renderings carry (Tree.NestedDML, in rendering order): a wCTE living
+// only in a non-first @choose alternative must be refused like one in
+// the maximal rendering (finding F9).
+func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template.QueryTemplate, maxDeep []dialect.TableRef) (map[string]bool, []dialect.NestedDML) {
 	base := map[string]int{}
 	for _, tr := range maxDeep {
 		base[strings.ToLower(tr.Name)]++
 	}
 	over := map[string]bool{}
+	var nested []dialect.NestedDML
 	note := func(r ast.Rendering, err error) {
 		if err != nil {
 			return
@@ -394,6 +440,7 @@ func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template
 		if perr != nil || t.StmtCount() != 1 {
 			return
 		}
+		nested = append(nested, t.NestedDML()...)
 		cur := map[string]int{}
 		for _, tr := range t.DeepTables() {
 			cur[strings.ToLower(tr.Name)]++
@@ -439,9 +486,9 @@ func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template
 		}
 	}
 	if len(over) == 0 {
-		return nil
+		return nil, nested
 	}
-	return over
+	return over, nested
 }
 
 // designatedOverread returns, in sorted order, the overread table names
@@ -528,7 +575,7 @@ func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 // the requirement fail UNSCOPED, putting the safe direction at the
 // mercy of every caller honoring the error.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []whereNeed, []onNeed, []diagnostics.Diagnostic) {
-	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.upsertUpdate)
+	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.upsertUpdate, w.nested)
 	over := designatedOverread(p, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
 		return nil, nil, nil, nil
@@ -584,6 +631,13 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 	if len(over) > 0 {
 		return fail(w.unweavable(p, w.q.HeaderSpan,
 			fmt.Sprintf("designated table %q is read only inside a non-first @choose alternative or an @order-by @default body, a rendering the weaver cannot see or scope (it works from the maximal rendering)", over[0])))
+	}
+	if d := a.nestedHit; d != nil {
+		// A data-modifying CTE body modifies rows of a designated table,
+		// but sqletch weaves only top-level positions (D6): refuse it
+		// whatever the outer kind (finding F9, owner decision 2026-10-21).
+		return fail(w.unweavable(p, w.q.HeaderSpan,
+			fmt.Sprintf("designated table %q is the target of a data-modifying CTE (%s inside WITH), which modifies rows sqletch cannot scope", d.Table, nestedDMLVerb(*d))))
 	}
 	if w.kind == dialect.StmtInsert {
 		if w.upsertUpdate && len(a.topOcc) > 0 {
@@ -850,4 +904,17 @@ func boundName(r dialect.RelRef) string {
 		return r.Alias
 	}
 	return r.Table
+}
+
+// nestedDMLVerb spells a nested DML for diagnostics.
+func nestedDMLVerb(d dialect.NestedDML) string {
+	switch {
+	case d.Kind == dialect.StmtUpdate:
+		return "UPDATE"
+	case d.Kind == dialect.StmtDelete:
+		return "DELETE"
+	case d.Upsert:
+		return "INSERT … ON CONFLICT DO UPDATE"
+	}
+	return "INSERT"
 }

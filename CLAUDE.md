@@ -262,6 +262,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   trusting the weaver's own record; catching weaver regressions is its
   purpose. The must-stay test: a hand-written conjunct inside
   @if-present fails (guard-off shapes lose it).
+- Data-modifying CTEs (owner decision 2026-10-21, finding F9):
+  applicability also keys on each nested DML's OWN kind
+  (`Tree.NestedDML()`; PG walks the whole tree, MySQL/SQLite report
+  nothing). A designated target of a nested UPDATE/DELETE (upsert ⇒
+  `update`) the policy covers makes it active whatever the outer kind
+  and is refused (SQLETCH125/124) — inside `analyzeApplicability`, the
+  seam Weave and Enforce share.
 - Policy edits re-key only affected oracle entries (rendered SQL
   changes); the policy config must NEVER enter the cache fingerprint.
 

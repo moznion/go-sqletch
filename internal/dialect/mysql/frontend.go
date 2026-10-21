@@ -266,6 +266,11 @@ func (t *tree) Kind() dialect.StmtKind {
 	}
 }
 
+// NestedDML reports nothing: MySQL admits only SELECT bodies in a WITH
+// clause (the parser's CTE node holds a select, never DML), so no
+// data-modifying statement can nest inside another.
+func (t *tree) NestedDML() []dialect.NestedDML { return nil }
+
 func (t *tree) HasConflictUpdate() bool {
 	ins, ok := t.first().(*ast.InsertStmt)
 	if !ok {

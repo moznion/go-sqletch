@@ -50,9 +50,10 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	// which stops the pipeline before this pass), so this fires only if
 	// the weaver regressed and let one through — the same
 	// catch-the-weaver role the conjunct re-derivation below plays.
-	over := overreadDeep(profile, fe, q, deep)
+	over, overNested := overreadDeep(profile, fe, q, deep)
+	nested := append(tree.NestedDML(), overNested...)
 	applies := func(p *Policy) bool {
-		return analyzeApplicability(p, kind, rels, deep, upsert).active || len(designatedOverread(p, over, kind)) > 0
+		return analyzeApplicability(p, kind, rels, deep, upsert, nested).active || len(designatedOverread(p, over, kind)) > 0
 	}
 
 	byName := map[string]*Policy{}
@@ -130,7 +131,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
-		a := analyzeApplicability(p, kind, rels, deep, upsert)
+		a := analyzeApplicability(p, kind, rels, deep, upsert, nested)
 		if _, ok := optOutFor(q, p.Name); ok {
 			continue
 		}
@@ -143,6 +144,17 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 				"query reads policy-designated table %q inside a non-maximal rendering (a @choose alternative or @order-by @default) that policy %q cannot scope",
 				names[0], p.Name).
 				WithHint("that rendering is invisible to the weaver; restructure so the designated read appears in every shape, or opt out with `-- @policy-optout: %s (reason)`", p.Name))
+			continue
+		}
+		// Weaver-regression backstop for a data-modifying CTE on a
+		// designated table (finding F9): the weaver refuses it
+		// (SQLETCH125) whatever the outer kind; if it reached here the
+		// nested modification ships unscoped, so it is never credited.
+		if d := a.nestedHit; d != nil {
+			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+				"query modifies policy-designated table %q in a data-modifying CTE (%s inside WITH), which policy %q cannot scope",
+				d.Table, nestedDMLVerb(*d), p.Name).
+				WithHint("a WITH-body DML cannot carry a woven conjunct; move the modification to its own top-level statement or opt out with `-- @policy-optout: %s (reason)`", p.Name))
 			continue
 		}
 		if kind == dialect.StmtInsert {

@@ -300,6 +300,71 @@ func (t *tree) HasConflictUpdate() bool {
 	return ins.OnConflictClause.Action == pgquery.OnConflictAction_ONCONFLICT_UPDATE
 }
 
+// NestedDML reports every data-modifying statement nested inside the
+// top-level one. PostgreSQL admits them only as WITH-list bodies (a
+// data-modifying CTE), but the walk is the whole protobuf tree — like
+// DeepTables — so no nesting position (a wCTE of a wCTE body's own
+// WITH, a SELECT CTE's WITH, …) can hide one.
+func (t *tree) NestedDML() []dialect.NestedDML {
+	n := t.stmt()
+	if n == nil {
+		return nil
+	}
+	var out []dialect.NestedDML
+	collectNestedDML(n.ProtoReflect(), true, &out)
+	return out
+}
+
+// collectNestedDML appends every INSERT/UPDATE/DELETE statement message
+// under m; root suppresses the top-level statement itself (the walk
+// starts at its wrapping Node, whose single set field is the statement).
+func collectNestedDML(m protoreflect.Message, root bool, out *[]dialect.NestedDML) {
+	add := func(kind dialect.StmtKind, rv *pgquery.RangeVar, upsert bool) {
+		d := dialect.NestedDML{Kind: kind, Upsert: upsert, Loc: -1}
+		if rv != nil {
+			d.Table, d.Schema, d.Loc = rv.Relname, rv.Schemaname, int(rv.Location)
+		}
+		*out = append(*out, d)
+	}
+	isStmt := false
+	switch v := m.Interface().(type) {
+	case *pgquery.UpdateStmt:
+		isStmt = true
+		if !root {
+			add(dialect.StmtUpdate, v.Relation, false)
+		}
+	case *pgquery.DeleteStmt:
+		isStmt = true
+		if !root {
+			add(dialect.StmtDelete, v.Relation, false)
+		}
+	case *pgquery.InsertStmt:
+		isStmt = true
+		if !root {
+			upsert := v.OnConflictClause != nil &&
+				v.OnConflictClause.Action == pgquery.OnConflictAction_ONCONFLICT_UPDATE
+			add(dialect.StmtInsert, v.Relation, upsert)
+		}
+	case *pgquery.SelectStmt:
+		isStmt = true
+	}
+	// The wrapping Node of the root statement passes root through to
+	// the statement message; every other descent is nested.
+	childRoot := root && !isStmt
+	m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+		switch {
+		case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+			l := val.List()
+			for i := 0; i < l.Len(); i++ {
+				collectNestedDML(l.Get(i).Message(), childRoot, out)
+			}
+		case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
+			collectNestedDML(val.Message(), childRoot, out)
+		}
+		return true
+	})
+}
+
 // ValueTargets reports design 20's direct value positions: VALUES items
 // paired with an explicit column list, and single-column UPDATE SET
 // items. The ON CONFLICT arm, RETURNING, and WITH bodies are never

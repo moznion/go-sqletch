@@ -526,6 +526,31 @@ new `Tree.HasConflictUpdate()` capability reports the row-modifying
 conflict arm across the three dialects; enforcement (§6.1) mirrors the
 refusal as a `SQLETCH124` weaver-regression backstop.
 
+**Data-modifying CTE refinement (owner decision 2026-10-21, security
+finding F9).** Applicability used to key on the *outermost* statement
+kind only, so a PostgreSQL data-modifying CTE escaped any policy whose
+`applies_to` omitted that outer kind: under `applies_to: [update,
+delete]`, `WITH d AS (DELETE FROM posts … RETURNING *) INSERT INTO
+posts_archive SELECT * FROM d` was neither woven nor refused. A nested
+DML modifies rows under its *own* kind, so a new
+`Tree.NestedDML()` capability reports every data-modifying statement
+nested inside the top-level one (kind, target, and whether an INSERT's
+conflict arm is `DO UPDATE`); the PostgreSQL facade walks the whole
+statement (WITH bodies at any depth, nested `ON CONFLICT DO UPDATE`
+included), and the MySQL/SQLite facades report nothing (their parsers
+admit only SELECT CTE bodies — pinned by tests). When a designated
+table is the target of a nested UPDATE/DELETE, or of a nested upsert
+under a policy covering `update` (the M10 rule), the policy is
+**active regardless of the outer kind** and the statement is refused
+(`SQLETCH125`; Enforce never credits it and reports `SQLETCH124` as the
+backstop). A plain nested INSERT and `DO NOTHING` stay non-targets. The
+non-maximal-rendering scan contributes its renderings' nested DML too,
+so a wCTE confined to a non-first `@choose` alternative is refused
+likewise. Weave and Enforce share `analyzeApplicability`.
+Not changed (follow-up, not settled): hidden reads inside an
+UPDATE/DELETE are still gated on the outer kind rather than on
+`coversSelect()`.
+
 ## 6. Enforcement
 
 Weaving alone does not prove absence of leaks: a query can name the
