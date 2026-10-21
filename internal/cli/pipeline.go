@@ -475,8 +475,12 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			if shapes != nil {
 				in.ExpandedShapes = shapes
 				if mode == ModeGenerate {
-					if err := writeExpandedFiles(cfg, resolution.Targets[cq.target], cq.q.Name, shapes); err != nil {
+					d, err := writeExpandedFiles(cfg, resolution.Targets[cq.target], cq.q.Name, shapes)
+					if err != nil {
 						return nil, err
+					}
+					if d != nil {
+						res.Diags = append(res.Diags, *d)
 					}
 				}
 			}
@@ -629,21 +633,17 @@ func paramSpan(q *template.QueryTemplate, name string) diagnostics.Span {
 // part of the path because a query name is unique only within its
 // target — without it two packages' same-named queries would overwrite
 // each other's audit surface.
-func writeExpandedFiles(cfg config.Config, t config.ResolvedTarget, query string, shapes map[string]runtime.Expanded) error {
-	dir := cfg.Abs(filepath.Join(filepath.Dir(cfg.Cache.Path), "expanded", filepath.FromSlash(t.Slug()), query))
-	if err := os.RemoveAll(dir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
+//
+// The directory is replaced wholesale, so it goes through
+// replaceDerivedDir: a symlinked component below the cache parent is
+// SQLETCH306 and nothing is deleted or written (never a silent follow).
+func writeExpandedFiles(cfg config.Config, t config.ResolvedTarget, query string, shapes map[string]runtime.Expanded) (*diagnostics.Diagnostic, error) {
+	rel := filepath.Join("expanded", filepath.FromSlash(t.Slug()), query)
+	files := make(map[string][]byte, len(shapes))
 	for key, e := range shapes {
-		name := shapeFileName(key) + ".sql"
-		if err := cache.WriteFileAtomic(filepath.Join(dir, name), []byte(e.SQL+"\n"), 0o644); err != nil {
-			return err
-		}
+		files[shapeFileName(key)+".sql"] = []byte(e.SQL + "\n")
 	}
-	return nil
+	return replaceDerivedDir(cfg, rel, files)
 }
 
 // shapeFileName makes a canonical shape key filename-safe:
