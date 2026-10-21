@@ -933,6 +933,33 @@ rows.
   hand-written scoping conjunct between two ANDs of one CASE arm, and
   `end` is a quirk column on SQLite/MySQL).
 
+### 11.9 Token comparison and identifier case (security finding F13)
+
+Owner decision 2026-10-21: fail closed. "Normalized" used to mean `strings.ToLower`
+on every unquoted identifier. That was unsound twice over: MySQL with
+`lower_case_table_names=0` (the Linux default) treats table aliases as
+case-sensitive, so a hand-written `a.tenant_id` scoping `users a` was
+credited to `orders A` (weaver skipped, Enforce passed, every tenant's
+orders shipped); and Unicode lowering folds U+212A KELVIN SIGN to `k`,
+which no dialect does. The matcher (`conjTokMatch`, shared by the
+weaver's idempotence check and Enforce) now:
+
+- folds ASCII only, on every dialect;
+- on PostgreSQL (which folds unquoted identifiers itself) compares
+  unquoted identifiers ASCII-case-insensitively;
+- on the `dialect.CaseInsensitiveIdents` dialects (MySQL, SQLite)
+  compares every unquoted identifier EXACTLY, folding only a fixed set
+  of MySQL-reserved keywords (`IS`, `NULL`, `AND`, `IN`, …) and never a
+  word directly after `.` (a qualified-name part is an identifier
+  position even when reserved). A case-variant-only match is therefore
+  ABSENT and the weaver weaves anyway — doubling is harmless, skipping
+  leaks. On SQLite this costs only a redundant conjunct;
+- compares quoted identifiers and every other token verbatim.
+
+The weaver's own output carries the exact bound name, so Enforce still
+credits it, and an exact-case hand-written conjunct is still credited
+on all three dialects. No identifier quoting is introduced (§11.3).
+
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
 **Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy
