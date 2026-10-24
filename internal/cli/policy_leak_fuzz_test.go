@@ -213,6 +213,15 @@ func (g *leakGen) atom(rels []rel) string {
 	case 5:
 		return x + " BETWEEN 0 AND 1"
 	case 6:
+		if r, ok := firstDesignated(rels); ok && g.pick(2) == 1 {
+			// F14: a hand-written scoping conjunct confined to ONE CASE
+			// arm, BETWEEN two ANDs so a CASE-blind AND-split isolates it
+			// as a segment. It must not be credited as a top-level
+			// conjunct — the ELSE arm stays unscoped, so skipping the
+			// splice leaks.
+			return "CASE WHEN " + x + " = 1 THEN " + g.ref(rels) + " = 1 AND " + r.name + ".tenant_id = :tid AND " +
+				g.ref(rels) + " = 1 ELSE " + g.ref(rels) + " = 1 END"
+		}
 		return "CASE WHEN " + x + " = 1 THEN 1 ELSE 0 END = 1"
 	case 7:
 		return "CASE " + x + " WHEN 0 THEN 1 END = 1"
@@ -250,6 +259,16 @@ func (g *leakGen) orOp() string {
 		return []string{" OR ", " XOR ", " || "}[g.pick(3)]
 	}
 	return " OR "
+}
+
+// firstDesignated returns the first designated occurrence in rels.
+func firstDesignated(rels []rel) (rel, bool) {
+	for _, r := range rels {
+		if r.designated {
+			return r, true
+		}
+	}
+	return rel{}, false
 }
 
 func (g *leakGen) expr(rels []rel, depth int) string {
@@ -565,7 +584,7 @@ var errLeak = fmt.Errorf("tenant-2 rows changed")
 var sqliteLeakDialect = leakDialect{
 	name:       "sqlite",
 	paramType:  "integer",
-	quirkCols:  []string{"offset", "window", "fetch"},
+	quirkCols:  []string{"offset", "window", "fetch", "end"},
 	updateFrom: true,
 }
 
@@ -651,13 +670,17 @@ func leakSeeds() [][]byte {
 		{0xF4, 0, 0, 0, 1, 1},
 		{0xF4, 0, 0, 0, 1, 2},
 		{0xF6, 0, 0, 1, 6, 0, 1, 0, 0, 1, 1, 0, 1, 0},
+		// F14: `WHERE CASE WHEN o.k = 1 THEN o.v = 1 AND o.tenant_id = :tid
+		// AND o.v = 1 ELSE o.v = 1 END` — a scoping conjunct confined to
+		// one CASE arm.
+		{0, 0, 0, 1, 6, 0, 1, 3, 6, 1, 0, 1, 4, 0, 1, 4, 0, 1, 4, 1},
 	}
 }
 
 var mysqlLeakDialect = leakDialect{
 	name:          "mysql",
 	paramType:     "bigint",
-	quirkCols:     []string{"offset", "returning"},
+	quirkCols:     []string{"offset", "returning", "end"},
 	rightJoin:     true,
 	mysqlOps:      true,
 	multiTableDML: true,
@@ -701,6 +724,23 @@ func FuzzPolicyWeaveNoLeak_SQLite(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		checkNoLeak(t, sqliteLeakDialect, eng, raw)
 	})
+}
+
+// TestPolicyWeaveNoLeak_CaseArmSeed pins that the F14 seed still decodes
+// to the CASE-arm shape (a generator edit must not silently retarget it)
+// and that the property holds on it.
+func TestPolicyWeaveNoLeak_CaseArmSeed(t *testing.T) {
+	seeds := leakSeeds()
+	raw := seeds[len(seeds)-1]
+	g := &leakGen{b: raw[1:], d: sqliteLeakDialect}
+	lc := g.generate()
+	const want = "WHERE CASE WHEN o.k = 1 THEN o.v = 1 AND o.tenant_id = :tid AND o.v = 1 ELSE o.v = 1 END"
+	if !strings.Contains(lc.src, want) {
+		t.Fatalf("F14 seed drifted; got:\n%s", lc.src)
+	}
+	if !checkNoLeak(t, sqliteLeakDialect, newSQLiteLeakEngine(t), raw) {
+		t.Fatalf("F14 seed is not usable (refused or unrunnable):\n%s", lc.src)
+	}
 }
 
 // TestPolicyWeaveNoLeak_GeneratorIsLive guards the harness against

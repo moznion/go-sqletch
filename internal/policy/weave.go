@@ -687,6 +687,10 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 					fmt.Sprintf("table %q sits on the null-extended side of an outer join, and its reference cannot be located in the template", r.Table)))
 			}
 			res := w.joinOnFor(relOff, r.Join)
+			if res.found && !res.cs.lexOK {
+				return fail(w.unweavable(p, w.relSpan(r),
+					fmt.Sprintf("table %q sits on the null-extended side of an outer join whose ON expression could not be read (an unbalanced CASE … END, a CASE arm keyword outside a CASE, or a construct inside a CASE arm), so its top-level conjuncts are unknown", r.Table)))
+			}
 			if !res.found || !res.cs.lexOK || res.cs.start < 0 {
 				return fail(w.unweavable(p, w.relSpan(r),
 					fmt.Sprintf("table %q sits on the null-extended side of a join with no ON expression to extend (USING/NATURAL/comma join); rewrite it with an explicit ON", r.Table)))
@@ -735,6 +739,21 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 		if h, ok := w.q.TypeHints[p.ParamName]; ok && !strings.EqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
 			return fail(w.unweavable(p, h.Span,
 				fmt.Sprintf("the query hints parameter %q as %q, but the policy declares %q", p.ParamName, h.SQLType, p.ParamType)))
+		}
+	}
+
+	// The WHERE clause(s) this policy splices into must have been read
+	// cleanly (F14): an unbalanced CASE … END (or a construct inside a
+	// CASE arm) leaves conjunct boundaries and the top-level OR unknown,
+	// so neither the idempotence match nor the wrap decision is sound.
+	whereTargets := whereOcc
+	if !strings.Contains(p.Predicate, Placeholder) {
+		whereTargets = a.topOcc
+	}
+	for _, r := range whereTargets {
+		if !w.whereScan(r.branch).lexOK {
+			return fail(w.unweavable(p, w.relSpan(r.RelRef),
+				"the WHERE clause's CASE … END nesting could not be read (an unbalanced CASE, a CASE arm keyword outside a CASE, or a construct inside a CASE arm), so its top-level conjuncts are unknown"))
 		}
 	}
 
@@ -881,14 +900,20 @@ func (w *weaver) guardedAt(loc int) bool {
 // and a top-level OR poisons matching (the weaver then weaves and
 // wraps: doubling is harmless, skipping leaks).
 func (w *weaver) wherePresent(branch int, conjunct string) bool {
-	where := w.where
-	if branch >= 0 {
-		where = w.setop.branches[branch].where
-	}
+	where := w.whereScan(branch)
 	if !where.lexOK || where.hasOR {
 		return false
 	}
 	return segsContain(w.profile, where.segs, conjunct)
+}
+
+// whereScan returns the WHERE scan of the statement (branch -1) or of
+// one set-operation branch core.
+func (w *weaver) whereScan(branch int) clauseScan {
+	if branch >= 0 {
+		return w.setop.branches[branch].where
+	}
+	return w.where
 }
 
 // onPresent is wherePresent for one join's ON clause.
