@@ -784,6 +784,25 @@ otherwise the query is rejected with `SQLETCH125`. Likewise a policy's
 `tables:` entries must be bare lowercase identifiers (`SQLETCH303`
 otherwise). Revisit only if a real schema demands quoted names.
 
+**Case folding (security finding F7, owner decision 2026-10-21).**
+The bound name is substituted *unquoted*, and PostgreSQL folds an
+unquoted identifier to lower case, while its parser reports a quoted
+name case-preserved. A quoted mixed-case alias `"A"` therefore became
+`A.tenant_id` ≡ `a.tenant_id` — which binds to any *other* relation
+aliased `a` (`FROM orders AS "A" JOIN users AS a …` scoped `users`
+twice and leaked every tenant's `orders`). Decision: fail closed, keep
+"no quoting facility". On a dialect that does not implement
+`dialect.CaseInsensitiveIdents` (PostgreSQL), a `{}`-substituted bound
+name that is not already in folded form (`name != lower(name)`, ASCII —
+the bare-identifier rule already restricts it to ASCII) is
+`SQLETCH125` at weave time, and enforcement never credits a conjunct
+built from one (`SQLETCH124`, even for a correctly quoted hand-written
+`"A".tenant_id` — the weaver can never produce it). A quoted name
+already in folded form (`"a"`) is accepted. Placeholder-less predicates
+are unaffected (they substitute nothing). One helper,
+`policy.unquotedFoldChanges`, serves both passes. MySQL/SQLite resolve
+identifiers case-insensitively and are out of this rule's scope.
+
 ### 11.4 The policy parameter's type hint
 
 The woven `:param` flows through the ordinary machinery (it lands in
