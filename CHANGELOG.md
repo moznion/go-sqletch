@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.0.9](https://github.com/moznion/go-sqletch/compare/v0.0.8...v0.0.9) - 2026-10-24
+
+- fix(cli): refuse symlinks under static-expansion output (SQLETCH306) by @moznion in https://github.com/moznion/go-sqletch/pull/178
+- fix(cli): never follow a committed symlink when writing explain data (F5) by @moznion in https://github.com/moznion/go-sqletch/pull/179
+- template: constructs claim pending directives (security F6, CWE-863) by @moznion in https://github.com/moznion/go-sqletch/pull/180
+- cache: refuse to write store files through a committed symlink (F8) by @moznion in https://github.com/moznion/go-sqletch/pull/181
+- fix(policy): refuse data-modifying CTEs on designated tables by their own kind (F9) by @moznion in https://github.com/moznion/go-sqletch/pull/182
+- security: end line comments where the engine does; reject lone CR (SQLETCH024) [F11/F12] by @moznion in https://github.com/moznion/go-sqletch/pull/188
+- fix(sqlite): refuse ATTACH/VACUUM INTO in schema files and oracle (F15) by @moznion in https://github.com/moznion/go-sqletch/pull/189
+- policy: treat MySQL XOR and || as OR-class when weaving (security F2/F3) by @moznion in https://github.com/moznion/go-sqletch/pull/184
+- policy: treat CASE … END as nesting in WHERE/ON clause scans (security F14) by @moznion in https://github.com/moznion/go-sqletch/pull/190
+- policy: stop folding identifier case in conjunct crediting (security F13) by @moznion in https://github.com/moznion/go-sqletch/pull/185
+- policy: refuse PostgreSQL quoted mixed-case bound names (security F7) by @moznion in https://github.com/moznion/go-sqletch/pull/177
+- policy: refuse MySQL REPLACE into a policy-designated table (F10) by @moznion in https://github.com/moznion/go-sqletch/pull/183
+- fix(policy): refuse SQLite INSERT/UPDATE OR REPLACE on designated tables (F17) by @moznion in https://github.com/moznion/go-sqletch/pull/187
+- fix(security): police the PostgreSQL dev-database DSN — ambient passwords only for loopback (audit F4) by @moznion in https://github.com/moznion/go-sqletch/pull/186
+- build(deps): bump Songmu/tagpr from 1.21.2 to 1.21.3 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/193
+- fix(postgres): align lexer literal/whitespace classes with scan.l (F16) by @moznion in https://github.com/moznion/go-sqletch/pull/191
+
 ## [v0.0.8](https://github.com/moznion/go-sqletch/compare/v0.0.7...v0.0.8) - 2026-10-16
 
 - feat: map PostgreSQL enums to generated named types (design 26) by @moznion in https://github.com/moznion/go-sqletch/pull/170
