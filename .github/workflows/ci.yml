@@ -96,6 +96,8 @@ jobs:
         run: go test ./internal/codegen -run '^$' -fuzz=FuzzComposeConformance -fuzztime=30s
       - name: Provenance-flag drift fuzz (30s)
         run: go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzProvenanceFlags -fuzztime=30s
+      - name: PG lexer vs pg_query scanner differential fuzz (30s)
+        run: go test ./internal/dialect/postgres -run '^$' -fuzz=FuzzLexerVsPgScan -fuzztime=30s
       - name: Native-describe robustness fuzz (30s)
         run: go test ./internal/dialect/mysql -run '^$' -fuzz=FuzzNativeDescribe -fuzztime=30s
       - name: Query-pattern robustness fuzz (30s)
