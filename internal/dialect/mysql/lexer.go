@@ -6,6 +6,8 @@
 package mysql
 
 import (
+	"fmt"
+
 	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
@@ -31,6 +33,27 @@ func (Profile) InEmptySQL() string { return "IN (SELECT NULL FROM DUAL WHERE FAL
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// dashDashOpens reports the bytes after `--` on which the server
+// (my_isspace || my_iscntrl) and TiDB (unicode.IsSpace) both open a
+// comment.
+func dashDashOpens(c byte) bool { return c == ' ' || (c >= '\t' && c <= '\r') }
+
+// dashDashDisputed reports the bytes after `--` on which they disagree:
+// other control bytes open a comment only on the server, 0x85/0xA0 only
+// in TiDB.
+func dashDashDisputed(c byte) bool {
+	return (c < 0x20 && !dashDashOpens(c)) || c == 0x7F || c == 0x85 || c == 0xA0
+}
+
+// lineCommentEnd returns the end of a line comment whose body starts at
+// i: the next '\n' (excluded) or end of input.
+func lineCommentEnd(src []byte, i int) int {
+	for i < len(src) && src[i] != '\n' {
+		i++
+	}
+	return i
+}
 
 // MySQL unquoted identifiers allow '$' anywhere (and leading digits,
 // which the number branch claims first — a boundary-level compromise).
@@ -68,22 +91,28 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		}
 		return mk(dialect.KindWhitespace, i)
 
+	// Line comments end ONLY at '\n', as on the server and in TiDB
+	// (startWithSharp/startWithDash: incAsLongAs(ch != '\n')). A lone
+	// '\r' does NOT end one (security audit F11): ending it there made a
+	// policy conjunct after `-- note<CR>` live SQL to sqletch but comment
+	// text to the engine. The scanner rejects lone CRs anyway
+	// (SQLETCH024); the profile still has to agree with the engine.
 	case c == '#':
-		i := pos + 1
-		for i < len(src) && src[i] != '\n' && src[i] != '\r' {
-			i++
-		}
-		return mk(dialect.KindLineComment, i)
+		return mk(dialect.KindLineComment, lineCommentEnd(src, pos+1))
 
-	// MySQL requires whitespace (or end of line/input) after `--` for
-	// it to start a comment; `1--2` is double negation.
+	// `--` opens a comment only before a whitespace/control byte or at
+	// end of input; `1--2` is double negation. The server's test is
+	// my_isspace || my_iscntrl (0x00–0x20, 0x7F); TiDB's is
+	// unicode.IsSpace on the byte ('\t' '\n' '\v' '\f' '\r' ' ' 0x85
+	// 0xA0). Where they agree the profile follows them; where they
+	// disagree no reading can match both, so it refuses (fail closed).
 	case c == '-' && pos+1 < len(src) && src[pos+1] == '-' &&
-		(pos+2 >= len(src) || isSpace(src[pos+2])):
-		i := pos + 2
-		for i < len(src) && src[i] != '\n' && src[i] != '\r' {
-			i++
+		(pos+2 >= len(src) || dashDashOpens(src[pos+2]) || dashDashDisputed(src[pos+2])):
+		if pos+2 < len(src) && dashDashDisputed(src[pos+2]) {
+			return dialect.Token{}, &dialect.LexError{Pos: pos,
+				Msg: fmt.Sprintf("`--` followed by byte 0x%02X: the MySQL server and the TiDB frontend disagree on whether this starts a comment, so sqletch cannot read the query the way the engine will; put a space after `--` for a comment, or a space between the two `-` for double negation", src[pos+2])}
 		}
-		return mk(dialect.KindLineComment, i)
+		return mk(dialect.KindLineComment, lineCommentEnd(src, pos+2))
 
 	case c == '/' && pos+1 < len(src) && src[pos+1] == '*':
 		// MySQL executable comments `/*! ... */` (and version-gated

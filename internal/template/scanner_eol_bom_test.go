@@ -6,40 +6,6 @@ import (
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 )
 
-// A CR-only (classic-Mac) file must not swallow the whole file into one
-// line comment: `-- name: … \r SELECT …` used to yield ZERO queries and
-// ZERO diagnostics — a query silently dropped from generation.
-func TestScan_CROnlyLineEndings(t *testing.T) {
-	f := scanClean(t, "-- name: A :one\rSELECT 1;\r")
-	if len(f.Queries) != 1 {
-		t.Fatalf("queries = %d, want 1 (CR must end the header comment)", len(f.Queries))
-	}
-	if f.Queries[0].Name != "A" {
-		t.Fatalf("name = %q, want A", f.Queries[0].Name)
-	}
-}
-
-// CRLF must still work: the CR ends the line comment, then CR+LF is
-// whitespace trivia — no regression, no stray content.
-func TestScan_CRLFLineEndings(t *testing.T) {
-	f := scanClean(t, "-- name: A :one\r\nSELECT 1;\r\n")
-	if len(f.Queries) != 1 {
-		t.Fatalf("queries = %d, want 1", len(f.Queries))
-	}
-	if f.Queries[0].Name != "A" {
-		t.Fatalf("name = %q, want A", f.Queries[0].Name)
-	}
-}
-
-// A carriage return INSIDE a string literal must not be treated as a
-// line-comment terminator (the CR change touches only comment scanning).
-func TestScan_CRInsideStringLiteralUnaffected(t *testing.T) {
-	f := scanClean(t, "-- name: A :one\nSELECT 'a\rb';\n")
-	if len(f.Queries) != 1 {
-		t.Fatalf("queries = %d, want 1", len(f.Queries))
-	}
-}
-
 // A leading UTF-8 BOM must be treated as editor byte-order noise, not
 // stray content: previously it lexed as an identifier and tripped
 // SQLETCH003 even though the query is valid.

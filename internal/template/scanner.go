@@ -278,6 +278,7 @@ func (s *Scanner) ScanFileFrom(path string, src []byte, start int) (*QueryFile, 
 	if start == 0 && len(src) >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF {
 		pos = 3
 	}
+	fs.checkLoneCR(pos)
 	for pos <= len(src) {
 		if pos < len(src) && src[pos] == '@' {
 			if name, nameEnd := matchConstruct(src, pos); name != "" {
@@ -308,6 +309,43 @@ func (s *Scanner) ScanFileFrom(path string, src []byte, start int) (*QueryFile, 
 	fs.flushOverflow()
 	diagnostics.Sort(fs.diags)
 	return file, fs.diags
+}
+
+// checkLoneCR reports SQLETCH024 for every carriage return not
+// followed by a line feed outside a string literal or quoted identifier,
+// on every dialect (security audit F11/F12, owner decision 2026-10-21;
+// docs/design/01 §1). Engines disagree on whether a lone CR ends a `--`
+// comment — PostgreSQL ends it there, MySQL/TiDB and SQLite/rqlite do
+// not — and sqletch's internal readers (weave idempotence, Enforce,
+// clause offsets, line/column mapping, the LSP's line model) are not
+// all the engine's lexer. A policy conjunct after `-- note<CR>` was live
+// SQL to the weaver and Enforce but comment text to the engine: a silent
+// cross-tenant leak. Rejecting the byte removes the disagreement rather
+// than choosing a side; CRLF (CR then LF) is unaffected.
+//
+// It is a separate pass over the profile's token stream from pos, so
+// string/identifier quoting is the profile's own; constructs lex as
+// ordinary tokens here ('@' is an operator byte), which never changes
+// where a quoted token starts. A lex error ends the pass — the main
+// scan reports it.
+func (fs *fileScan) checkLoneCR(pos int) {
+	src := fs.src
+	for pos < len(src) {
+		tok, err := fs.profile.NextToken(src, pos)
+		if err != nil || tok.Kind == dialect.KindEOF || tok.End <= pos {
+			return
+		}
+		if tok.Kind != dialect.KindString && tok.Kind != dialect.KindQuotedIdent {
+			for i := tok.Start; i < tok.End; i++ {
+				if src[i] == '\r' && (i+1 >= len(src) || src[i+1] != '\n') {
+					fs.emit(diagnostics.Errorf(diagnostics.CodeLoneCR, fs.span(i, i+1),
+						"lone carriage return (CR not followed by LF) outside a string literal or quoted identifier: database engines disagree on whether it ends a `--` line comment (PostgreSQL ends it there, MySQL and SQLite do not), so the text after it could be live SQL to sqletch but comment text to the engine — a policy conjunct sqletch credits or weaves would then not be applied").
+						WithHint("convert the file's line endings to LF (CRLF is also accepted); a CR inside a string literal is fine"))
+				}
+			}
+		}
+		pos = tok.End
+	}
 }
 
 // span builds a file span, clamped to the source bounds. Several call

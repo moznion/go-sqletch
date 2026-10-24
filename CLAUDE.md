@@ -622,6 +622,20 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   → `sqlite3.INTERRUPT` and NOT the ctx error (asserted both ways so a
   driver upgrade is noticed). Portable check: `ctx.Err() != nil`.
 
+## Known decisions: line endings (audit F11/F12, design 01 §1)
+
+- Owner decision 2026-10-21: lexer profiles end line comments where
+  their ENGINE does — PostgreSQL at `\n` or `\r`, MySQL/TiDB and
+  SQLite/rqlite ONLY at `\n`. MySQL `--` opens a comment before
+  `\t`–`\r`/space/EOF (server and TiDB agree); bytes they disagree on
+  (other control bytes, 0x7F, 0x85, 0xA0) are a lex error — fail closed.
+- A lone CR (not followed by LF) outside strings/quoted identifiers is
+  SQLETCH024 on EVERY dialect (`fileScan.checkLoneCR`); CRLF stays
+  legal. This replaced the 2026-08 "CR ends comments so CR-only files
+  scan" behavior — a policy conjunct after `-- note<CR>` was live SQL
+  to the weaver/Enforce but comment text to the engine. Never make a
+  profile end a comment anywhere its engine does not.
+
 ## Known decisions: @nullable directive (doc 25)
 
 - Owner decisions 2026-10-14: `-- @nullable <column>: true|false` is the

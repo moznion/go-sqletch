@@ -44,11 +44,45 @@ The profile is intentionally *not* a full SQL lexer: it only needs to
 be correct about token *boundaries* (so constructs, params, and clause
 keywords are never found inside strings/comments/identifiers).
 
-Line comments end at **either** `\n` or a lone `\r`, so a classic-Mac
-(CR-only) file is scanned line-by-line like any other; without this a
-CR-only file would fold its entire content into one `-- name: …`
-comment and silently yield zero queries. CRLF is unaffected (the `\r`
-ends the comment, the trailing `\r\n` is whitespace trivia).
+**Line comments end where the dialect's engine ends them** (security
+audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and
+pg_query, which shares it) ends a `--` comment at `\n` **or** `\r`
+(`scan.l`: `non_newline [^\n\r]`), so the postgres profile does too.
+The MySQL server, the TiDB frontend, SQLite and the rqlite frontend end
+`--` (and MySQL `#`) comments **only at `\n`**, so those profiles do
+too. MySQL's `--` opens a comment only before a whitespace/control byte
+or at end of input; the server's test is `my_isspace || my_iscntrl`
+(0x00–0x20, 0x7F) and TiDB's is `unicode.IsSpace` on the byte (`\t`
+`\n` `\v` `\f` `\r` space, 0x85, 0xA0). The profile opens a comment on
+the bytes both agree on (`\t`–`\r`, space, EOF) and **refuses** the
+disputed ones (other control bytes, 0x7F, 0x85, 0xA0) with a lex error
+(SQLETCH001): no reading can match both, so it fails closed.
+
+**A lone `\r` (CR not followed by LF) outside a string literal or
+quoted identifier is SQLETCH024, on every dialect.** The engines
+disagree on whether it ends a line comment, and sqletch's readers of a
+query (weave idempotence, Enforce, `WhereKwEnd`/`TailStart`, relation
+location, placeholder counting, the diagnostic line map, the LSP's
+line model, and the Go compiler, which discards CRs from raw string
+literals) need not agree with the engine either. Before the fix the
+MySQL/SQLite profiles ended comments at a lone CR, so
+`WHERE o.status = :status -- open only<CR> AND o.tenant_id = :tid` had a
+tenant conjunct that sqletch credited but the engine read as comment
+text, and `FROM orders -- newest<CR>ORDER BY id` had the woven `WHERE`
+land inside the engine's comment — silent cross-tenant leaks. Rejecting
+the byte removes the disagreement instead of picking a side; the check
+is applied uniformly (PostgreSQL included) because a CR-only file is
+the only legitimate source and converting it to LF is trivial. CRLF is
+unaffected (CR then LF; on MySQL/SQLite the CR is part of the comment
+text, on PostgreSQL it ends it — the following LF ends the line either
+way). The check (`fileScan.checkLoneCR`) is a separate pass over the
+profile's token stream, so quoting is the profile's own; a CR inside a
+string or quoted identifier is data and stays legal.
+
+This **replaces** the earlier (2026-08-19, audit LOW) behavior of
+ending line comments at a lone `\r` in all three profiles so CR-only
+(classic-Mac) files would scan: such a file is now SQLETCH024 (one
+diagnostic per lone CR, capped per code), never silently zero queries.
 
 A single leading UTF-8 BOM (`EF BB BF`) is skipped as leading trivia at
 the scan entry point (`ScanFile`) **without rewriting the buffer**, so

@@ -37,6 +37,7 @@ codes).
 | SQLETCH021 | `//sqletch:query` on something other than a `const` declaration. A const is what makes the verified SQL the SQL that runs. |
 | SQLETCH022 | A `//sqletch:query` const whose value is not a single raw (backquoted) string literal. Interpreted strings process escapes and concatenations have no contiguous source range, so template spans could not point back at the file. |
 | SQLETCH023 | A `//sqletch:query` const that declares no value, or more names than values. |
+| SQLETCH024 | A lone carriage return (a CR not followed by LF) outside a string literal or quoted identifier, on any dialect. Database engines disagree on whether it ends a `--` line comment (PostgreSQL ends it there; MySQL and SQLite read on to the next LF), so text after it could be live SQL to sqletch but a comment to the engine — a policy conjunct sqletch credits or weaves would silently not apply. Convert the file's line endings to LF (CRLF is also accepted); a CR inside a string literal is fine. |
 
 ## SQLETCH1xx — structural rules
 

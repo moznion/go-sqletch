@@ -73,6 +73,12 @@ const (
 	CodeGoBadConstSpec Code = "SQLETCH023" // marked const has no value, or names/values disagree
 )
 
+// CodeLoneCR reports a carriage return not followed by a line feed, outside a
+// string literal or quoted identifier. Engines disagree on whether it
+// ends a line comment, so sqletch's reading of the query could differ
+// from the engine's (security audit F11/F12; docs/design/01 §1).
+const CodeLoneCR Code = "SQLETCH024"
+
 // Rules-phase codes (R1 runs in P2's pipeline position; see
 // docs/design/02-rendering.md and 03-structural-rules.md).
 const (

@@ -66,10 +66,16 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		}
 		return mk(dialect.KindWhitespace, i)
 
-	// SQLite line comments need no whitespace after the dashes.
+	// SQLite line comments need no whitespace after the dashes, and end
+	// ONLY at '\n' — SQLite's tokenizer (`c!='\n'`) and rqlite's scanner
+	// (`case -1, '\n'`) alike. A lone '\r' does NOT end one (security
+	// audit F12): ending it there let sqletch weave a predicate into
+	// what the engine reads as comment text. The scanner rejects lone
+	// CRs anyway (SQLETCH024); the profile still has to agree with the
+	// engine.
 	case c == '-' && pos+1 < len(src) && src[pos+1] == '-':
 		i := pos + 2
-		for i < len(src) && src[i] != '\n' && src[i] != '\r' {
+		for i < len(src) && src[i] != '\n' {
 			i++
 		}
 		return mk(dialect.KindLineComment, i)
