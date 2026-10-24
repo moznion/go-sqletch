@@ -252,6 +252,8 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   depth-0 WHERE keyword — woven items have zero-width spans, so
   NEVER key that walk on file offsets); a depth-0 OR poisons matching
   and the weaver weaves anyway (doubling is harmless, skipping leaks).
+  "OR" = every operator looser than AND: XOR (all dialects) and `||`
+  where the profile implements `dialect.PipesOr` (MySQL) — doc 14 §11.7.
 - R6 anchors check the UNWOVEN template (template validity must not
   depend on config); a broken policy set (any SQLETCH303) disables ALL
   policies for the run — never half-woven output.

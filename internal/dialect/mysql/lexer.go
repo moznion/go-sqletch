@@ -18,6 +18,7 @@ var (
 	_ dialect.Placeholders          = Profile{}
 	_ dialect.InEmpty               = Profile{}
 	_ dialect.CaseInsensitiveIdents = Profile{}
+	_ dialect.PipesOr               = Profile{}
 )
 
 // PlaceholderStyle declares MySQL's '?' per-occurrence binding.
@@ -26,6 +27,12 @@ func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.Plac
 // CaseInsensitiveIdents reports that MySQL resolves aliases and column
 // references case-insensitively, so R3/R2 name matching must fold.
 func (Profile) CaseInsensitiveIdents() bool { return true }
+
+// PipesOr reports that MySQL parses `||` as logical OR under the default
+// sql_mode (TiDB grammar: `pipes`/`or` < `xor` < `and`), so it binds
+// looser than AND. With PIPES_AS_CONCAT it is concatenation instead;
+// treating it as OR-class then costs only a redundant wrap.
+func (Profile) PipesOr() bool { return true }
 
 // InEmptySQL is the arity-0 @in emission (FALSE even for NULL
 // operands; MySQL needs FROM DUAL to attach a WHERE).

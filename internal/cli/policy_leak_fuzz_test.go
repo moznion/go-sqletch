@@ -54,7 +54,8 @@ type leakDialect struct {
 	rightJoin bool
 	fullJoin  bool
 	// mysqlOps enables MySQL-only operand prefixes (BINARY, INTERVAL) —
-	// the audit-18 operand-position class.
+	// the audit-18 operand-position class — and MySQL's other boolean
+	// operators looser than AND (XOR, `||`; security F2/F3).
 	mysqlOps bool
 	// updateFrom / deleteUsing / multiTableDML select the dialect's
 	// joined-DML spellings.
@@ -240,6 +241,17 @@ func (g *leakGen) atom(rels []rel) string {
 	}
 }
 
+// orOp is a boolean operator binding at OR's level (looser than AND):
+// OR everywhere, plus XOR and `||` (logical OR under MySQL's default
+// sql_mode) on MySQL — an appended conjunct binds below any of them, so
+// the weaver must wrap for each (security F2/F3).
+func (g *leakGen) orOp() string {
+	if g.d.mysqlOps {
+		return []string{" OR ", " XOR ", " || "}[g.pick(3)]
+	}
+	return " OR "
+}
+
 func (g *leakGen) expr(rels []rel, depth int) string {
 	if depth >= 3 {
 		return g.atom(rels)
@@ -248,7 +260,8 @@ func (g *leakGen) expr(rels []rel, depth int) string {
 	case 0, 1:
 		return g.expr(rels, depth+1) + " AND " + g.expr(rels, depth+1)
 	case 2, 3:
-		return g.expr(rels, depth+1) + " OR " + g.expr(rels, depth+1)
+		op := g.orOp()
+		return g.expr(rels, depth+1) + op + g.expr(rels, depth+1)
 	case 4:
 		return "(" + g.expr(rels, depth+1) + ")"
 	case 5:
@@ -268,7 +281,7 @@ func (g *leakGen) from() (string, []rel) {
 		case 1:
 			return base + " AND " + g.expr(rels, 1)
 		case 2:
-			return base + " OR " + g.expr(rels, 1)
+			return base + g.orOp() + g.expr(rels, 1)
 		}
 		return base
 	}
@@ -638,6 +651,44 @@ func leakSeeds() [][]byte {
 		{0xF4, 0, 0, 0, 1, 1},
 		{0xF4, 0, 0, 0, 1, 2},
 		{0xF6, 0, 0, 1, 6, 0, 1, 0, 0, 1, 1, 0, 1, 0},
+	}
+}
+
+var mysqlLeakDialect = leakDialect{
+	name:          "mysql",
+	paramType:     "bigint",
+	quirkCols:     []string{"offset", "returning"},
+	rightJoin:     true,
+	mysqlOps:      true,
+	multiTableDML: true,
+}
+
+// mysqlLeakSeeds are MySQL-only regressions: the boolean operators
+// looser than AND besides OR (security F2/F3). Each leaked before the
+// fix — the weaver appended the scoping conjunct unwrapped, so
+// `(tenant) AND l XOR r` read tenant 2's rows wherever r held.
+func mysqlLeakSeeds() [][]byte {
+	return [][]byte{
+		{0, 0, 0, 1, 2, 1, 6, 0, 1, 4, 0, 6, 0, 1, 3, 0, 1}, // WHERE o.v = 1 XOR o.k = 1
+		{0, 0, 0, 1, 2, 2, 6, 0, 1, 4, 0, 6, 0, 1, 3, 0, 1}, // WHERE o.v = 1 || o.k = 1
+		{0, 0, 3, 2, 1, 6, 0, 1, 3, 0, 0, 1, 0},             // LEFT JOIN nullable side, ON base XOR o.k = 1
+		{0, 0, 3, 2, 2, 6, 0, 1, 3, 0, 0, 1, 0},             // LEFT JOIN nullable side, ON base || o.k = 1
+	}
+}
+
+// TestMySQLLeakSeedsCarryLooseOps pins that the MySQL-only seeds still
+// decode to what they are named for — a generator change that shifts the
+// byte mapping would otherwise silently turn the F2/F3 regressions into
+// ordinary cases. (They are executed by FuzzPolicyWeaveNoLeak_MySQL.)
+func TestMySQLLeakSeedsCarryLooseOps(t *testing.T) {
+	want := []string{"\nWHERE ", "\nWHERE ", "LEFT JOIN orders AS o ON ", "LEFT JOIN orders AS o ON "}
+	op := []string{"o.v = 1 XOR o.k = 1", "o.v = 1 || o.k = 1", "o.acc_id = a.id XOR o.k = 1", "o.acc_id = a.id || o.k = 1"}
+	for i, raw := range mysqlLeakSeeds() {
+		g := &leakGen{b: raw[1:], d: mysqlLeakDialect}
+		src := g.generate().src
+		if !strings.Contains(src, want[i]) || !strings.Contains(src, op[i]) {
+			t.Errorf("seed %d no longer decodes to a %q-in-%q case:\n%s", i, op[i], want[i], src)
+		}
 	}
 }
 

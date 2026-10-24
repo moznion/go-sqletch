@@ -117,6 +117,24 @@ func FoldIdent(profile LexerProfile) func(string) string {
 	return func(s string) string { return s }
 }
 
+// PipesOr is implemented by lexer profiles whose dialect parses the `||`
+// operator as logical OR — binding LOOSER than AND — under its default
+// configuration (MySQL: unless sql_mode has PIPES_AS_CONCAT). Clause
+// scanners that decide whether an appended conjunct needs parentheses
+// treat such an operator exactly like OR. On PostgreSQL and SQLite `||`
+// is string concatenation (tighter than AND), so they leave it
+// unimplemented. Over-reporting is safe (an extra wrap); under-reporting
+// is a tenant leak in policy weaving.
+type PipesOr interface {
+	PipesOr() bool
+}
+
+// PipesAreOr reports whether profile's dialect parses `||` as logical OR.
+func PipesAreOr(profile LexerProfile) bool {
+	p, ok := profile.(PipesOr)
+	return ok && p.PipesOr()
+}
+
 // LexError is returned for unterminated strings/comments; the scanner
 // converts it into a diagnostic at Pos.
 type LexError struct {

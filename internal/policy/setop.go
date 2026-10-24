@@ -85,7 +85,7 @@ func scanSetOp(profile dialect.LexerProfile, q *template.QueryTemplate) setOpSca
 	if !ok {
 		return setOpScan{}
 	}
-	p := &setOpParser{elems: elems, out: setOpScan{ok: true, branchOf: map[int]int{}}}
+	p := &setOpParser{profile: profile, elems: elems, out: setOpScan{ok: true, branchOf: map[int]int{}}}
 	p.query(0)
 	if p.failed {
 		return setOpScan{}
@@ -148,10 +148,11 @@ func setOpElems(profile dialect.LexerProfile, q *template.QueryTemplate) ([]soEl
 }
 
 type setOpParser struct {
-	elems  []soElem
-	i      int
-	out    setOpScan
-	failed bool
+	profile dialect.LexerProfile
+	elems   []soElem
+	i       int
+	out     setOpScan
+	failed  bool
 }
 
 func (p *setOpParser) peek() (soElem, bool) {
@@ -314,7 +315,7 @@ func (p *setOpParser) core(d int) {
 			case e.up == "FROM":
 				sawFrom = true
 			case e.up == "WHERE" && b.whereKwEnd < 0:
-				ex = newExprScan()
+				ex = newExprScan(p.profile)
 				b.whereKwEnd = e.abs + (e.tok.End - e.tok.Start)
 			case sawFrom && b.whereKwEnd < 0 && b.tailStart < 0 && coreTailKeywords[e.up]:
 				b.tailStart = e.abs

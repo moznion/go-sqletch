@@ -871,6 +871,37 @@ bare *or* wrapped in one pair of parentheses. Consequences:
   re-key by rendered SQL exactly as §7 describes, and the policy
   config still never enters the cache fingerprint.
 
+### 11.7 "OR" means every operator looser than AND
+
+The query's OWN clause is spliced into textually too: an existing
+WHERE (or D2a `ON`) receives `(<predicate>) AND <clause>` unwrapped when
+the clause has no depth-0 OR, and is wrapped as `(<predicate>) AND
+(<clause>)` otherwise. "OR" there must mean every boolean operator that
+binds looser than AND, or the appended conjunct binds below it. MySQL
+has two besides `OR` (TiDB grammar: `pipes`/`or` < `xor` < `and`):
+
+- `XOR` — `WHERE a XOR b` woven unwrapped is `((tenant) AND a) XOR b`,
+  which returns every tenant's `b` rows (security finding F2/F3).
+- `||` — logical OR under the default `sql_mode` (without
+  `PIPES_AS_CONCAT`).
+
+Both set the clause scanners' OR flag (`policy.looseOrOperator`, used by
+the one WHERE reader `exprScan` and by `joinOn`), so they wrap, poison
+idempotence matching, and are not credited by enforcement — exactly
+like OR. `XOR` is recognized on every dialect, regardless of operand
+position (a SQLite/PostgreSQL column named `xor` only costs a redundant
+wrap), and stays clause CONTENT rather than a segment separator so the
+wrap's opening parenthesis covers it even as the clause's first token.
+`||` is OR-class only where the lexer profile implements
+`dialect.PipesOr` (MySQL): on PostgreSQL and SQLite it is string
+concatenation, binding tighter than AND, and treating it as OR would
+needlessly re-wrap and defeat idempotence for ordinary `name || 'x'`
+predicates. Under MySQL `PIPES_AS_CONCAT` the same treatment costs
+only a redundant wrap. The MySQL lexer munches operator runs greedily
+(`||-`), so any operator token containing `||` counts. The leak is
+pinned by execution in `FuzzPolicyWeaveNoLeak_MySQL`'s seeds
+(`mysqlLeakSeeds`) and the generator emits both operators on MySQL.
+
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
 **Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy
