@@ -170,6 +170,18 @@ same-named queries cannot overwrite each other:
 .sqletch/expanded/<target-path>/<query>/<shape>.sql
 ```
 
+Only `cache.path` and its ancestors are validated at load, but every
+component below the cache parent (`expanded`, the target path, the
+query name) is repository content. `generate` replaces each
+`expanded/<target-path>/<query>/` directory wholesale, so a committed
+symlink there would redirect a recursive delete outside the project
+(CWE-59). `cli.replaceDerivedDir` therefore Lstats every existing
+component below the cache parent and refuses ANY symlink with an
+`SQLETCH306` error, touching nothing; the delete/mkdir/writes then run
+through an `os.Root` opened at the cache parent, so a symlink swapped
+in after the check fails instead of being followed. It is the seam for
+other wholesale-replaced derived output.
+
 `sqletch explain NAME` walks that tree and prints every match, with
 the target path as a heading when more than one target is present.
 
