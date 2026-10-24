@@ -46,6 +46,9 @@ statement and the executed statement differ.
 - Multiple policies weave in declaration order.
 - A query that already contains a token-identical unconditional
   conjunct is left alone (hand-scoped queries are not double-woven).
+  On MySQL and SQLite identifiers must match the bound name's case
+  exactly (MySQL aliases are case-sensitive, so `A.tenant_id` is not
+  `a.tenant_id`); a case variant is woven again, which is harmless.
   A copy inside `@if-present` deliberately does **not** count — it
   vanishes in guard-off shapes.
 - The R6 anchor rule is checked before weaving, so a template's

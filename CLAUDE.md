@@ -254,6 +254,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   and the weaver weaves anyway (doubling is harmless, skipping leaks).
   "OR" = every operator looser than AND: XOR (all dialects) and `||`
   where the profile implements `dialect.PipesOr` (MySQL) — doc 14 §11.7.
+  Token comparison (`conjTokMatch`, F13, owner decision 2026-10-21)
+  folds ASCII only — never `strings.ToLower` (Kelvin sign → `k`); on
+  MySQL/SQLite unquoted identifiers compare EXACTLY (MySQL aliases are
+  case-sensitive: `A` ≠ `a`) and only reserved keywords outside a
+  qualified name fold, so a case-variant-only match is absent and gets
+  woven; PG folds unquoted identifiers (ASCII) like the server does.
 - R6 anchors check the UNWOVEN template (template validity must not
   depend on config); a broken policy set (any SQLETCH303) disables ALL
   policies for the run — never half-woven output.

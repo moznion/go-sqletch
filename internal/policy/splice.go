@@ -190,7 +190,7 @@ func looseOrOperator(tok dialect.Token, up string, dotted, pipesOr bool) bool {
 // (caseNest). lexOK is false when the clause could not be lexed or its
 // CASE nesting could not be balanced; such a clause credits nothing.
 type clauseScan struct {
-	segs  [][]string
+	segs  [][]conjTok
 	hasOR bool
 	lexOK bool
 	// start is the absolute offset of the clause's first token; end is
@@ -203,7 +203,7 @@ type clauseScan struct {
 // segCollector accumulates normalized conjunct segments.
 type segCollector struct {
 	cs  clauseScan
-	cur []string
+	cur []conjTok
 }
 
 func (c *segCollector) flush() {
@@ -218,7 +218,7 @@ func (c *segCollector) content(tok dialect.Token, abs int) {
 		c.cs.start = abs
 	}
 	c.cs.end = abs + tok.End - tok.Start
-	c.cur = append(c.cur, normalizeTok(tok))
+	c.cur = appendConjTok(c.cur, tok)
 }
 
 // whereBoundary reports whether a construct item ends the WHERE
@@ -810,11 +810,11 @@ func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTempl
 	return runHasNatural
 }
 
-// normalizedTokens lexes text into the same normalized form the
-// clause scanners produce; nil when the text does not lex.
-func normalizedTokens(profile dialect.LexerProfile, text string) []string {
+// normalizedTokens lexes text into the same token form the clause
+// scanners produce; nil when the text does not lex.
+func normalizedTokens(profile dialect.LexerProfile, text string) []conjTok {
 	src := []byte(text)
-	var out []string
+	var out []conjTok
 	pos := 0
 	for {
 		tok, err := profile.NextToken(src, pos)
@@ -829,24 +829,130 @@ func normalizedTokens(profile dialect.LexerProfile, text string) []string {
 		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 			continue
 		}
-		out = append(out, normalizeTok(tok))
+		out = appendConjTok(out, tok)
 	}
 }
 
-// normalizeTok folds plain identifiers (every dialect here either
-// folds unquoted identifiers or compares them case-insensitively);
-// all other tokens compare verbatim.
-func normalizeTok(tok dialect.Token) string {
-	if tok.Kind == dialect.KindIdent {
-		return strings.ToLower(tok.Text)
-	}
-	return tok.Text
+// conjTok is one content token of a conjunct segment, kept with enough
+// context for conjTokMatch to decide case-sensitivity per dialect.
+type conjTok struct {
+	text string
+	// ident: an unquoted identifier or keyword (KindIdent). Every other
+	// token — quoted identifiers included — compares verbatim.
+	ident bool
+	// afterDot: the token follows a `.`, i.e. it is a qualified-name
+	// part — an identifier position even when keyword-spelled (MySQL
+	// admits reserved words there unquoted).
+	afterDot bool
 }
 
-func tokensEqual(a, b []string) bool { return slices.Equal(a, b) }
+func appendConjTok(seg []conjTok, tok dialect.Token) []conjTok {
+	afterDot := len(seg) > 0 && !seg[len(seg)-1].ident && seg[len(seg)-1].text == "."
+	return append(seg, conjTok{text: tok.Text, ident: tok.Kind == dialect.KindIdent, afterDot: afterDot})
+}
+
+// foldKeywords are the words compared case-insensitively on the
+// case-insensitive-identifier dialects (MySQL, SQLite). Every one is
+// RESERVED in MySQL, so outside a qualified name (afterDot) it can never
+// be an unquoted alias, table, or column there — folding it cannot merge
+// two distinct relations. A keyword missing from this list (END, ANY, …)
+// just compares exactly: a case-variant copy is then woven again, which
+// is the safe direction.
+var foldKeywords = map[string]bool{
+	"AND": true, "OR": true, "NOT": true, "XOR": true, "IS": true,
+	"NULL": true, "TRUE": true, "FALSE": true, "IN": true, "EXISTS": true,
+	"SELECT": true, "FROM": true, "WHERE": true, "AS": true, "ON": true,
+	"JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true, "CROSS": true,
+	"OUTER": true, "NATURAL": true, "USING": true, "LIKE": true,
+	"REGEXP": true, "RLIKE": true, "BETWEEN": true, "CASE": true,
+	"WHEN": true, "THEN": true, "ELSE": true, "DISTINCT": true, "ALL": true,
+	"LIMIT": true, "GROUP": true, "BY": true, "ORDER": true, "HAVING": true,
+	"UNION": true, "INTERVAL": true, "BINARY": true, "DIV": true,
+	"MOD": true, "COLLATE": true, "ASC": true, "DESC": true,
+}
+
+// conjTokMatch decides whether a hand-written segment token matches the
+// policy conjunct's token (security F13, owner decision 2026-10-21:
+// fail closed). Folding is ASCII-only on every dialect — no engine
+// folds U+212A KELVIN SIGN to `k`, so Unicode folding would credit a
+// conjunct written against a different relation.
+//
+//   - PostgreSQL folds unquoted identifiers to lower case (ASCII) at
+//     parse time, so an ASCII case variant IS the same identifier.
+//   - MySQL (lower_case_table_names=0) table names and aliases are
+//     case-sensitive: `A` and `a` are different relations. SQLite
+//     resolves case-insensitively, but exact comparison there only
+//     costs a redundant (harmless) woven conjunct. So on the dialects
+//     declaring dialect.CaseInsensitiveIdents only reserved keywords
+//     (foldKeywords, outside a qualified name) fold; every other
+//     identifier must match exactly, and a case-variant-only match is
+//     ABSENT — the weaver weaves anyway (doubling is harmless, skipping
+//     leaks). The weaver's own output carries the exact bound name, so
+//     Enforce still credits it.
+func conjTokMatch(caseInsensitiveDialect bool, a, b conjTok) bool {
+	if a.text == b.text && a.ident == b.ident {
+		return true
+	}
+	if !a.ident || !b.ident || !asciiEqualFold(a.text, b.text) {
+		return false
+	}
+	if !caseInsensitiveDialect {
+		return true
+	}
+	return !a.afterDot && !b.afterDot && foldKeywords[asciiUpper(a.text)]
+}
+
+func conjTokensEqual(profile dialect.LexerProfile, a, b []conjTok) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ci := caseInsensitiveIdents(profile)
+	for i := range a {
+		if !conjTokMatch(ci, a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func caseInsensitiveIdents(profile dialect.LexerProfile) bool {
+	p, ok := profile.(dialect.CaseInsensitiveIdents)
+	return ok && p.CaseInsensitiveIdents()
+}
+
+func asciiLowerByte(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
+}
+
+// asciiEqualFold is strings.EqualFold restricted to ASCII letters;
+// every other byte compares exactly.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if asciiLowerByte(a[i]) != asciiLowerByte(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'a' <= c && c <= 'z' {
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b)
+}
 
 // segsContain reports whether any segment equals the conjunct's
-// normalized token sequence — bare, or wrapped in one pair of
+// token sequence under conjTokMatch — bare, or wrapped in one pair of
 // parentheses. The weaver splices every occurrence parenthesized
 // (design 14 §11.6), so the parenthesized form is what its own output
 // carries; the bare form keeps a hand-written unparenthesized copy of
@@ -854,17 +960,17 @@ func tokensEqual(a, b []string) bool { return slices.Equal(a, b) }
 // predicate that itself carries a depth-0 AND/OR can never equal one
 // AND-split segment — the weaver then weaves anyway (doubling is
 // harmless, skipping leaks).
-func segsContain(profile dialect.LexerProfile, segs [][]string, conjunct string) bool {
+func segsContain(profile dialect.LexerProfile, segs [][]conjTok, conjunct string) bool {
 	want := normalizedTokens(profile, conjunct)
 	if want == nil {
 		return false
 	}
-	wrapped := make([]string, 0, len(want)+2)
-	wrapped = append(wrapped, "(")
+	wrapped := make([]conjTok, 0, len(want)+2)
+	wrapped = append(wrapped, conjTok{text: "("})
 	wrapped = append(wrapped, want...)
-	wrapped = append(wrapped, ")")
+	wrapped = append(wrapped, conjTok{text: ")"})
 	for _, seg := range segs {
-		if tokensEqual(seg, want) || tokensEqual(seg, wrapped) {
+		if conjTokensEqual(profile, seg, want) || conjTokensEqual(profile, seg, wrapped) {
 			return true
 		}
 	}
