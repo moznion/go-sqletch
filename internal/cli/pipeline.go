@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -89,6 +90,26 @@ func destructiveResetDiag(cfg config.Config, err error) (diagnostics.Diagnostic,
 		"refusing to reset the %s database at database.dsn: sqletch drops the schema before applying it, which destroys data unless the database is disposable",
 		dre.Server)
 	d.Hint = "leave database.dsn empty to use a disposable container, or point it at a throwaway database and pass --allow-destructive to confirm sqletch may drop and recreate its schema"
+	return d, true
+}
+
+// cacheSymlinkDiag converts the cache store's refusal to write through a
+// committed symlink inside the cache tree (cache.SymlinkError) into
+// SQLETCH306 against the config. It is the same class as a cache.path
+// that escapes the project — a committed artifact steering sqletch's
+// writes outside it — so it carries the same code, as an error: the
+// run fills no miss, and the preflight (Store.CheckWritable) makes sure
+// the committed tree is untouched.
+func cacheSymlinkDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
+	var se *cache.SymlinkError
+	if !errors.As(err, &se) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodePathEscape,
+		diagnostics.Span{File: cfg.Path},
+		"cache directory %q contains a symbolic link at %s: sqletch never writes cache entries through a link, because a committed one can point anywhere outside the project",
+		cfg.Cache.Path, se.Rel)
+	d.Hint = fmt.Sprintf("replace %s with a real directory (or delete it) and rerun; the cache tree is sqletch's own and holds no links", path.Join(filepath.ToSlash(cfg.Cache.Path), se.Rel))
 	return d, true
 }
 
@@ -268,6 +289,19 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 				return nil, errServerDrift
 			}
 		}
+		// Every rendering may become a miss (a catalog epoch change
+		// re-describes all of them), so check every entry's path for a
+		// committed symlink before the first write: a refusal must
+		// leave the tree untouched, env.json included.
+		var refs []cache.OracleRef
+		for _, cq := range queries {
+			for _, r := range cq.rs {
+				refs = append(refs, oracleRef(cq.slug, cq.q.Name, r))
+			}
+		}
+		if err := store.CheckWritable(refs); err != nil {
+			return nil, err
+		}
 		if err := store.SaveEnv(envRecord(cfg, fp, det.ServerVersion)); err != nil {
 			return nil, err
 		}
@@ -297,6 +331,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		if errors.Is(err, errServerDrift) {
 			return res, nil // SQLETCH203 is already in res.Diags
 		}
+		if d, ok := cacheSymlinkDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -316,6 +354,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		if !haveCat || !sameCatalog(cat, live) {
 			cat = live
 			if err := store.SaveCatalog(cat); err != nil {
+				if d, ok := cacheSymlinkDiag(cfg, err); ok {
+					res.Diags = append(res.Diags, d)
+					return res, nil
+				}
 				return nil, err
 			}
 			misses = misses[:0]
@@ -336,6 +378,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			}
 			m.cq.descs[m.ri] = desc
 			if err := store.SaveOracle(oracleRef(m.cq.slug, m.cq.q.Name, r), dialect.EntryFromDesc(fp, r.SQL, desc)); err != nil {
+				if d, ok := cacheSymlinkDiag(cfg, err); ok {
+					res.Diags = append(res.Diags, d)
+					return res, nil
+				}
 				return nil, err
 			}
 		}
@@ -395,6 +441,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 		}
 		if errors.Is(err, errServerDrift) {
 			return res, nil // SQLETCH203 is already in res.Diags
+		}
+		if d, ok := cacheSymlinkDiag(cfg, err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
 		}
 		if err != nil {
 			return nil, err

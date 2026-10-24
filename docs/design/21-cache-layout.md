@@ -190,6 +190,27 @@ Rules, mirroring `removeStaleGenerated`:
 earlier run and a warm offline `generate` never touches it (§3.1 — the
 sidecar is only read and written where a server is contacted).
 
+### 4.1 Writes never follow a link inside the tree
+
+The tree is committed, so its directories are repo-controlled. Every
+store write (`catalog.json`, `env.json`, each oracle entry) goes
+through an `os.Root` opened on the cache directory and `Lstat`s each
+directory component between the root and the leaf; a symlinked
+component — `oracle` itself, a target-slug segment, a query directory —
+is a `cache.SymlinkError`, never followed, even when it would stay
+inside the cache (the tree written must be the tree `Walk`/`Sweep`
+see, and they never follow links). The leaf keeps `WriteFileAtomic`'s
+guarantees: random `O_EXCL` temp name, and the rename replaces a link
+sitting at the entry path instead of writing through it.
+
+The pipeline preflights every rendering's entry path
+(`Store.CheckWritable`) before its first write, so a refusal leaves the
+committed tree untouched (not even `env.json` is written), and reports
+it as `SQLETCH306` (error) against the config — the same class as a
+`cache.path` that escapes the project. This applies to `generate` and
+`check` alike: both fill misses. The ancestry of `cache.path` itself
+remains config.Load's check.
+
 ## 5. Corpus impact
 
 `internal/corpus` cases are committed cache trees, so they adopt the

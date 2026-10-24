@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -329,7 +330,7 @@ func (s *Store) SaveCatalog(cat *Catalog) error {
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.catalogPath(), data)
+	return s.writeFile(CatalogFile, data)
 }
 
 // LoadOracle returns the cached Describe result for (fp, renderedSQL)
@@ -355,7 +356,7 @@ func (s *Store) SaveOracle(r OracleRef, e *OracleEntry) error {
 	if err != nil {
 		return err
 	}
-	return s.writeFile(s.oraclePath(r), data)
+	return s.writeFile(OracleFileName(r), data)
 }
 
 // EncodeCatalog returns the exact canonical bytes SaveCatalog writes.
@@ -387,9 +388,146 @@ func marshalCanonical(v any) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// writeFile writes atomically, creating parent directories.
-func (s *Store) writeFile(path string, data []byte) error {
-	return WriteFileAtomic(path, data, 0o644)
+// SymlinkError is the store's refusal to write through a symbolic link
+// that sits on a DIRECTORY between the cache root and an entry. The
+// cache tree is committed, hence repo-controlled: a planted
+// `oracle -> /elsewhere` (or a symlinked slug/query directory) would
+// otherwise have every miss-fill create and overwrite files outside the
+// project, which Walk and Sweep — they never follow links — could not
+// even see to clean up. The cli layer reports it as SQLETCH306.
+type SymlinkError struct {
+	Dir string // the cache directory
+	Rel string // the offending component, store-relative, slash form
+}
+
+func (e *SymlinkError) Error() string {
+	return fmt.Sprintf("cache path %s in %s is a symbolic link; sqletch does not write cache entries through links", e.Rel, e.Dir)
+}
+
+// CheckWritable reports, without writing anything, the first symlinked
+// directory on the way to OracleDir or to any of refs' entries (a
+// *SymlinkError), so a caller can refuse BEFORE the first write and
+// leave the committed tree untouched. Missing directories are fine (the
+// write creates them), and so is a symlink at an entry's own path: the
+// atomic rename replaces it rather than writing through it.
+//
+// The writes enforce the same rule themselves; this is the early,
+// all-or-nothing form of it.
+func (s *Store) CheckWritable(refs []OracleRef) error {
+	seen := map[string]bool{}
+	check := func(rel string) error {
+		if seen[rel] {
+			return nil
+		}
+		seen[rel] = true
+		fi, err := os.Lstat(filepath.Join(s.dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil // absent (or unreadable): the write decides
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return &SymlinkError{Dir: s.dir, Rel: rel}
+		}
+		return nil
+	}
+	if err := check(OracleDir); err != nil {
+		return err
+	}
+	for _, r := range refs {
+		segs := strings.Split(path.Dir(OracleFileName(r)), "/")
+		for i := range segs {
+			if err := check(strings.Join(segs[:i+1], "/")); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// writeFile writes the store-relative file rel atomically, creating
+// parent directories. Every operation goes through an os.Root opened on
+// the cache directory, so nothing can resolve outside it, and every
+// directory component is Lstat'ed first so a committed symlink — even
+// one that stays inside the cache — is refused (*SymlinkError) instead
+// of followed: the tree the store writes is exactly the tree Walk and
+// Sweep see. The leaf keeps WriteFileAtomic's guarantees (random
+// O_EXCL temp name, rename replaces a link at the destination).
+func (s *Store) writeFile(rel string, data []byte) error {
+	// The cache directory itself is the configured path; its ancestry
+	// is config.Load's SQLETCH306 check, not the store's.
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if dir := path.Dir(rel); dir != "." {
+		if err := s.mkdirNoFollow(root, dir); err != nil {
+			return err
+		}
+	}
+	return writeAtomicIn(root, filepath.FromSlash(rel), data, 0o644)
+}
+
+// mkdirNoFollow creates the slash-separated directory dir under root
+// one component at a time, refusing any component that is a symlink.
+func (s *Store) mkdirNoFollow(root *os.Root, dir string) error {
+	cur := ""
+	for seg := range strings.SplitSeq(dir, "/") {
+		cur = path.Join(cur, seg)
+		name := filepath.FromSlash(cur)
+		fi, err := root.Lstat(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := root.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			fi, err = root.Lstat(name)
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return &SymlinkError{Dir: s.dir, Rel: cur}
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("cache path %s in %s is not a directory", cur, s.dir)
+		}
+	}
+	return nil
+}
+
+// writeAtomicIn is WriteFileAtomic confined to root: the temp file is
+// created O_CREATE|O_EXCL under a random name (never follows or
+// collides with a planted link) and renamed over name, which replaces
+// a symlink sitting there instead of writing through it.
+func writeAtomicIn(root *os.Root, name string, data []byte, perm os.FileMode) error {
+	tmp := filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+"."+rand.Text()+".tmp")
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tmp != "" {
+			_ = root.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(tmp, name); err != nil {
+		return err
+	}
+	tmp = "" // rename consumed it; skip the deferred cleanup
+	return nil
 }
 
 // ReadFileCapped reads path but refuses more than MaxFileBytes, so an

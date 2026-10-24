@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -235,6 +236,65 @@ func TestOutsideProject(t *testing.T) {
 	} {
 		if got := outsideProject(cfg, path); got != want {
 			t.Errorf("outsideProject(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestRun_SymlinkInCacheTreeIsRefused is F8 end to end: a committed
+// symlink on a directory inside the cache tree (`oracle` itself, or a
+// target-slug directory under it) pointing outside the project made
+// every miss-fill — `check` as much as `generate`, and with no database
+// at all on native MySQL — write entries through it. The run must
+// refuse with SQLETCH306 against the config, write nothing outside,
+// and leave the committed tree exactly as it was (no env/catalog
+// written ahead of the refusal).
+func TestRun_SymlinkInCacheTreeIsRefused(t *testing.T) {
+	for _, link := range []string{"oracle", "oracle/app"} {
+		for _, mode := range []Mode{ModeGenerate, ModeCheck} {
+			t.Run(fmt.Sprintf("%s/mode%d", link, mode), func(t *testing.T) {
+				cfg := writeFanOutProject(t, "")
+				outside := t.TempDir()
+				cacheDir := cfg.Abs(cfg.Cache.Path)
+				p := filepath.Join(cacheDir, filepath.FromSlash(link))
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, p); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+
+				res, err := Run(context.Background(), cfg, mode, RunOptions{})
+				if err != nil {
+					t.Fatalf("run: %v (want a SQLETCH306 diagnostic, not an environment error)", err)
+				}
+				var found bool
+				for _, d := range res.Diags {
+					if d.Code == diagnostics.CodePathEscape && d.Severity == diagnostics.Error {
+						found = true
+						if d.Span.File != cfg.Path {
+							t.Errorf("SQLETCH306 span = %q, want the config %q", d.Span.File, cfg.Path)
+						}
+						if !strings.Contains(d.Message, link) {
+							t.Errorf("message does not name the link %q: %s", link, d.Message)
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("want a SQLETCH306 error, got %+v", res.Diags)
+				}
+				if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+					t.Errorf("wrote outside the project through the link: %v", ents)
+				}
+				ents, err := os.ReadDir(cacheDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range ents {
+					if e.Name() != "oracle" {
+						t.Errorf("the refusal left %s in the committed tree", e.Name())
+					}
+				}
+			})
 		}
 	}
 }
