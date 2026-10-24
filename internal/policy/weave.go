@@ -81,9 +81,9 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	w := &weaver{
 		profile: profile, q: q, maxR: maxR, kind: tree.Kind(),
 		rels: rels, deep: tree.DeepTables(),
-		upsertUpdate: tree.HasConflictUpdate(),
-		onInfo:       map[int]*joinOnResult{},
-		nBranches:    nBranches,
+		conflict:  conflictArmOf(tree),
+		onInfo:    map[int]*joinOnResult{},
+		nBranches: nBranches,
 	}
 	var overNested []dialect.NestedDML
 	w.overread, overNested = overreadDeep(profile, fe, q, w.deep)
@@ -305,10 +305,11 @@ type weaver struct {
 	// when nBranches > 0.
 	nBranches int
 	setop     *setOpScan
-	// upsertUpdate reports an INSERT whose ON CONFLICT DO UPDATE (MySQL:
-	// ON DUPLICATE KEY UPDATE) arm modifies rows — refused on a
-	// designated target (audit-12 M10).
-	upsertUpdate bool
+	// conflict reports an INSERT whose conflict handling modifies
+	// existing rows (ON CONFLICT DO UPDATE, MySQL ON DUPLICATE KEY
+	// UPDATE / REPLACE) — refused on a designated target (audit-12 M10,
+	// F10).
+	conflict conflictArm
 	// nested is every data-modifying statement nested inside this one
 	// (PostgreSQL wCTEs), in the maximal rendering or any non-maximal
 	// verified rendering — refused on a designated target whose kind
@@ -357,7 +358,43 @@ func (p *Policy) coversNested(d dialect.NestedDML) bool {
 	return false
 }
 
-func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, upsertUpdate bool, nested []dialect.NestedDML) applicability {
+// conflictArm describes how an INSERT's conflict handling touches an
+// EXISTING row (audit-12 M10, security finding F10): update = the row is
+// rewritten (ON CONFLICT DO UPDATE, ON DUPLICATE KEY UPDATE, REPLACE);
+// del = the row is deleted (MySQL REPLACE deletes the colliding row
+// before inserting). DO NOTHING / INSERT IGNORE touch nothing.
+type conflictArm struct {
+	update bool
+	del    bool
+}
+
+func conflictArmOf(tree dialect.Tree) conflictArm {
+	c := conflictArm{update: tree.HasConflictUpdate()}
+	if cd, ok := tree.(dialect.ConflictDeleter); ok {
+		c.del = cd.HasConflictDelete()
+	}
+	return c
+}
+
+// governedBy reports whether policy p governs the row modification this
+// conflict arm performs: a rewrite is an update-shaped modification, a
+// deletion a delete-shaped one, so either covered kind makes it bite.
+// Each arm answers only to its own kind — ON DUPLICATE KEY UPDATE never
+// deletes, so a delete-only policy leaves it alone.
+func (c conflictArm) governedBy(p *Policy) bool {
+	return (c.update && p.appliesTo(dialect.StmtUpdate)) ||
+		(c.del && p.appliesTo(dialect.StmtDelete))
+}
+
+// construct names the conflict statement form for diagnostics.
+func (c conflictArm) construct() string {
+	if c.del {
+		return "REPLACE (which deletes the colliding row before inserting)"
+	}
+	return "INSERT … ON CONFLICT DO UPDATE (upsert)"
+}
+
+func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, conflict conflictArm, nested []dialect.NestedDML) applicability {
 	var a applicability
 	// A data-modifying CTE modifies rows under its OWN kind, whatever
 	// the outer statement is (finding F9, owner decision 2026-10-21):
@@ -394,9 +431,10 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 		// INSERT … ON CONFLICT DO UPDATE on a designated target MODIFIES
 		// rows like an UPDATE — the policy is active (to be REFUSED in
 		// apply/Enforce) when it covers updates and the target is
-		// designated.
+		// designated. MySQL REPLACE (F10) deletes the colliding row, so
+		// it is also governed by delete coverage (conflictArm.governedBy).
 		a.active = (a.hidden && p.coversSelect()) ||
-			(upsertUpdate && len(a.topOcc) > 0 && p.appliesTo(dialect.StmtUpdate))
+			(len(a.topOcc) > 0 && conflict.governedBy(p))
 	} else {
 		a.active = p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)
 	}
@@ -575,7 +613,7 @@ func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 // the requirement fail UNSCOPED, putting the safe direction at the
 // mercy of every caller honoring the error.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []whereNeed, []onNeed, []diagnostics.Diagnostic) {
-	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.upsertUpdate, w.nested)
+	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.conflict, w.nested)
 	over := designatedOverread(p, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
 		return nil, nil, nil, nil
@@ -640,15 +678,16 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 			fmt.Sprintf("designated table %q is the target of a data-modifying CTE (%s inside WITH), which modifies rows sqletch cannot scope", d.Table, nestedDMLVerb(*d))))
 	}
 	if w.kind == dialect.StmtInsert {
-		if w.upsertUpdate && len(a.topOcc) > 0 {
+		if len(a.topOcc) > 0 && w.conflict.governedBy(p) {
 			// An INSERT … ON CONFLICT DO UPDATE (MySQL: ON DUPLICATE KEY
 			// UPDATE) on a designated target modifies rows on a conflict,
 			// but the DO UPDATE arm cannot carry a woven WHERE that scopes
 			// the conflict — a cross-tenant unique-key collision could
 			// overwrite another tenant's row. Refuse (owner decision
-			// 2026-08-21, audit-12 M10).
+			// 2026-08-21, audit-12 M10). MySQL REPLACE deletes the
+			// colliding row — any tenant's — the same way (F10).
 			return fail(w.unweavable(p, w.relSpan(a.topOcc[0].RelRef),
-				fmt.Sprintf("table %q is the target of an INSERT … ON CONFLICT DO UPDATE (upsert); its DO UPDATE arm modifies rows but cannot carry a scoping conjunct, so the upsert cannot be woven", a.topOcc[0].Table)))
+				fmt.Sprintf("table %q is the target of an %s; its conflict handling modifies an existing row but cannot carry a scoping conjunct, so the statement cannot be woven", a.topOcc[0].Table, w.conflict.construct())))
 		}
 		return fail(w.unweavable(p, w.q.HeaderSpan,
 			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope"))

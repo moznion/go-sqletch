@@ -551,6 +551,23 @@ Not changed (follow-up, not settled): hidden reads inside an
 UPDATE/DELETE are still gated on the outer kind rather than on
 `coversSelect()`.
 
+*MySQL `REPLACE` (security finding F10).* `REPLACE` (any form —
+`VALUES`, `SET`, `SELECT`) parses as an `InsertStmt` with `IsReplace`
+and resolves a unique-key collision by DELETING the existing row —
+whoever owns it — then inserting: with a request-supplied key, tenant
+B replaces tenant A's row. It is a row-modifying conflict arm, so the
+MySQL facade reports it through `HasConflictUpdate()`. Because the
+modification is a deletion, it additionally implements the optional
+`dialect.ConflictDeleter` capability (`HasConflictDelete()`), and the
+refusal (weave `SQLETCH125`, Enforce `SQLETCH124`) fires when the
+policy covers `update` **or** `delete` (`policy.conflictArm.governedBy`,
+shared by Weave and Enforce). Each arm answers only to its own kind: a
+delete-only policy still leaves `ON DUPLICATE KEY UPDATE` /
+`DO UPDATE` alone (they never delete), and a select-only policy governs
+neither. `INSERT IGNORE` touches no existing row and stays a
+non-target. SQLite's `REPLACE` / `INSERT OR REPLACE` is handled
+separately (F17).
+
 ## 6. Enforcement
 
 Weaving alone does not prove absence of leaks: a query can name the
