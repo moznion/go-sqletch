@@ -570,6 +570,15 @@ naming a policy that does not exist, or that does not apply to the
 query, is itself a diagnostic — otherwise renaming a policy silently
 disarms every opt-out that mentioned it.
 
+Attachment (shared by every `-- @…` directive): a directive belongs to
+the query whose body continues past it — the next real SQL token **or
+construct** (`@if-present`, `@when`, `@choose`, `@order-by`, `@in`,
+`@filter-tree`) of the current query claims it. A directive with only
+trivia between it and the next `-- name:` header belongs to that
+FOLLOWING query; one after the last query's body belongs to the last
+query. An opt-out placed before a trailing construct therefore never
+drifts onto the next query (it used to, leaving that query unscoped).
+
 ### 6.3 `explain` coverage report
 
 `sqletch explain` gains a per-query policy section: for each query, the
