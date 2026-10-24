@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Aa\x8a a\xb8 a\xe3 a\xcd a\xb8 a\xe3 a\xcd a\xb70")

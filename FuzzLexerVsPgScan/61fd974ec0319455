@@ -1,0 +1,2 @@
+go test fuzz v1
+string("B''B''B''U&''B''B''U&''U&\"0\"")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("!\xea!\xbc!\xde0!\x80")

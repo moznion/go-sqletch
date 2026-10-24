@@ -1,0 +1,2 @@
+go test fuzz v1
+string("A00000 \xa9 A000 A00a00")

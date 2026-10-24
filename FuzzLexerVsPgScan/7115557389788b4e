@@ -1,0 +1,2 @@
+go test fuzz v1
+string("$AAAA\xc3A\x8c 00")

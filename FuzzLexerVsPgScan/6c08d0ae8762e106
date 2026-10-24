@@ -1,0 +1,2 @@
+go test fuzz v1
+string("$\x80_9$$\x80_9$,$0$,$A0\"")

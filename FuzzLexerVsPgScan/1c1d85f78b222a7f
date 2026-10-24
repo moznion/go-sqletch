@@ -1,0 +1,2 @@
+go test fuzz v1
+string("U&'''0'''U&\"00000\"")

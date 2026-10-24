@@ -1,0 +1,2 @@
+go test fuzz v1
+string("E''\v\n''e''\r''e''\r''\v''")

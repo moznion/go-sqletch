@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xee\xfd \xda\xfa\xa9 \xff \xff\xff")

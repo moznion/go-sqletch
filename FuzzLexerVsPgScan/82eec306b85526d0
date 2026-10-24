@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xf1000 \xcf0 \xdf0 \xd50 \xde0 \xd20''\xc30 \xd00")
