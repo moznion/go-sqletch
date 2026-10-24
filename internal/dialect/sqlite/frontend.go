@@ -315,13 +315,43 @@ func (t *tree) Kind() dialect.StmtKind {
 func (t *tree) NestedDML() []dialect.NestedDML { return nil }
 
 func (t *tree) HasConflictUpdate() bool {
-	ins, ok := t.first().(*rsql.InsertStatement)
-	if !ok {
-		return false
+	switch s := t.first().(type) {
+	case *rsql.InsertStatement:
+		// The REPLACE conflict-resolution algorithm (INSERT OR REPLACE,
+		// REPLACE INTO) DELETES every existing row that collides on a
+		// UNIQUE/PRIMARY KEY constraint before inserting — a
+		// cross-tenant key collision removes the other tenant's row
+		// (F17). It applies to every constraint an ON CONFLICT clause
+		// does not name, so it is row-modifying whatever that clause
+		// says.
+		if s.InsertOrReplace.IsValid() || s.Replace.IsValid() {
+			return true
+		}
+		// ON CONFLICT … DO UPDATE modifies rows on a conflict; DO NOTHING
+		// (DoUpdate position invalid) does not.
+		return s.UpsertClause != nil && s.UpsertClause.DoUpdate.IsValid()
+	case *rsql.UpdateStatement:
+		// UPDATE OR REPLACE deletes any OTHER row the updated values
+		// collide with — a row the statement's (woven) WHERE never
+		// selected. OR IGNORE/ABORT/FAIL/ROLLBACK touch no other row.
+		return s.UpdateOrReplace.IsValid()
 	}
-	// ON CONFLICT … DO UPDATE modifies rows on a conflict; DO NOTHING
-	// (DoUpdate position invalid) does not.
-	return ins.UpsertClause != nil && ins.UpsertClause.DoUpdate.IsValid()
+	return false
+}
+
+// HasConflictDelete implements dialect.ConflictDeleter: the REPLACE
+// algorithm resolves a UNIQUE/PRIMARY KEY collision by DELETING the
+// existing row, so a policy covering `delete` governs it as well
+// (design 14 §5, F17). ON CONFLICT … DO UPDATE rewrites but never
+// deletes.
+func (t *tree) HasConflictDelete() bool {
+	switch s := t.first().(type) {
+	case *rsql.InsertStatement:
+		return s.InsertOrReplace.IsValid() || s.Replace.IsValid()
+	case *rsql.UpdateStatement:
+		return s.UpdateOrReplace.IsValid()
+	}
+	return false
 }
 
 // ValueTargets reports design 20's direct value positions: VALUES items

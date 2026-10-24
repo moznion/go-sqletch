@@ -236,12 +236,14 @@ type Tree interface {
 	// parsed SQL — the analyzer uses it to require the conjunct to be
 	// SKELETON text (present in every shape) before narrowing.
 	NotNullConjuncts() []ColRef
-	// HasConflictUpdate reports an INSERT whose conflict handling
+	// HasConflictUpdate reports a statement whose conflict handling
 	// MODIFIES an existing row — PostgreSQL/SQLite `ON CONFLICT … DO
-	// UPDATE`, MySQL `ON DUPLICATE KEY UPDATE`, and MySQL `REPLACE`
-	// (which deletes the colliding row and inserts its replacement; such
-	// a facade also implements ConflictDeleter). A `DO NOTHING` arm,
-	// `INSERT IGNORE`, and every non-INSERT statement report false. The policy weaver refuses to weave such an
+	// UPDATE`, MySQL `ON DUPLICATE KEY UPDATE`, MySQL `REPLACE`, and
+	// SQLite's REPLACE algorithm (`INSERT OR REPLACE`, `REPLACE INTO`,
+	// `UPDATE OR REPLACE`); the REPLACE forms delete the colliding row
+	// (such a facade also implements ConflictDeleter). A `DO NOTHING`
+	// arm, `INSERT IGNORE`, and every other statement report false. The
+	// policy weaver refuses to weave such an
 	// upsert on a designated table (design 14 §D6, owner decision
 	// 2026-08-21): the DO UPDATE arm rewrites rows but cannot carry a
 	// woven WHERE that scopes the conflict, so refusal is the sound
@@ -304,12 +306,12 @@ type ParseError struct {
 func (e *ParseError) Error() string { return fmt.Sprintf("parse error at %d: %s", e.Pos, e.Msg) }
 
 // ConflictDeleter is an optional Tree capability: HasConflictDelete
-// reports an INSERT whose conflict handling DELETES the existing row
-// (MySQL `REPLACE`; security finding F10). The policy weaver then
-// governs the statement by `delete` coverage in addition to the
-// `update` coverage HasConflictUpdate already triggers (design 14 §5,
-// upsert refinement). A Tree that does not implement it has no deleting
-// conflict form.
+// reports a statement whose conflict handling DELETES an existing row
+// (MySQL `REPLACE`, F10; SQLite `INSERT OR REPLACE` / `REPLACE INTO` /
+// `UPDATE OR REPLACE`, F17). The policy weaver then governs the
+// statement by `delete` coverage in addition to the `update` coverage
+// HasConflictUpdate already triggers (design 14 §5, upsert refinement).
+// A Tree that does not implement it has no deleting conflict form.
 type ConflictDeleter interface {
 	HasConflictDelete() bool
 }

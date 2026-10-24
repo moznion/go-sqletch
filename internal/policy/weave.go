@@ -305,10 +305,10 @@ type weaver struct {
 	// when nBranches > 0.
 	nBranches int
 	setop     *setOpScan
-	// conflict reports an INSERT whose conflict handling modifies
+	// conflict reports a statement whose conflict handling modifies
 	// existing rows (ON CONFLICT DO UPDATE, MySQL ON DUPLICATE KEY
-	// UPDATE / REPLACE) — refused on a designated target (audit-12 M10,
-	// F10).
+	// UPDATE / REPLACE, SQLite INSERT/UPDATE OR REPLACE) — refused on a
+	// designated target (audit-12 M10, F10, F17).
 	conflict conflictArm
 	// nested is every data-modifying statement nested inside this one
 	// (PostgreSQL wCTEs), in the maximal rendering or any non-maximal
@@ -358,11 +358,12 @@ func (p *Policy) coversNested(d dialect.NestedDML) bool {
 	return false
 }
 
-// conflictArm describes how an INSERT's conflict handling touches an
-// EXISTING row (audit-12 M10, security finding F10): update = the row is
-// rewritten (ON CONFLICT DO UPDATE, ON DUPLICATE KEY UPDATE, REPLACE);
-// del = the row is deleted (MySQL REPLACE deletes the colliding row
-// before inserting). DO NOTHING / INSERT IGNORE touch nothing.
+// conflictArm describes how a statement's conflict handling touches an
+// EXISTING row (audit-12 M10, security findings F10/F17): update = the
+// row is rewritten (ON CONFLICT DO UPDATE, ON DUPLICATE KEY UPDATE,
+// REPLACE); del = the row is deleted (MySQL REPLACE and SQLite's REPLACE
+// algorithm delete the colliding row). DO NOTHING / INSERT IGNORE /
+// OR IGNORE touch nothing.
 type conflictArm struct {
 	update bool
 	del    bool
@@ -379,7 +380,8 @@ func conflictArmOf(tree dialect.Tree) conflictArm {
 // governedBy reports whether policy p governs the row modification this
 // conflict arm performs: a rewrite is an update-shaped modification, a
 // deletion a delete-shaped one, so either covered kind makes it bite.
-// Each arm answers only to its own kind — ON DUPLICATE KEY UPDATE never
+// Each arm answers only to its own kind — ON DUPLICATE KEY UPDATE / DO
+// UPDATE never
 // deletes, so a delete-only policy leaves it alone.
 func (c conflictArm) governedBy(p *Policy) bool {
 	return (c.update && p.appliesTo(dialect.StmtUpdate)) ||
@@ -392,6 +394,21 @@ func (c conflictArm) construct() string {
 		return "REPLACE (which deletes the colliding row before inserting)"
 	}
 	return "INSERT … ON CONFLICT DO UPDATE (upsert)"
+}
+
+// updateConflictTarget returns the target of an UPDATE whose conflict
+// handling deletes OTHER rows (SQLite UPDATE OR REPLACE, F17) when that
+// target is designated and p governs the deletion. The woven WHERE
+// scopes only the rows the UPDATE selects; the REPLACE deletes whichever
+// row the new values collide with — any tenant's — so the statement
+// cannot be woven. The target is the first top-level relation (an
+// UPDATE … FROM source cannot be a REPLACE victim).
+func updateConflictTarget(p *Policy, kind dialect.StmtKind, rels []topRel, conflict conflictArm) (topRel, bool) {
+	if kind != dialect.StmtUpdate || !conflict.del || len(rels) == 0 ||
+		rels[0].Table == "" || !p.designates(rels[0].Table) || !conflict.governedBy(p) {
+		return topRel{}, false
+	}
+	return rels[0], true
 }
 
 func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, conflict conflictArm, nested []dialect.NestedDML) applicability {
@@ -431,12 +448,16 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 		// INSERT … ON CONFLICT DO UPDATE on a designated target MODIFIES
 		// rows like an UPDATE — the policy is active (to be REFUSED in
 		// apply/Enforce) when it covers updates and the target is
-		// designated. MySQL REPLACE (F10) deletes the colliding row, so
-		// it is also governed by delete coverage (conflictArm.governedBy).
+		// designated. MySQL REPLACE (F10) and SQLite's REPLACE algorithm
+		// (F17) delete the colliding row, so they are also governed by
+		// delete coverage (conflictArm.governedBy).
 		a.active = (a.hidden && p.coversSelect()) ||
 			(len(a.topOcc) > 0 && conflict.governedBy(p))
 	} else {
-		a.active = p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)
+		// UPDATE OR REPLACE on a designated target is active (to be
+		// REFUSED) under delete coverage alone, too (F17).
+		_, conflictTarget := updateConflictTarget(p, kind, rels, conflict)
+		a.active = (p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)) || conflictTarget
 	}
 	if a.nestedHit != nil {
 		a.active = true
@@ -684,13 +705,21 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 			// but the DO UPDATE arm cannot carry a woven WHERE that scopes
 			// the conflict — a cross-tenant unique-key collision could
 			// overwrite another tenant's row. Refuse (owner decision
-			// 2026-08-21, audit-12 M10). MySQL REPLACE deletes the
-			// colliding row — any tenant's — the same way (F10).
+			// 2026-08-21, audit-12 M10). MySQL REPLACE (F10) and SQLite's
+			// REPLACE algorithm (F17) delete the colliding row — any
+			// tenant's — the same way.
 			return fail(w.unweavable(p, w.relSpan(a.topOcc[0].RelRef),
 				fmt.Sprintf("table %q is the target of an %s; its conflict handling modifies an existing row but cannot carry a scoping conjunct, so the statement cannot be woven", a.topOcc[0].Table, w.conflict.construct())))
 		}
 		return fail(w.unweavable(p, w.q.HeaderSpan,
 			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope"))
+	}
+	if tgt, ok := updateConflictTarget(p, w.kind, w.rels, w.conflict); ok {
+		// SQLite UPDATE OR REPLACE (F17): the woven WHERE would scope the
+		// rows the UPDATE selects, but the REPLACE deletes whichever row
+		// the new values collide with — another tenant's included.
+		return fail(w.unweavable(p, w.relSpan(tgt.RelRef),
+			fmt.Sprintf("table %q is the target of an UPDATE OR REPLACE; its conflict handling deletes whichever row the new values collide with, which no scoping conjunct reaches, so the statement cannot be woven", tgt.Table)))
 	}
 	if a.hidden {
 		return fail(w.unweavable(p, w.q.HeaderSpan,
