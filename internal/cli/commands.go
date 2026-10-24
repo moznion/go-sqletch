@@ -404,6 +404,10 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
 		return ExitDiagnostics
 	}
+	if d, ok := sqliteFileAccessDiag(err); ok {
+		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
+		return ExitDiagnostics
+	}
 	if err != nil {
 		fmt.Fprintf(errW, "sqletch: %v\n", err)
 		return ExitEnvironment

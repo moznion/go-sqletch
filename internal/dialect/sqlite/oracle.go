@@ -25,18 +25,41 @@ import (
 type Oracle struct {
 	conn *sqlite3.Conn
 	cat  *cache.Catalog // lazy snapshot for source-column resolution
+	// guard forbids file-naming statements (ATTACH, VACUUM INTO, …) on
+	// conn: the engine runs in-process over the host filesystem, so a
+	// template must not reach outside the project either (F15).
+	guard    *Guard
+	guardErr error
 }
 
-func NewOracle(conn *sqlite3.Conn) *Oracle { return &Oracle{conn: conn} }
+// NewOracle restricts conn (see Restrict) and wraps it. A failure to
+// install the restriction is reported by every later call — the oracle
+// never runs unrestricted.
+func NewOracle(conn *sqlite3.Conn) *Oracle {
+	g, err := Restrict(conn)
+	return &Oracle{conn: conn, guard: g, guardErr: err}
+}
 
 // prepareOne prepares sql and rejects trailing statements. A tail made
 // up only of whitespace, extra semicolons, and comments is legal: the
 // template scanner preserves post-`;` comments in the skeleton, so a
 // rendering like `SELECT 1; -- note` must not be read as two statements.
 func (o *Oracle) prepareOne(sql string) (*sqlite3.Stmt, error) {
+	if o.guardErr != nil {
+		return nil, o.guardErr
+	}
+	o.guard.reset()
 	stmt, tail, err := o.conn.Prepare(sql)
 	if err != nil {
-		return nil, toOracleError(sql, err)
+		oe := toOracleError(sql, err)
+		if r := o.guard.take(); r != nil {
+			pos := -1
+			if e, ok := oe.(*dialect.OracleError); ok {
+				pos = e.Pos
+			}
+			return nil, &dialect.OracleError{Pos: pos, Msg: r.Error() + "; a query may read and write only the schema's own tables"}
+		}
+		return nil, oe
 	}
 	if tailHasStatement(tail) {
 		_ = stmt.Close()

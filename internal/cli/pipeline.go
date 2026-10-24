@@ -328,6 +328,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
+		if d, ok := sqliteFileAccessDiag(err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
 		if errors.Is(err, errServerDrift) {
 			return res, nil // SQLETCH203 is already in res.Diags
 		}
@@ -436,6 +440,10 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 			return res, nil
 		}
 		if d, ok := nativeDDLDiag(err); ok {
+			res.Diags = append(res.Diags, d)
+			return res, nil
+		}
+		if d, ok := sqliteFileAccessDiag(err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -600,6 +608,27 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 // SQLETCH215 with a span into the schema file — a user's schema shape
 // outside the modeled subset, not an environment failure (the same
 // distinction versionPinDiag draws for SQLETCH200).
+// sqliteFileAccessDiag converts devdb's refusal of a SQLite schema
+// statement that names a database file into SQLETCH322 with a span on
+// the statement. The in-process engine would otherwise create or
+// overwrite that file wherever the repo-controlled path points — a
+// path escape SQLETCH306 cannot see (security audit F15).
+func sqliteFileAccessDiag(err error) (diagnostics.Diagnostic, bool) {
+	fae, ok := errors.AsType[*devdb.SQLiteFileAccessError](err)
+	if !ok {
+		return diagnostics.Diagnostic{}, false
+	}
+	span := diagnostics.Span{File: fae.File}
+	if fae.Pos >= 0 {
+		span.Start, span.End = fae.Pos, fae.Pos+1
+	}
+	d := diagnostics.Errorf(diagnostics.CodeSQLiteFileAccess, span,
+		"%s is refused in a SQLite schema: the engine runs in-process with filesystem access, so a statement naming a database file would read or write outside the project, bypassing the path-escape policy (SQLETCH306)",
+		fae.Action)
+	d.Hint = "declare every table in the main database (drop the schema-qualified `x.` prefix) and remove ATTACH/DETACH, VACUUM, and directory PRAGMAs from schema files"
+	return d, true
+}
+
 func nativeDDLDiag(err error) (diagnostics.Diagnostic, bool) {
 	var ue *mysql.UnsupportedDDLError
 	if !errors.As(err, &ue) {

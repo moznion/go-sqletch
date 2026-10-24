@@ -357,6 +357,11 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   (`:memory:` and `file:` URIs pass through), reset = drop all
   tables/views, version pin compares dotted prefix ("3.50" vs
   "3.50.x").
+  In-process ⇒ host filesystem: `sqlite.Restrict` (LIMIT_ATTACHED=0 +
+  authorizer) refuses ATTACH/DETACH/VACUUM [INTO] and the directory
+  pragmas on the devdb AND oracle connection; in schema files that is
+  SQLETCH322 at the statement (F15, design 04 §2.0). Never apply
+  schema SQL with a bare `conn.Exec`.
 - Version-pin mismatch is a DIAGNOSTIC, not an environment error:
   `devdb.VersionMismatchError` (which names its own engine — it is
   shared by all three dialects) maps to SQLETCH200 against

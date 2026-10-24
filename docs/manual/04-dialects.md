@@ -104,6 +104,12 @@ EXPLAIN-grade exhaustive pass) against one committed cache.
   path, resolved relative to sqletch.yaml; empty = a temp file.
 - The dev database file is disposable: sqletch drops every table and
   view before applying the schema.
+- Because the engine runs in-process with filesystem access, schema
+  files and queries may not name other database files: `ATTACH`/
+  `DETACH`, `VACUUM` (including `VACUUM INTO`), and the
+  `temp_store_directory`/`data_store_directory` pragmas are refused
+  (SQLETCH322 in a schema file; SQLETCH202 in a query). Declare every
+  table in the main database.
 - Prepare compiles through SQLite's planner, so prepare alone is the
   full validity check; errors carry exact byte offsets.
 - Types follow the declared-type affinity rules with two deliberate
