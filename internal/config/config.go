@@ -308,10 +308,16 @@ func (c Config) Expanded(query string) bool {
 // expansion (removed as a secret-exfiltration / SSRF vector — a cloned
 // repo could otherwise splice the caller's environment, including
 // secrets, into database.dsn and point it at an attacker host). An
-// operator who wants the dev-database DSN to come from the environment
-// should leave database.dsn empty and let the driver's own libpq/DSN
-// environment variables (PGHOST, MYSQL_DSN, …) take effect, or template
-// the config outside sqletch.
+// EMPTY database.dsn means a self-provisioned disposable database, not
+// "read the DSN from the environment". An operator who wants settings
+// from the environment writes a minimal DSN and lets the driver fill
+// the keys it omits (PostgreSQL: `dbname=dev` + PGHOST/PGUSER/…), or
+// templates the config outside sqletch. On PostgreSQL that fill is
+// itself policed, because the driver would otherwise complete a
+// repo-chosen host with the developer's own password: see
+// postgres.DevConnConfig (allow-listed keys, one host, ambient
+// passwords only for a loopback host, SCRAM-only elsewhere;
+// SQLETCH321; design 07 "Dev-database DSN policy").
 func Load(path string) (Config, []diagnostics.Diagnostic) {
 	span := diagnostics.Span{File: path}
 	raw, err := readConfigCapped(path)

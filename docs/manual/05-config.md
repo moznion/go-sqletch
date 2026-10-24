@@ -83,10 +83,21 @@ policies:                      # cross-query policies (see the policies chapter)
   even when lints are off.
 - **`database.dsn`** is per-dialect: a PostgreSQL URL, a go-sql-driver
   MySQL DSN, or a SQLite file path. It is a **literal** string — no
-  `${VAR}` expansion — so to source it from the environment, leave it
-  empty and use the driver's own DSN environment variables, or template
-  the file before sqletch reads it. Empty means auto-managed:
-  a disposable container (PostgreSQL/MySQL) or a temp file (SQLite).
+  `${VAR}` expansion — so to take settings from the environment, write
+  a minimal DSN and let the driver fill what it omits (PostgreSQL:
+  `dsn: "dbname=dev"` picks up `PGHOST`, `PGUSER`, … from your shell),
+  or template the file before sqletch reads it. Empty means
+  auto-managed: a disposable container (PostgreSQL/MySQL) or a temp
+  file (SQLite) — never "use the environment".
+  Because the DSN is committed with the repository while the driver
+  would complete it from *your* environment, a PostgreSQL DSN is held
+  to a policy (SQLETCH321): only the keys `host`, `port`, `dbname`,
+  `user`, `password`, `sslmode`, `connect_timeout` and
+  `application_name`, and exactly one host. A password you did not
+  write into the DSN (`PGPASSWORD`, `~/.pgpass`, a service file) is used
+  only when that host is loopback (`localhost`, `127.0.0.0/8`, `::1`, a
+  unix socket); any other host gets only the DSN's own password, and
+  only over SCRAM-SHA-256 (cleartext and MD5 requests are refused).
   Whatever it points at is treated as **disposable** — sqletch resets
   it (drops the public schema / all tables) before applying
   `schema.files`. Never point it at data you care about. On

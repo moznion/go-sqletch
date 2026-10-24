@@ -218,3 +218,75 @@ func TestRun_VersionPinMismatchIsDiagnostic(t *testing.T) {
 		t.Errorf("span file = %q, want the config file %q", d.Span.File, cfgPath)
 	}
 }
+
+// writePGProject is writeSQLiteProject for PostgreSQL: a cold project
+// (no committed cache) whose single query forces the oracle — and so the
+// database.dsn — to be acquired.
+func writePGProject(t *testing.T, dir, dsn string) string {
+	t.Helper()
+	mustWrite := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("db/schema.sql", "CREATE TABLE users (id bigint PRIMARY KEY);\n")
+	mustWrite("queries/q.sql", "-- name: ListUsers :many\nSELECT u.id FROM users AS u LIMIT 10;\n")
+	mustWrite("sqletch.yaml", `version: 1
+dialect: postgres
+server_version: "16"
+database:
+  dsn: "`+dsn+`"
+schema:
+  files: [db/schema.sql]
+targets:
+  - queries: [queries/*.sql]
+    output:
+      package: gen
+      path: gen
+cache:
+  path: .sqletch/cache
+`)
+	return filepath.Join(dir, "sqletch.yaml")
+}
+
+// Security audit F4: a repo-controlled PostgreSQL database.dsn that
+// names a file-reading key or several hosts is refused with SQLETCH321
+// against the config file — before anything is read or dialed (the
+// hosts below do not resolve, so a dial attempt would surface as an
+// environment error instead of the diagnostic) — on both oracle
+// acquisition paths of Run.
+func TestRun_PostgresDSNPolicyIsDiagnostic(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://u@attacker.invalid/db?passfile=/etc/passwd",
+		"postgres://u@attacker.invalid/db?service=prod",
+		"host=attacker.invalid sslkey=/home/u/.ssh/id_rsa",
+		"postgres://u@127.0.0.1,attacker.invalid/db",
+	} {
+		for _, mode := range []Mode{ModeCheck, ModeCheckExhaustive} {
+			dir := t.TempDir()
+			cfgPath := writePGProject(t, dir, dsn)
+			cfg, diags := config.Load(cfgPath)
+			if diagnostics.HasErrors(diags) {
+				t.Fatalf("config: %v", diags)
+			}
+			res, err := Run(context.Background(), cfg, mode, RunOptions{AllowDestructive: true})
+			if err != nil {
+				t.Fatalf("%s: a DSN policy refusal must be a diagnostic, not an environment error: %v", dsn, err)
+			}
+			d := findCode(res.Diags, diagnostics.CodeDevDSNPolicy)
+			if d == nil {
+				t.Fatalf("%s: want %s, got %v", dsn, diagnostics.CodeDevDSNPolicy, res.Diags)
+			}
+			if d.Span.File != cfgPath {
+				t.Errorf("%s: span file = %q, want the config file %q", dsn, d.Span.File, cfgPath)
+			}
+			if d.Hint == "" {
+				t.Errorf("%s: SQLETCH321 must carry the compliant rewrite as a hint", dsn)
+			}
+		}
+	}
+}

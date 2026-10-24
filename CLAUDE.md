@@ -709,6 +709,26 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   TREE prints `<not executable by iterator executor>` for single-table
   UPDATE/DELETE; `EXPLAIN ANALYZE FORMAT=JSON` is ERROR 1235 by default.
 
+## Known decisions: PostgreSQL dev-database DSN policy (design 07, audit F4)
+
+- Owner decision 2026-10-21 ("loopback only"): a user-supplied PG
+  `database.dsn` is repo-controlled, but pgx completes it from the
+  developer's environment. `postgres.DevConnConfig` is the ONE place it
+  becomes a connection config (devdb.Acquire, before any dial):
+  allow-listed keys only (host, port, dbname, user, password, sslmode,
+  connect_timeout, application_name — via pgconn
+  `ConnStringAllowedKeys`, before any file/network access) and exactly
+  one host, else SQLETCH321 at the config path (`cli.acquireDiag`).
+- Ambient passwords (PGPASSWORD/.pgpass/service file) only for a
+  loopback effective host (localhost, 127/8, ::1, unix socket — judged
+  even when the host came from PGHOST). Elsewhere: only a non-empty
+  DSN-stated password (a stated EMPTY one would be passfile-filled, so
+  the value is re-read with passfile pinned to os.DevNull) plus forced
+  `require_auth=scram-sha-256`. Never widen the allow-list without
+  evidence the key reads no file, cannot redirect, cannot relax auth.
+  The fake-server wire tests (`TestDevConnConfig_Wire*`) are the
+  independent oracle; keep them.
+
 ## Known decisions: PostgreSQL enums (doc 26)
 
 - Owner decisions 2026-10-15: an enum param/column maps to a generated

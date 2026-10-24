@@ -395,12 +395,8 @@ func explainAnalyze(ctx context.Context, cfg config.Config, queryNames []string,
 	// entries, so there is nothing for a mismatched server to
 	// contaminate (SQLETCH203 belongs to the paths that write).
 	o, cleanup, err := drv.acquire(ctx, cfg, schema, allowDestructive, nil)
-	if d, ok := versionPinDiag(cfg, err); ok {
+	if d, ok := acquireDiag(cfg, err); ok {
 		// Same user mistake, same code, whichever command hits it.
-		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
-		return ExitDiagnostics
-	}
-	if d, ok := destructiveResetDiag(cfg, err); ok {
 		PrintDiags(errW, &Result{Diags: []diagnostics.Diagnostic{d}}, false)
 		return ExitDiagnostics
 	}

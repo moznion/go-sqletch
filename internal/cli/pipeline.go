@@ -24,6 +24,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/dialect/mysql"
+	"github.com/moznion/go-sqletch/internal/dialect/postgres"
 	"github.com/moznion/go-sqletch/internal/nullability"
 	"github.com/moznion/go-sqletch/internal/policy"
 	"github.com/moznion/go-sqletch/internal/rules"
@@ -111,6 +112,36 @@ func cacheSymlinkDiag(cfg config.Config, err error) (diagnostics.Diagnostic, boo
 		cfg.Cache.Path, se.Rel)
 	d.Hint = fmt.Sprintf("replace %s with a real directory (or delete it) and rerun; the cache tree is sqletch's own and holds no links", path.Join(filepath.ToSlash(cfg.Cache.Path), se.Rel))
 	return d, true
+}
+
+// dsnPolicyDiag converts the PostgreSQL dev-database DSN policy's
+// refusal (security audit F4, design 07 "Dev-database DSN policy") into
+// SQLETCH321 against the config file. Like SQLETCH204 it is a
+// fail-closed guard against what a cloned repository's sqletch.yaml may
+// make sqletch do with the developer's environment, so it belongs in
+// the coded diagnostic stream. The DSN itself is never echoed: it may
+// embed a password.
+func dsnPolicyDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
+	var pe *postgres.DSNPolicyError
+	if !errors.As(err, &pe) {
+		return diagnostics.Diagnostic{}, false
+	}
+	d := diagnostics.Errorf(diagnostics.CodeDevDSNPolicy, diagnostics.Span{File: cfg.Path}, "%v", pe)
+	d.Hint = pe.Hint()
+	return d, true
+}
+
+// acquireDiag maps the oracle-acquisition errors that are user-facing
+// configuration refusals rather than environment failures.
+func acquireDiag(cfg config.Config, err error) (diagnostics.Diagnostic, bool) {
+	for _, f := range []func(config.Config, error) (diagnostics.Diagnostic, bool){
+		versionPinDiag, destructiveResetDiag, dsnPolicyDiag,
+	} {
+		if d, ok := f(cfg, err); ok {
+			return d, true
+		}
+	}
+	return diagnostics.Diagnostic{}, false
 }
 
 // RunOptions carries the per-invocation switches that are not
@@ -316,11 +347,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 
 	if !haveCat || len(misses) > 0 {
 		o, err := acquireOracle()
-		if d, ok := versionPinDiag(cfg, err); ok {
-			res.Diags = append(res.Diags, d)
-			return res, nil
-		}
-		if d, ok := destructiveResetDiag(cfg, err); ok {
+		if d, ok := acquireDiag(cfg, err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}
@@ -431,11 +458,7 @@ func Run(ctx context.Context, cfg config.Config, mode Mode, opts RunOptions) (*R
 	if mode == ModeCheckExhaustive {
 		res.NativePlan = cfg.NativeOracle()
 		o, err := acquireOracle()
-		if d, ok := versionPinDiag(cfg, err); ok {
-			res.Diags = append(res.Diags, d)
-			return res, nil
-		}
-		if d, ok := destructiveResetDiag(cfg, err); ok {
+		if d, ok := acquireDiag(cfg, err); ok {
 			res.Diags = append(res.Diags, d)
 			return res, nil
 		}

