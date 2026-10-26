@@ -1,0 +1,2 @@
+go test fuzz v1
+string("E''\f\f\f\f\f\f\f\f\f\fE''\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f\f0")
