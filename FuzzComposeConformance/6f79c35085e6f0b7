@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n@when(A=fA0@when(A=fAls0@when(A=fAls0@when(A=A@when(A=fA0")
