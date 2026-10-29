@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n$81ECZ@if-present(w)Xe2)@endif@if-present(A)@endif@if-present(A)@endif@if-present(A)8#\x7f0'")
