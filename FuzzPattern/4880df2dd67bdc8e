@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\uea56/\ueecaҔᛷ/把ҷ/抔ᛷ/抔ᛷ/抔ᙡ/抔ᡖ/\ueecaᛷ")

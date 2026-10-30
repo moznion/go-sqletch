@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :may\n-- name:A :m0\n--nam00000000\n-- name000000\n-- name:A :may\n-- name:A :may\n-- name000000\n-- name:A :may\n-- name:A :may\n-- name:A :m0\n-- name:A :may")

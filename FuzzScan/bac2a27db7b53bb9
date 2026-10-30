@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:be :many\n*\n@if-present(f01)\n AAN:2'B'Z@endif,1@if-present(cilA00c)\nmit;2")

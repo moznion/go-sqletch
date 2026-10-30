@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT users(emAil,id)VALUE(emAIl,0)ON DUPLiCATE KEY UPDATE emAil=0")
