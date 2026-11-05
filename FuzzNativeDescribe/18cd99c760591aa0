@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT*,\xef,\xeb,\xeb,\x80,\xeb,\xeb,\xeb,\xeb")
