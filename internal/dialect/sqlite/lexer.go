@@ -161,32 +161,8 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 	case c == ';':
 		return mk(dialect.KindSemicolon, pos+1)
 
-	case c == '0' && pos+1 < len(src) && (src[pos+1] == 'x' || src[pos+1] == 'X'):
-		i := pos + 2
-		for i < len(src) && isHexDigit(src[i]) {
-			i++
-		}
-		return mk(dialect.KindNumber, i)
-
 	case isDigit(c) || (c == '.' && pos+1 < len(src) && isDigit(src[pos+1])):
-		i := pos
-		for i < len(src) && (isDigit(src[i]) || src[i] == '.') {
-			i++
-		}
-		// exponent
-		if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
-			j := i + 1
-			if j < len(src) && (src[j] == '+' || src[j] == '-') {
-				j++
-			}
-			if j < len(src) && isDigit(src[j]) {
-				i = j
-				for i < len(src) && isDigit(src[i]) {
-					i++
-				}
-			}
-		}
-		return mk(dialect.KindNumber, i)
+		return mk(dialect.KindNumber, lexNumber(src, pos))
 
 	case isIdentStart(c):
 		i := pos
@@ -212,6 +188,57 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 	default:
 		return mk(dialect.KindOther, pos+1)
 	}
+}
+
+// lexNumber returns the end of the numeric literal starting at pos,
+// following SQLite's tokenizer (tokenize.c CC_DIGIT/CC_DOT, 3.46+
+// digit separators): a hex literal is 0x/0X plus a hex digit run, a
+// decimal is a digit run, at most ONE `.` and its digit run, then an
+// exponent only when [Ee][+-]? is followed by a digit; `_` is accepted
+// only between two digits, the one place the engine accepts it. The
+// old loop absorbed every `.` (`1.2.3`), which SQLite reads as `1.2`
+// then `.3`. Trailing identifier characters (`1x`) make the engine's
+// token illegal, so that form never runs and is not modeled.
+func lexNumber(src []byte, pos int) int {
+	if src[pos] == '0' && pos+2 < len(src) && (src[pos+1] == 'x' || src[pos+1] == 'X') && isHexDigit(src[pos+2]) {
+		return lexDigits(src, pos+2, isHexDigit)
+	}
+	i := pos
+	if src[i] != '.' {
+		i = lexDigits(src, i, isDigit)
+	}
+	if i < len(src) && src[i] == '.' {
+		i++
+		if i < len(src) && isDigit(src[i]) {
+			i = lexDigits(src, i, isDigit)
+		}
+	}
+	if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
+		j := i + 1
+		if j < len(src) && (src[j] == '+' || src[j] == '-') {
+			j++
+		}
+		if j < len(src) && isDigit(src[j]) {
+			i = lexDigits(src, j, isDigit)
+		}
+	}
+	return i
+}
+
+// lexDigits returns the end of the digit run starting at i (which must
+// be a digit), with single `_` separators between digits.
+func lexDigits(src []byte, i int, digit func(byte) bool) int {
+	for i < len(src) {
+		switch {
+		case digit(src[i]):
+			i++
+		case src[i] == '_' && i+1 < len(src) && digit(src[i+1]):
+			i += 2
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // lexQuoted lexes from just after the opening quote to just after the

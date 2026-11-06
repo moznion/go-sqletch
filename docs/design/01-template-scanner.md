@@ -61,6 +61,21 @@ byte-class identical. Trailing-junk forms (`1x`, `1_0$$`) are scan
 errors to PostgreSQL. `FuzzLexerVsPgScan` checks these classes against
 `pg_query.Scan`.
 
+The Tier 2 profiles lex numbers the way their ground truth does, pinned
+by engine-readings tests (`TestLexer_NumericLiterals*Readings`) rather
+than a byte-class fuzzer. SQLite follows `tokenize.c` (bundled engine):
+`_` only between digits, `0x` needs a hex digit, at most one `.`, an
+exponent only before a digit; trailing identifier characters (`1x`) are
+an illegal token to the engine and are not modeled. MySQL follows the
+TiDB frontend (= the server's `MY_LEX_NUMBER_IDENT`): a digit run
+continued by an identifier character is ONE identifier (`1abc`,
+`1_000`, `1e`), `0x…`/`0b…` are numbers only when no identifier
+character continues them, an exponent ends the number (`1e5abc` =
+`1e5` + `abc`), and at most one `.`. No number form on either dialect
+moves a literal/comment boundary (none of them opens with a digit
+character), so these are token-boundary fidelity fixes, not class
+fixes.
+
 **Line comments end where the dialect's engine ends them** (security
 audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and
 pg_query, which shares it) ends a `--` comment at `\n` **or** `\r`
