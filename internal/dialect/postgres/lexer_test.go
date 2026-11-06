@@ -423,3 +423,52 @@ func TestLexer_FormFeedAndVerticalTabAreWhitespace(t *testing.T) {
 		}
 	}
 }
+
+// Numeric literals follow scan.l (PostgreSQL 16+): {decinteger} allows
+// single `_` separators, {hexinteger}/{octinteger}/{bininteger} take a
+// 0x/0o/0b prefix (`0x_1` is legal), {numeric} has at most ONE `.`, and
+// {numericfail} (`1..`) lexes as the integer alone so `..` (DOT_DOT)
+// stays outside it. The profile used to absorb every `.` and then an
+// exponent: `0..E0$$` became number `0..E0` plus a `$$` dollar-quote
+// opener, where PostgreSQL scans ICONST `0`, DOT_DOT, identifier `E0$$`
+// — a profile/engine class divergence (FuzzLexerVsPgScan crasher
+// 64216843733453e8). Positional parameters take no underscores (`$1_0`
+// is PARAM `$1` + identifier `_0`). Trailing-junk forms (`1x`, `1_0$$`,
+// `0x1F$$`) are scan errors to PostgreSQL and never reach the server.
+func TestLexer_NumericLiteralsMatchPostgres(t *testing.T) {
+	type tk struct {
+		kind dialect.TokenKind
+		text string
+	}
+	tests := []struct {
+		src  string
+		want []tk
+	}{
+		{"0..E0$$", []tk{{dialect.KindNumber, "0"}, {dialect.KindOther, "."}, {dialect.KindOther, "."}, {dialect.KindIdent, "E0$$"}}},
+		// PostgreSQL: ICONST 1, DOT_DOT, ICONST 10. The profile keeps
+		// single `.` tokens (the policy scanners key qualified names on
+		// them; `..` parses nowhere in SQL), so `.10` is one number —
+		// byte classes are identical either way.
+		{"1..10", []tk{{dialect.KindNumber, "1"}, {dialect.KindOther, "."}, {dialect.KindNumber, ".10"}}},
+		{"1.2.3", []tk{{dialect.KindNumber, "1.2"}, {dialect.KindNumber, ".3"}}},
+		{"1.e5 .5E+1 2.", []tk{{dialect.KindNumber, "1.e5"}, {dialect.KindNumber, ".5E+1"}, {dialect.KindNumber, "2."}}},
+		{"1_000 1_0.0_1e1_0", []tk{{dialect.KindNumber, "1_000"}, {dialect.KindNumber, "1_0.0_1e1_0"}}},
+		{"1..e$a$", []tk{{dialect.KindNumber, "1"}, {dialect.KindOther, "."}, {dialect.KindOther, "."}, {dialect.KindIdent, "e$a$"}}},
+		{"10$$x$$ 1.$$y$$", []tk{{dialect.KindNumber, "10"}, {dialect.KindString, "$$x$$"}, {dialect.KindNumber, "1."}, {dialect.KindString, "$$y$$"}}},
+		{"0x1_F 0x_1 0o17 0B1_0 0XfF", []tk{{dialect.KindNumber, "0x1_F"}, {dialect.KindNumber, "0x_1"}, {dialect.KindNumber, "0o17"}, {dialect.KindNumber, "0B1_0"}, {dialect.KindNumber, "0XfF"}}},
+		{"$1_0$$x$$", []tk{{dialect.KindPositionalParam, "$1"}, {dialect.KindIdent, "_0$$x$$"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			got := kindsOf(lexAll(t, tt.src))
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i].Kind != w.kind || got[i].Text != w.text {
+					t.Errorf("token %d = (%v, %q), want (%v, %q)", i, got[i].Kind, got[i].Text, w.kind, w.text)
+				}
+			}
+		})
+	}
+}

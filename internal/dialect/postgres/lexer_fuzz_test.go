@@ -146,6 +146,8 @@ var lexerDiffSeeds = []string{
 	"$1$ x",
 	"SELECT o.id FROM orders o WHERE o.note <> E'a'\n'\\' AND o.deleted_at IS NULL AND \\''",
 	"SELECT E'a'\v\n\f'\\'' , e'b' \r'c' , 'd'\n'\\'",
+	"SELECT 0..E0$$, 1..10, 1.2.3, 1.e5, .5E+1",
+	"SELECT 1..e$a$, 0x1_F, 0x_1, 0o7, 0b1_0, 1_000.0_1e1_0, $1_0$$z$$, 10$$x$$, 1.$$y$$",
 }
 
 // lexerVsPg runs the comparison on one template text. reached=false when

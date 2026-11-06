@@ -155,24 +155,7 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		return mk(dialect.KindIdent, i)
 
 	case isDigit(c) || (c == '.' && pos+1 < len(src) && isDigit(src[pos+1])):
-		i := pos
-		for i < len(src) && (isDigit(src[i]) || src[i] == '.') {
-			i++
-		}
-		// exponent
-		if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
-			j := i + 1
-			if j < len(src) && (src[j] == '+' || src[j] == '-') {
-				j++
-			}
-			if j < len(src) && isDigit(src[j]) {
-				i = j
-				for i < len(src) && isDigit(src[i]) {
-					i++
-				}
-			}
-		}
-		return mk(dialect.KindNumber, i)
+		return mk(dialect.KindNumber, lexNumber(src, pos))
 
 	case isOpChar(c):
 		i := pos
@@ -191,6 +174,88 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 	default:
 		return mk(dialect.KindOther, pos+1)
 	}
+}
+
+// lexNumber returns the end of the numeric literal starting at pos,
+// following scan.l (PostgreSQL 16+):
+//
+//	decinteger  {decdigit}(_?{decdigit})*
+//	hexinteger  0[xX](_?{hexdigit})+   (octinteger 0[oO], bininteger 0[bB])
+//	numeric     ({decinteger}\.{decinteger}?)|(\.{decinteger})
+//	numericfail {decinteger}\.\.      -> the integer alone
+//	real        ({decinteger}|{numeric})[Ee][-+]?{decinteger}
+//
+// At most ONE `.` belongs to a number, and `1..` is ICONST `1` followed
+// by DOT_DOT: absorbing every `.` and then an exponent used to read
+// `0..E0$$` as number `0..E0` plus a dollar-quote opener, where
+// PostgreSQL scans identifier `E0$$`. The *_junk / *fail forms
+// (`1x`, `1_`, `0x`, `1e+`) are scan errors to PostgreSQL, so how they
+// lex here never reaches a server.
+func lexNumber(src []byte, pos int) int {
+	if src[pos] == '0' && pos+1 < len(src) {
+		var digit func(byte) bool
+		switch src[pos+1] {
+		case 'x', 'X':
+			digit = isHexDigit
+		case 'o', 'O':
+			digit = func(c byte) bool { return c >= '0' && c <= '7' }
+		case 'b', 'B':
+			digit = func(c byte) bool { return c == '0' || c == '1' }
+		}
+		if digit != nil {
+			if end := lexDigits(src, pos+2, digit, true); end > pos+2 {
+				return end
+			}
+		}
+	}
+	i := pos
+	if src[i] != '.' {
+		i = lexDigits(src, i, isDigit, false)
+		if i < len(src) && src[i] == '.' {
+			if i+1 < len(src) && src[i+1] == '.' {
+				return i // numericfail: `..` is DOT_DOT, not part of the number
+			}
+			i++
+			if i < len(src) && isDigit(src[i]) {
+				i = lexDigits(src, i, isDigit, false)
+			}
+		}
+	} else {
+		i = lexDigits(src, i+1, isDigit, false)
+	}
+	if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
+		j := i + 1
+		if j < len(src) && (src[j] == '+' || src[j] == '-') {
+			j++
+		}
+		if j < len(src) && isDigit(src[j]) {
+			i = lexDigits(src, j, isDigit, false)
+		}
+	}
+	return i
+}
+
+// lexDigits returns the end of a digit run starting at i in which single
+// `_` separators sit between digits (scan.l's (_?{digit})); leadingSep
+// also admits a separator before the first digit (the 0x_1 form). It
+// returns i when no digit run starts there.
+func lexDigits(src []byte, i int, digit func(byte) bool, leadingSep bool) int {
+	start := i
+	for i < len(src) {
+		switch {
+		case digit(src[i]):
+			i++
+		case src[i] == '_' && (i > start || leadingSep) && i+1 < len(src) && digit(src[i+1]):
+			i += 2
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func isHexDigit(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // lexQuoted lexes from just after the opening quote to just after the

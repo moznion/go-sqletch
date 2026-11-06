@@ -50,8 +50,16 @@ scanners read everything outside them as SQL (F16): dollar-quote tags
 use `dolq_start [A-Za-z\200-\377_]` / `dolq_cont` (so `$é$…$é$` is one
 string), whitespace is `[ \t\n\r\f\v]`, and an `E'…'` string absorbs
 its quote continuations (`E'a'<newline>'\''` is one literal whose
-continued segments keep backslash escapes). `FuzzLexerVsPgScan`
-checks these classes against `pg_query.Scan`.
+continued segments keep backslash escapes). Numeric literals follow
+`decinteger`/`hexinteger`/`octinteger`/`bininteger` (`_` separators,
+`0x`/`0o`/`0b`), `numeric` takes at most one `.`, and `numericfail`
+(`1..`) is the integer alone — absorbing `0..E0` as one number left
+`$$` to open a dollar quote where PostgreSQL scans identifier `E0$$`.
+The profile keeps `..` as two `.` tokens (DOT_DOT parses nowhere in
+SQL; the policy scanners key qualified names on `.`), which is
+byte-class identical. Trailing-junk forms (`1x`, `1_0$$`) are scan
+errors to PostgreSQL. `FuzzLexerVsPgScan` checks these classes against
+`pg_query.Scan`.
 
 **Line comments end where the dialect's engine ends them** (security
 audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and
