@@ -62,8 +62,8 @@ func lineCommentEnd(src []byte, i int) int {
 	return i
 }
 
-// MySQL unquoted identifiers allow '$' anywhere (and leading digits,
-// which the number branch claims first — a boundary-level compromise).
+// MySQL unquoted identifiers allow '$' anywhere, and may start with a
+// digit (lexNumberOrIdent decides between number and identifier).
 func isIdentStart(c byte) bool {
 	return c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80
 }
@@ -193,24 +193,8 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 		return mk(dialect.KindSemicolon, pos+1)
 
 	case isDigit(c) || (c == '.' && pos+1 < len(src) && isDigit(src[pos+1])):
-		i := pos
-		for i < len(src) && (isDigit(src[i]) || src[i] == '.') {
-			i++
-		}
-		// exponent
-		if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
-			j := i + 1
-			if j < len(src) && (src[j] == '+' || src[j] == '-') {
-				j++
-			}
-			if j < len(src) && isDigit(src[j]) {
-				i = j
-				for i < len(src) && isDigit(src[i]) {
-					i++
-				}
-			}
-		}
-		return mk(dialect.KindNumber, i)
+		kind, end := lexNumberOrIdent(src, pos)
+		return mk(kind, end)
 
 	case isIdentStart(c):
 		i := pos
@@ -239,6 +223,83 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 	default:
 		return mk(dialect.KindOther, pos+1)
 	}
+}
+
+// lexNumberOrIdent lexes the token starting at a digit (or a `.`
+// followed by one) the way the TiDB frontend does, mirroring the
+// server's MY_LEX_NUMBER_IDENT:
+//
+//   - 0x/0X + hex digits and 0b/0B + binary digits are a number only
+//     when no identifier character continues them (`0x1Fg`, `0b012`,
+//     `0x` are identifiers);
+//   - a digit run continued by an identifier character is ONE
+//     identifier (`1abc`, `1_000`, `1$`), except that [Ee][+-]?digit
+//     makes an exponent that ends the number (`1e5abc` is `1e5` + `abc`,
+//     while `1e`/`1ex`/`1e+x`'s `1e` is an identifier);
+//   - a number takes at most ONE `.` (`1.2.3` is `1.2` then `.3`).
+//
+// The old loop absorbed every `.` and always ended a number at the first
+// non-digit, splitting identifiers like `1abc` into number + identifier.
+func lexNumberOrIdent(src []byte, pos int) (dialect.TokenKind, int) {
+	identEnd := func(i int) int {
+		for i < len(src) && isIdentCont(src[i]) {
+			i++
+		}
+		return i
+	}
+	if src[pos] == '0' && pos+1 < len(src) {
+		var digit func(byte) bool
+		switch src[pos+1] {
+		case 'x', 'X':
+			digit = func(c byte) bool { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
+		case 'b', 'B':
+			digit = func(c byte) bool { return c == '0' || c == '1' }
+		}
+		if digit != nil {
+			i := pos + 2
+			for i < len(src) && digit(src[i]) {
+				i++
+			}
+			if i > pos+2 && (i >= len(src) || !isIdentCont(src[i])) {
+				return dialect.KindNumber, i
+			}
+			return dialect.KindIdent, identEnd(pos)
+		}
+	}
+	digits := func(i int) int {
+		for i < len(src) && isDigit(src[i]) {
+			i++
+		}
+		return i
+	}
+	exponent := func(i int) (int, bool) {
+		if i < len(src) && (src[i] == 'e' || src[i] == 'E') {
+			j := i + 1
+			if j < len(src) && (src[j] == '+' || src[j] == '-') {
+				j++
+			}
+			if j < len(src) && isDigit(src[j]) {
+				return digits(j), true
+			}
+		}
+		return i, false
+	}
+	i := pos
+	if src[i] != '.' {
+		i = digits(i)
+		if i >= len(src) || src[i] != '.' {
+			if end, ok := exponent(i); ok {
+				return dialect.KindNumber, end
+			}
+			if i < len(src) && isIdentCont(src[i]) {
+				return dialect.KindIdent, identEnd(i)
+			}
+			return dialect.KindNumber, i
+		}
+	}
+	i = digits(i + 1) // past the one `.`
+	i, _ = exponent(i)
+	return dialect.KindNumber, i
 }
 
 // lexQuoted lexes a MySQL string from just after the opening quote to
