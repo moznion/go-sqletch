@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column total: bigint\nSELECT count(*) AS total FROM users GROUP BY org_id HAVING @otal > ?")
