@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name: ScA :many\n\n@if-present(X)00x&'y'\n@endifZ\n@if-present(sc)t;\"")

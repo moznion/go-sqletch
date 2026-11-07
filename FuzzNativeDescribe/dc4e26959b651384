@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT*FROM users JOIN orgs JOIN orgs A ON A ON 0")
