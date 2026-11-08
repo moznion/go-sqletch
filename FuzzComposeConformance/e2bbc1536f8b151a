@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\n:\U00014b56𭍔\U00014c94𭭔\U0003452d\U0003db5c𭔭\U0003dc94\U00034b5f𲭜𭜍𭴭")

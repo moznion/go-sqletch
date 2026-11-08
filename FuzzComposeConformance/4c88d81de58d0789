@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nFR1M,@when(a=fAlse)@endGR @if-present(a)%BD Y")
