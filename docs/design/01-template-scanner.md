@@ -76,6 +76,14 @@ moves a literal/comment boundary (none of them opens with a digit
 character), so these are token-boundary fidelity fixes, not class
 fixes.
 
+SQLite unquoted identifiers continue through `$` (the engine's IdChar:
+`SELECT a$b FROM t` runs); a leading `$` still opens an engine variable,
+and a sqletch `:name` ends before `$` on every dialect (the template
+parameter grammar is sqletch's). The rqlite/sql frontend does NOT accept
+`$` inside an identifier, so such a query is still refused at parse time;
+`TestLexer_DollarInIdentifierReadings` pins both halves and fails when
+rqlite lifts the limitation.
+
 **Line comments end where the dialect's engine ends them** (security
 audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and
 pg_query, which shares it) ends a `--` comment at `\n` **or** `\r`

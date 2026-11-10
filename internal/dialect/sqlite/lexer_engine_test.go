@@ -60,3 +60,32 @@ func sqliteReading(conn *sqlite3.Conn, sql string) string {
 	}
 	return strings.Join(cols, ",")
 }
+
+// The engine reads `$` inside an unquoted identifier as part of it
+// (TestLexer_DollarInIdentifierMatchesSQLite), but the rqlite/sql
+// frontend does not, so such a query is still refused at parse time.
+// Both halves are pinned: if rqlite starts accepting `$`, the profile is
+// already right and this test says the limitation is gone.
+func TestLexer_DollarInIdentifierReadings(t *testing.T) {
+	conn, err := sqlite3.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.Exec("CREATE TABLE t (a$b INTEGER, c INTEGER); INSERT INTO t VALUES (1, 2)"); err != nil {
+		t.Fatal(err)
+	}
+	for sql, want := range map[string]string{
+		"SELECT a$b FROM t":   "a$b=1",
+		"SELECT t.a$b FROM t": "a$b=1",
+		"SELECT 1 AS x$$y":    "x$$y=1",
+		"SELECT c x$1 FROM t": "x$1=2",
+	} {
+		if got := sqliteReading(conn, sql); got != want {
+			t.Errorf("engine %q: got %q, want %q", sql, got, want)
+		}
+		if _, err := (Frontend{}).Parse(sql); err == nil {
+			t.Errorf("frontend now accepts %q: the `$`-identifier limitation is gone; update docs/design/01 and this test", sql)
+		}
+	}
+}

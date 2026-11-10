@@ -255,3 +255,35 @@ func TestLexer_NumericLiteralsMatchSQLite(t *testing.T) {
 		})
 	}
 }
+
+// SQLite's IdChar admits `$` after the first character (tokenize.c;
+// the engine runs `SELECT a$b FROM t`, `AS x$$y`, `AS x$1`), so an
+// unquoted identifier continues through it. A leading `$` is still not
+// an identifier (it opens an engine variable), and a sqletch `:name`
+// parameter still ends before `$` — the template parameter grammar is
+// sqletch's own, the same on every dialect.
+func TestLexer_DollarInIdentifierMatchesSQLite(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []wantTok
+	}{
+		{"a$b x$$y x$1 é$", []wantTok{{dialect.KindIdent, "a$b"}, {dialect.KindIdent, "x$$y"}, {dialect.KindIdent, "x$1"}, {dialect.KindIdent, "é$"}}},
+		{"t.a$b", []wantTok{{dialect.KindIdent, "t"}, {dialect.KindOther, "."}, {dialect.KindIdent, "a$b"}}},
+		{"x$'ab'", []wantTok{{dialect.KindIdent, "x$"}, {dialect.KindString, "'ab'"}}},
+		{"$a", []wantTok{{dialect.KindOther, "$"}, {dialect.KindIdent, "a"}}},
+		{":p$x", []wantTok{{dialect.KindParamRef, ":p"}, {dialect.KindOther, "$"}, {dialect.KindIdent, "x"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			got := kindsOf(lexAll(t, tt.src))
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i].Kind != w.kind || got[i].Text != w.text {
+					t.Errorf("token %d = (%v, %q), want (%v, %q)", i, got[i].Kind, got[i].Text, w.kind, w.text)
+				}
+			}
+		})
+	}
+}
