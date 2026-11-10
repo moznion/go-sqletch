@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:CHAr\nSELECT('000')x")
