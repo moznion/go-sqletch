@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\nb*F OM @when(a=fAlse)@end @if-present(a)A'X &Y2di&")
