@@ -23,10 +23,11 @@ targets:
 `
 
 const sqliteDollarSchema = "CREATE TABLE acct$1 (id INTEGER PRIMARY KEY, a$b TEXT NOT NULL, a_b TEXT);\n" +
-	"CREATE TABLE orders (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, s$ TEXT);"
+	"CREATE TABLE orders (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, s$ TEXT);\n" +
+	"CREATE TABLE café (id INTEGER PRIMARY KEY, prénom TEXT NOT NULL, 名前 TEXT, Éclair TEXT);"
 
 // `$` inside unquoted SQLite identifiers (the engine accepts them; the
-// rqlite frontend needs the dollar_ident.go rewrite) goes through the
+// rqlite frontend needs the ident_rewrite.go rewrite) goes through the
 // whole in-process pipeline: the analysis sees `a$b` and `a_b` as the
 // distinct columns they are (NOT NULL vs nullable), and the template
 // text reaching the engine keeps the original names.
@@ -65,6 +66,10 @@ func TestRun_SQLiteDollarIdentifierLimits(t *testing.T) {
 	for _, tc := range []struct{ name, yaml, query, code string }{
 		{"result column", sqliteDollarYAML,
 			"-- name: ListAcct :many\nSELECT a$b FROM acct$1 LIMIT 10;\n", "SQLETCH307"},
+		{"CJK result column", sqliteDollarYAML,
+			"-- name: ListCafe :many\nSELECT 名前 FROM café LIMIT 10;\n", "SQLETCH307"},
+		{"non-ASCII policy alias", sqliteDollarYAML + "policies:\n  - name: tenant_scope\n    tables: [orders]\n    predicate: \"{}.tenant_id = :tenant_id\"\n    param:\n      name: tenant_id\n      type: integer\n",
+			"-- name: ListOrders :many\nSELECT ó.id FROM orders AS ó ORDER BY ó.id LIMIT 10;\n", "SQLETCH125"},
 		{"policy alias", sqliteDollarYAML + "policies:\n  - name: tenant_scope\n    tables: [orders]\n    predicate: \"{}.tenant_id = :tenant_id\"\n    param:\n      name: tenant_id\n      type: integer\n",
 			"-- name: ListOrders :many\n-- @param s: text\nSELECT o$.id FROM orders AS o$ WHERE o$.s$ = :s ORDER BY o$.id LIMIT 10;\n", "SQLETCH125"},
 	} {
@@ -82,5 +87,36 @@ func TestRun_SQLiteDollarIdentifierLimits(t *testing.T) {
 				t.Fatalf("want %s, got %+v", tc.code, res.Diags)
 			}
 		})
+	}
+}
+
+// Non-ASCII unquoted identifiers (any byte >= 0x80 is an IdChar to the
+// engine; rqlite needs the rewrite) go through the in-process pipeline:
+// accented names become exported Go fields, a CJK column aliased to
+// ASCII works, and nullability follows the catalog (NOT NULL `prénom`
+// is a plain string, the rest are Options).
+func TestRun_SQLiteNonASCIIIdentifiers(t *testing.T) {
+	cfg := writeOfflineProject(t, map[string]string{
+		"sqletch.yaml":  sqliteDollarYAML,
+		"db/schema.sql": sqliteDollarSchema,
+		"queries/q.sql": "-- name: ListCafe :many\n-- @param id: integer\n" +
+			"SELECT c.prénom, c.Éclair, c.名前 AS name FROM café AS c WHERE c.id > :id ORDER BY c.id LIMIT 10;\n",
+	})
+	res, err := Run(context.Background(), cfg, ModeGenerate, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.HasErrors(res.Diags) {
+		t.Fatalf("diagnostics: %+v", res.Diags)
+	}
+	b, err := os.ReadFile(filepath.Join(cfg.Dir, "gen", "list_cafe.sql.gen.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := strings.Join(strings.Fields(string(b)), " ")
+	for _, want := range []string{"Prénom string", "Éclair optional.Option[string]", "Name optional.Option[string]", "FROM café AS c WHERE c.id > "} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated code lacks %q:\n%s", want, b)
+		}
 	}
 }

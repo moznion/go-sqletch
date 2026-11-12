@@ -79,19 +79,36 @@ fixes.
 SQLite unquoted identifiers continue through `$` (the engine's IdChar:
 `SELECT a$b FROM t` runs); a leading `$` still opens an engine variable,
 and a sqletch `:name` ends before `$` on every dialect (the template
-parameter grammar is sqletch's). The rqlite/sql frontend's scanner stops
-an identifier at `$`, so the frontend bridges it (`sqlite/dollar_ident.go`):
-every profile identifier containing `$` has its `$` replaced by `_` for
-the parse only (same length, so every rqlite offset is still an offset
-into the original), then a reflection walk over the WHOLE AST (no
-hand-written walker to miss a node kind) restores the name of every
+parameter grammar is sqletch's). SQLite's IdChar also admits EVERY byte
+>= 0x80 (accented letters, CJK, U+3000, invalid UTF-8). The rqlite/sql
+frontend's scanner takes only `[A-Za-z0-9_]`, so the frontend bridges
+both (`sqlite/ident_rewrite.go`): in every profile identifier, each `$`
+and each non-ASCII rune is replaced by ONE `_` for the parse only. Byte
+lengths may change but rune counts do not, and rqlite reports RUNE
+offsets, so every position maps through the original's rune table to
+the original bytes (runes decoded as rqlite's ReadRune does: an invalid
+byte is one RuneError). A reflection walk over the WHOLE AST (no
+hand-written walker to miss a node kind) then restores the name of every
 unquoted `*rsql.Ident` spanning a rewritten word from the original bytes.
 Fail-closed: a rewrite that becomes an rqlite keyword (`current$date` →
 CURRENT_DATE) or a rewritten word not covered by an identifier node is a
 parse error, so a rewritten name (which could collide with a real `a_b`)
 never reaches a facade. The engine always receives the original SQL.
+
+SQLite folds identifier case for ASCII letters ONLY (`É` ≠ `é`; the
+Kelvin sign is not `k`), so its profile implements
+`dialect.ASCIIFoldIdents` and `dialect.FoldIdent` folds ASCII only there
+(MySQL keeps Unicode folding). Unicode folding merged `É`/`é` in R3's
+by-name map: an unguarded `é` overwrote a guarded `É` and a skeleton
+reference to `É` passed (missed SQLETCH115), pinned by
+`TestF3_SQLiteNonASCII*`. Policy-side Unicode folds (designated-table
+`EqualFold`, the weaver's per-name counts) only ever over-match, which
+weaves more or refuses — never less.
+
 Downstream limits stay: a `$` result-column name is SQLETCH307 (no
-collision-free Go spelling; alias it), and a `$` alias bound to a policy
+collision-free Go spelling; alias it), as is a caseless one like `名前`
+(no exported Go spelling); accented names become exported fields
+(`prénom` → `Prénom`). A `$` or non-ASCII alias bound to a policy
 placeholder is SQLETCH125 (doc 14 §11.3, no quoting facility).
 
 **Line comments end where the dialect's engine ends them** (security
