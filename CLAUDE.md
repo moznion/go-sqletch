@@ -374,7 +374,11 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   annotations are MANDATORY for them (new scanner directive); params
   need `-- @param` like MySQL. Affinity mapping has BOOLEAN/date-time
   carve-outs. @in arity-0 emission is per-dialect via Frag.Text /
-  dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
+  dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`). `$` inside
+  unquoted identifiers (engine IdChar) is bridged for rqlite by a
+  same-length `$`→`_` rewrite + reflection restore of every `*rsql.Ident`
+  (`sqlite/dollar_ident.go`); keyword-forming or uncovered rewrites are
+  parse errors — never let a rewritten name reach a facade. devdb DSN
   is a file path resolved config-relative via `cli.sqliteDSNPath`
   (`:memory:` and `file:` URIs pass through), reset = drop all
   tables/views, version pin compares dotted prefix ("3.50" vs
