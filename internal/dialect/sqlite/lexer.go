@@ -35,7 +35,11 @@ func isHexDigit(c byte) bool {
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80
 }
-func isIdentCont(c byte) bool { return isIdentStart(c) || isDigit(c) }
+
+// isIdentCont is SQLite's IdChar: alphanumerics, `_`, bytes >= 0x80,
+// and `$` (tokenize.c; the engine runs `SELECT a$b FROM t`). A leading
+// `$` is not an identifier start: it opens an engine variable.
+func isIdentCont(c byte) bool { return isIdentStart(c) || isDigit(c) || c == '$' }
 
 // SQLite operator characters, minus paren/comma handled separately.
 // '@' is included: template constructs are matched by the scanner
@@ -144,8 +148,10 @@ func (Profile) NextToken(src []byte, pos int) (dialect.Token, error) {
 
 	case c == ':':
 		if pos+1 < len(src) && isIdentStart(src[pos+1]) {
+			// A sqletch `:name` ends before `$` on every dialect: the
+			// template parameter grammar is sqletch's, not the engine's.
 			i := pos + 1
-			for i < len(src) && isIdentCont(src[i]) {
+			for i < len(src) && isIdentCont(src[i]) && src[i] != '$' {
 				i++
 			}
 			return mk(dialect.KindParamRef, i)
