@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.0.10](https://github.com/moznion/go-sqletch/compare/v0.0.9...v0.0.10) - 2026-11-12
+
+- build(deps): bump Songmu/tagpr from 1.21.3 to 1.21.4 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/195
+- fix(postgres): lex numeric literals like scan.l (FuzzLexerVsPgScan crasher) by @moznion in https://github.com/moznion/go-sqletch/pull/198
+- fix(sqlite,mysql): lex numeric literals like their engines by @moznion in https://github.com/moznion/go-sqletch/pull/199
+- fix(sqlite): continue unquoted identifiers through `$` like the engine by @moznion in https://github.com/moznion/go-sqletch/pull/200
+- build(deps): bump the go-modules group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/197
+
 ## [v0.0.9](https://github.com/moznion/go-sqletch/compare/v0.0.8...v0.0.9) - 2026-10-24
 
 - fix(cli): refuse symlinks under static-expansion output (SQLETCH306) by @moznion in https://github.com/moznion/go-sqletch/pull/178
