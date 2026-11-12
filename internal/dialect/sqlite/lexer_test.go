@@ -216,3 +216,42 @@ func TestLexer_CoversAllBytes(t *testing.T) {
 		t.Fatalf("tokens end at %d, want %d", pos, len(src))
 	}
 }
+
+// Numeric literals follow SQLite's tokenizer (tokenize.c, CC_DIGIT /
+// CC_DOT; 3.46+ digit separators), pinned against the bundled engine:
+// `_` separates digits (`1_000`, `0x1_F`, `1_0.0_1e1_0`; `0x_1`, `1_`,
+// `1._5`, `1e_5` are "unrecognized token"), a hex literal needs a hex
+// digit right after 0x, a number takes at most ONE `.` (`1.2.3` is `1.2`
+// then `.3`; `1..2` is `1.` then `.2`, "near .2"), and an exponent needs
+// a digit (`1e+` is unrecognized token `1e`). A number directly followed
+// by a string is an alias (`0x1F'a'`, `1e5'a'` run). Trailing identifier
+// characters (`1x`, `1e5x`, `1$`) make the engine's token illegal; that
+// form never runs, so the profile does not model it.
+func TestLexer_NumericLiteralsMatchSQLite(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []wantTok
+	}{
+		{"1_000 1_0.0_1e1_0 .5e1_0", []wantTok{{dialect.KindNumber, "1_000"}, {dialect.KindNumber, "1_0.0_1e1_0"}, {dialect.KindNumber, ".5e1_0"}}},
+		{"0x1_F 0XfF", []wantTok{{dialect.KindNumber, "0x1_F"}, {dialect.KindNumber, "0XfF"}}},
+		{"1.2.3", []wantTok{{dialect.KindNumber, "1.2"}, {dialect.KindNumber, ".3"}}},
+		{"1..2", []wantTok{{dialect.KindNumber, "1."}, {dialect.KindNumber, ".2"}}},
+		{"0..e0", []wantTok{{dialect.KindNumber, "0."}, {dialect.KindOther, "."}, {dialect.KindIdent, "e0"}}},
+		{"1.e5 2.", []wantTok{{dialect.KindNumber, "1.e5"}, {dialect.KindNumber, "2."}}},
+		{"0x1F'a' 1e5'b'", []wantTok{{dialect.KindNumber, "0x1F"}, {dialect.KindString, "'a'"}, {dialect.KindNumber, "1e5"}, {dialect.KindString, "'b'"}}},
+		{"1e+x", []wantTok{{dialect.KindNumber, "1"}, {dialect.KindIdent, "e"}, {dialect.KindOperator, "+"}, {dialect.KindIdent, "x"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			got := kindsOf(lexAll(t, tt.src))
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i].Kind != w.kind || got[i].Text != w.text {
+					t.Errorf("token %d = (%v, %q), want (%v, %q)", i, got[i].Kind, got[i].Text, w.kind, w.text)
+				}
+			}
+		})
+	}
+}

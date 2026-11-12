@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/format"
+
 	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
@@ -271,5 +274,75 @@ func TestLexer_CoversAllBytes(t *testing.T) {
 	}
 	if pos != len(src) {
 		t.Fatalf("tokens end at %d, want %d", pos, len(src))
+	}
+}
+
+// Numeric literals and digit-led identifiers follow the TiDB frontend
+// (whose readings are pinned below via ParseOneStmt + Restore, and which
+// mirrors the server's MY_LEX_NUMBER_IDENT): a digit run followed by an
+// identifier character is ONE identifier (`1abc`, `1_000`, `1$`, and
+// `1e`/`1ex` when no exponent digit follows), `0x`/`0b` literals are
+// numbers only when the digit run is not continued by an identifier
+// character (`0x1Fg`, `0b012`, `0x` are identifiers), an exponent ends
+// the number (`1e1e1` is `1e1` + `e1`, `1e5abc` is `1e5` + `abc`), and a
+// number takes at most ONE `.` (`1.2.3` is `1.2` then `.3`).
+func TestLexer_NumericLiteralsMatchTiDB(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []wantTok
+	}{
+		{"1abc 1_000 1$", []wantTok{{dialect.KindIdent, "1abc"}, {dialect.KindIdent, "1_000"}, {dialect.KindIdent, "1$"}}},
+		{"1e 1ex", []wantTok{{dialect.KindIdent, "1e"}, {dialect.KindIdent, "1ex"}}},
+		{"1e+x", []wantTok{{dialect.KindIdent, "1e"}, {dialect.KindOperator, "+"}, {dialect.KindIdent, "x"}}},
+		{"1e5abc 1e1e1", []wantTok{{dialect.KindNumber, "1e5"}, {dialect.KindIdent, "abc"}, {dialect.KindNumber, "1e1"}, {dialect.KindIdent, "e1"}}},
+		{"0x1F 0x1e 0b01", []wantTok{{dialect.KindNumber, "0x1F"}, {dialect.KindNumber, "0x1e"}, {dialect.KindNumber, "0b01"}}},
+		{"0x1Fg 0x1F$ 0b012 0x 0b", []wantTok{{dialect.KindIdent, "0x1Fg"}, {dialect.KindIdent, "0x1F$"}, {dialect.KindIdent, "0b012"}, {dialect.KindIdent, "0x"}, {dialect.KindIdent, "0b"}}},
+		{"1.2.3", []wantTok{{dialect.KindNumber, "1.2"}, {dialect.KindNumber, ".3"}}},
+		{"1.e5 .5e1 1.5abc", []wantTok{{dialect.KindNumber, "1.e5"}, {dialect.KindNumber, ".5e1"}, {dialect.KindNumber, "1.5"}, {dialect.KindIdent, "abc"}}},
+		{"1x'a' 0x1F'b'", []wantTok{{dialect.KindIdent, "1x"}, {dialect.KindString, "'a'"}, {dialect.KindNumber, "0x1F"}, {dialect.KindString, "'b'"}}},
+		{"1--2 1#c", []wantTok{{dialect.KindNumber, "1"}, {dialect.KindOperator, "--"}, {dialect.KindNumber, "2"}, {dialect.KindNumber, "1"}, {dialect.KindLineComment, "#c"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			got := kindsOf(lexAll(t, tt.src))
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i].Kind != w.kind || got[i].Text != w.text {
+					t.Errorf("token %d = (%v, %q), want (%v, %q)", i, got[i].Kind, got[i].Text, w.kind, w.text)
+				}
+			}
+		})
+	}
+}
+
+// The TiDB readings the table above encodes, so a parser upgrade that
+// changes them is noticed (the frontend is the profile's ground truth).
+func TestLexer_NumericLiteralsTiDBReadings(t *testing.T) {
+	for src, want := range map[string]string{
+		"1abc":   "SELECT `1abc`",
+		"1_000":  "SELECT `1_000`",
+		"1e+x":   "SELECT `1e`+`x`",
+		"1e5abc": "SELECT 1e+05 AS `abc`",
+		"1e1e1":  "SELECT 1e+01 AS `e1`",
+		"0x1F":   "SELECT x'1f'",
+		"0x1Fg":  "SELECT `0x1Fg`",
+		"0b012":  "SELECT `0b012`",
+		"1.5abc": "SELECT 1.5 AS `abc`",
+		"1x'a'":  "SELECT `1x` AS `a`",
+	} {
+		stmt, err := parser.New().ParseOneStmt("SELECT "+src, "", "")
+		if err != nil {
+			t.Errorf("%q: %v", src, err)
+			continue
+		}
+		var sb strings.Builder
+		if err := stmt.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb)); err != nil {
+			t.Fatal(err)
+		}
+		if sb.String() != want {
+			t.Errorf("%q restores as %q, want %q", src, sb.String(), want)
+		}
 	}
 }
