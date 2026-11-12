@@ -14,6 +14,7 @@ var (
 	_ dialect.Placeholders          = Profile{}
 	_ dialect.InEmpty               = Profile{}
 	_ dialect.CaseInsensitiveIdents = Profile{}
+	_ dialect.ASCIIFoldIdents       = Profile{}
 )
 
 // PlaceholderStyle declares SQLite's '?' per-occurrence binding.
@@ -22,6 +23,10 @@ func (Profile) PlaceholderStyle() dialect.PlaceholderStyle { return dialect.Plac
 // CaseInsensitiveIdents reports that SQLite resolves aliases and column
 // references case-insensitively, so R3/R2 name matching must fold.
 func (Profile) CaseInsensitiveIdents() bool { return true }
+
+// ASCIIFoldIdents reports that SQLite folds identifier case for ASCII
+// letters only (sqlite3StrICmp): `É` and `é` are different names.
+func (Profile) ASCIIFoldIdents() bool { return true }
 
 // InEmptySQL is the arity-0 @in emission (FALSE even for NULL
 // operands; SQLite allows a FROM-less SELECT with WHERE).

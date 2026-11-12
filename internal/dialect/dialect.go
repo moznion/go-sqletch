@@ -103,18 +103,49 @@ type CaseInsensitiveIdents interface {
 	CaseInsensitiveIdents() bool
 }
 
+// ASCIIFoldIdents is implemented by case-insensitive profiles whose
+// engine folds identifier case for ASCII letters ONLY (SQLite's
+// sqlite3StrICmp): `É` and `é` name different relations there, and the
+// Kelvin sign is not `k`. Folding such names together would merge two
+// distinct relations in R3's by-name map and could resolve a reference
+// to a guarded join as one to an unguarded join.
+type ASCIIFoldIdents interface {
+	ASCIIFoldIdents() bool
+}
+
 // FoldIdent returns the profile's identifier-folding function: on a
 // case-insensitive dialect it maps an identifier to its case-folded
-// form, elsewhere it is the identity. The resolution-based rules (R3
+// form (ASCII letters only where the profile implements
+// ASCIIFoldIdents), elsewhere it is the identity. The resolution-based rules (R3
 // guard scope, R2 qualified star) run every qualifier, alias, scope
 // name, and catalog column name through it so a mixed-case reference
 // cannot slip past a guard check on a dialect that would resolve it at
 // runtime (SQLETCH115/117). Fold both sides of every comparison.
 func FoldIdent(profile LexerProfile) func(string) string {
 	if p, ok := profile.(CaseInsensitiveIdents); ok && p.CaseInsensitiveIdents() {
+		if a, ok := profile.(ASCIIFoldIdents); ok && a.ASCIIFoldIdents() {
+			return asciiLower
+		}
 		return strings.ToLower
 	}
 	return func(s string) string { return s }
+}
+
+// asciiLower lower-cases ASCII letters and leaves every other byte —
+// non-ASCII runes and invalid UTF-8 alike — untouched.
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if b[j] >= 'A' && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
 }
 
 // PipesOr is implemented by lexer profiles whose dialect parses the `||`
