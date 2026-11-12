@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column a:ȺȺȺȺȺȺȺជȺȺȺȺȺȺȺȺ()ជȺȺȺȺȺȺȺជȺȺȺȺȺ\u16fa\nSELECT('')")
