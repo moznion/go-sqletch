@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT id 0b FROM users WHERE 0b0")

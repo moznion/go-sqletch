@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name: SearchUers :many\nation_id N :org TRU\x05\n\n@if-presstatus\n@endif\n\n@if-present(email_p)efix)\n  AND u.email LIKE :email_prefix || '%'\n@endif\n\n@if-present(cread_after)\n  AND u.created_at >= :created_after\n@endif\n\n@choose(sort)\n@case(created_at_desc)\nORDER BY u.created_at DESC\n@case(created_at_asc)\nORDER BY u.created_at ASC\n@case(email_asc)\nORDER BY u.email ASC, u.id ASC\n@deault\nORDERBY u.id ASC\n@end\n\nLIMIT :A\f\xe1\x1b<\x13limit;\n")
