@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:x :many\n2,@if-present(ea,cBZ7B)2cbx")
