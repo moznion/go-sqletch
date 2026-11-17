@@ -171,6 +171,11 @@ func f3Catalog() *cache.Catalog {
 
 func checkResolvedDialect(t *testing.T, profile dialect.LexerProfile, fe dialect.Frontend, src string) []diagnostics.Diagnostic {
 	t.Helper()
+	return checkResolvedDialectCat(t, profile, fe, src, f3Catalog())
+}
+
+func checkResolvedDialectCat(t *testing.T, profile dialect.LexerProfile, fe dialect.Frontend, src string, cat *cache.Catalog) []diagnostics.Diagnostic {
+	t.Helper()
 	f, diags := template.NewScanner(profile).ScanFile("t.sql", []byte(src))
 	if len(diags) != 0 {
 		t.Fatalf("scan: %+v", diags)
@@ -187,7 +192,7 @@ func checkResolvedDialect(t *testing.T, profile dialect.LexerProfile, fe dialect
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CheckResolved(profile, q, rs[0], tree, f3Catalog())
+	return CheckResolved(profile, q, rs[0], tree, cat)
 }
 
 // MySQL resolves `a.kind` case-insensitively to the mixed-case alias `A`
@@ -354,5 +359,80 @@ WHERE TRUE
 `
 	if diags := checkResolvedDialect(t, sqlite.Profile{}, sqlite.Frontend{}, src); hasCode(diags, diagnostics.CodeScopeViolation) {
 		t.Fatalf("unguarded `é` ref must not fire, got %+v", diags)
+	}
+}
+
+// MySQL relation names compare exactly under lower_case_table_names=0
+// and case-insensitively under 1/2; sqletch cannot see which. A
+// qualifier is checked against EVERY relation it may name: one Unicode-
+// folded by-name slot let the unguarded `a` (registered last) stand in
+// for the guarded `A`, so `A.kind` in the skeleton passed (missed
+// SQLETCH115 under lower_case_table_names=0, where `A` is exactly the
+// guarded join).
+func TestF3_MySQLCaseVariantAliasesCheckEveryCandidate(t *testing.T) {
+	for _, ref := range []string{"A", "a"} { // `a.kind` is the guarded join under 1/2
+		src := `-- name: Bad :many
+-- @param x: bigint
+SELECT u.id FROM users AS u
+@if-present(x)
+JOIN audits AS A ON A.user_id = u.id AND A.id = :x
+@endif
+JOIN audits AS a ON a.user_id = u.id
+WHERE TRUE
+  AND ` + ref + `.kind = 'k'
+;
+`
+		diags := checkResolvedDialect(t, mysql.Profile{}, mysql.Frontend{}, src)
+		if !hasCode(diags, diagnostics.CodeScopeViolation) {
+			t.Errorf("ref %s.kind: want SQLETCH115, got %+v", ref, diags)
+		}
+	}
+}
+
+// Shadowing SKIPS a check, so a subquery alias shadows a top-level
+// relation only when the names certainly match: `a` does not shadow the
+// guarded `A` under lower_case_table_names=0, so the correlated `A.kind`
+// must still be checked.
+func TestF3_MySQLCaseVariantSubqueryAliasDoesNotShadow(t *testing.T) {
+	src := `-- name: Bad :many
+-- @param x: bigint
+SELECT u.id FROM users AS u
+@if-present(x)
+JOIN audits AS A ON A.user_id = u.id AND A.id = :x
+@endif
+WHERE TRUE
+  AND EXISTS (SELECT 1 FROM audits AS a WHERE a.id = A.id)
+;
+`
+	diags := checkResolvedDialect(t, mysql.Profile{}, mysql.Frontend{}, src)
+	if !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("want SQLETCH115 for the correlated A.id, got %+v", diags)
+	}
+}
+
+// MySQL column names fold through the server's own table, which merges
+// strictly LESS than Go's strings.ToLower (486 BMP pairs, e.g. `ẞ`/`ß`):
+// `ẞ` is not the guarded join's column `ß`, so an unqualified `ẞ` in the
+// skeleton must not be reported against it (Go's fold made it a false
+// SQLETCH115). Nothing MySQL merges is kept apart by Go, so the old fold
+// over-reported only; this pins the precision, the relation-name tests
+// above pin the soundness.
+func TestF3_MySQLServerColumnFold(t *testing.T) {
+	cat := f3Catalog()
+	cat.Tables[1].Cols = append(cat.Tables[1].Cols, cache.Column{Name: "ß", Att: 4, NotNull: true})
+	cat.Tables[0].Cols = append(cat.Tables[0].Cols, cache.Column{Name: "ẞ", Att: 3, NotNull: true})
+	src := `-- name: Ok :many
+-- @param x: bigint
+SELECT u.id FROM users AS u
+@if-present(x)
+JOIN audits AS au ON au.user_id = u.id AND au.id = :x
+@endif
+WHERE TRUE
+  AND ẞ = 'k'
+;
+`
+	diags := checkResolvedDialectCat(t, mysql.Profile{}, mysql.Frontend{}, src, cat)
+	if hasCode(diags, diagnostics.CodeScopeViolation) || hasCode(diags, diagnostics.CodeAmbiguousRef) {
+		t.Fatalf("`ẞ` is users' own column, not audits' `ß`; got %+v", diags)
 	}
 }

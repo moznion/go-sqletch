@@ -380,8 +380,9 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `_`; rqlite offsets are runes) + reflection restore of every
   `*rsql.Ident` (`sqlite/ident_rewrite.go`); keyword-forming or uncovered
   rewrites are parse errors — never let a rewritten name reach a facade.
-  SQLite folds identifier case ASCII-only (`dialect.ASCIIFoldIdents`;
-  `É` ≠ `é`) — never fold its names with `strings.ToLower`. devdb DSN
+  SQLite folds identifier case ASCII-only (`É` ≠ `é`; see the
+  identifier-comparison section) — never fold its names with
+  `strings.ToLower`. devdb DSN
   is a file path resolved config-relative via `cli.sqliteDSNPath`
   (`:memory:` and `file:` URIs pass through), reset = drop all
   tables/views, version pin compares dotted prefix ("3.50" vs
@@ -764,6 +765,25 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - Driver boundary pinned (`TestPgEnumDriverBoundary`): pgx falls back to
   the Go value's codec for an unregistered enum OID, through the
   underlying type of `type T string`.
+
+## Known decisions: identifier comparison keys (design 01)
+
+- Owner decision 2026-11-17 ("fail closed for both"): every engine-side
+  name comparison goes through `dialect.IdentFolds` — `ColumnFold` and
+  `RelationFolds` (may, must) — never a Go Unicode fold. MySQL columns
+  use the server's utf8mb3_general_ci lower-case table
+  (`mysql/identfold_table.go`, re-derived by the devdb
+  `TestMySQLIdentFoldTableMatchesServer`; `SQLETCH_UPDATE_IDENTFOLD=1`
+  rewrites it). MySQL relation names depend on lower_case_table_names
+  (exact under 0, folded under 1/2), invisible offline: "may" = folded,
+  "must" = exact. SQLite: ASCII-only for all keys. PostgreSQL: identity.
+- Checks resolve through "may" (R3/R2 `byMay` is a MULTIMAP: a guard on
+  ANY candidate must cover the reference — never collapse it back to
+  one slot, that is how an unguarded `a` overwrote a guarded `A`);
+  anything that SKIPS a check (subquery shadowing, doc-20 param
+  nullability, the L005 `ColumnResolver`) uses "must". The native MySQL
+  oracle accepts only what every lower_case_table_names runs: exact
+  qualifiers, "may"-keyed alias uniqueness, server-fold columns.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

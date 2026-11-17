@@ -5,7 +5,6 @@ package dialect
 
 import (
 	"fmt"
-	"strings"
 )
 
 type TokenKind int
@@ -103,37 +102,50 @@ type CaseInsensitiveIdents interface {
 	CaseInsensitiveIdents() bool
 }
 
-// ASCIIFoldIdents is implemented by case-insensitive profiles whose
-// engine folds identifier case for ASCII letters ONLY (SQLite's
-// sqlite3StrICmp): `É` and `é` name different relations there, and the
-// Kelvin sign is not `k`. Folding such names together would merge two
-// distinct relations in R3's by-name map and could resolve a reference
-// to a guarded join as one to an unguarded join.
-type ASCIIFoldIdents interface {
-	ASCIIFoldIdents() bool
+// IdentFolds is implemented by case-insensitive profiles to state how
+// their ENGINE compares identifiers. Each method maps a name to a
+// comparison key; two names compare equal exactly when their keys do.
+// Relation names (tables, aliases) get two keys because their case
+// sensitivity can depend on server configuration that sqletch cannot see
+// offline (MySQL's lower_case_table_names): a "may" key under which two
+// names are equal whenever ANY configuration could treat them as the
+// same relation, and a "must" key under which they are equal only when
+// EVERY configuration does. Guard checks resolve through "may" (a
+// reference is checked against every relation it could mean — fail
+// closed); decisions that SKIP a check (subquery shadowing, parameter
+// nullability) use "must".
+type IdentFolds interface {
+	FoldColumn(name string) string
+	FoldRelationMay(name string) string
+	FoldRelationMust(name string) string
 }
 
-// FoldIdent returns the profile's identifier-folding function: on a
-// case-insensitive dialect it maps an identifier to its case-folded
-// form (ASCII letters only where the profile implements
-// ASCIIFoldIdents), elsewhere it is the identity. The resolution-based rules (R3
-// guard scope, R2 qualified star) run every qualifier, alias, scope
-// name, and catalog column name through it so a mixed-case reference
-// cannot slip past a guard check on a dialect that would resolve it at
-// runtime (SQLETCH115/117). Fold both sides of every comparison.
-func FoldIdent(profile LexerProfile) func(string) string {
-	if p, ok := profile.(CaseInsensitiveIdents); ok && p.CaseInsensitiveIdents() {
-		if a, ok := profile.(ASCIIFoldIdents); ok && a.ASCIIFoldIdents() {
-			return asciiLower
-		}
-		return strings.ToLower
+func identity(s string) string { return s }
+
+// ColumnFold returns the profile's column-name comparison key (column
+// names, output aliases). Identity where the profile does not implement
+// IdentFolds: PostgreSQL's facade already yields folded names.
+func ColumnFold(profile LexerProfile) func(string) string {
+	if f, ok := profile.(IdentFolds); ok {
+		return f.FoldColumn
 	}
-	return func(s string) string { return s }
+	return identity
 }
 
-// asciiLower lower-cases ASCII letters and leaves every other byte —
-// non-ASCII runes and invalid UTF-8 alike — untouched.
-func asciiLower(s string) string {
+// RelationFolds returns the profile's "may" and "must" relation-name
+// comparison keys (see IdentFolds). Identity where the profile does not
+// implement IdentFolds.
+func RelationFolds(profile LexerProfile) (may, must func(string) string) {
+	if f, ok := profile.(IdentFolds); ok {
+		return f.FoldRelationMay, f.FoldRelationMust
+	}
+	return identity, identity
+}
+
+// ASCIILower lower-cases ASCII letters and leaves every other byte —
+// non-ASCII runes and invalid UTF-8 alike — untouched (SQLite's
+// sqlite3StrICmp, and MySQL's handling of the ASCII plane).
+func ASCIILower(s string) string {
 	for i := 0; i < len(s); i++ {
 		if c := s[i]; c >= 'A' && c <= 'Z' {
 			b := []byte(s)

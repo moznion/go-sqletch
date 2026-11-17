@@ -95,12 +95,37 @@ CURRENT_DATE) or a rewritten word not covered by an identifier node is a
 parse error, so a rewritten name (which could collide with a real `a_b`)
 never reaches a facade. The engine always receives the original SQL.
 
-SQLite folds identifier case for ASCII letters ONLY (`É` ≠ `é`; the
-Kelvin sign is not `k`), so its profile implements
-`dialect.ASCIIFoldIdents` and `dialect.FoldIdent` folds ASCII only there
-(MySQL keeps Unicode folding). Unicode folding merged `É`/`é` in R3's
-by-name map: an unguarded `é` overwrote a guarded `É` and a skeleton
-reference to `É` passed (missed SQLETCH115), pinned by
+**Identifier comparison keys** (`dialect.IdentFolds`, owner decision
+2026-11-17). Every engine-side name comparison the rules make goes
+through a profile-supplied key, never a Go Unicode fold:
+
+- `ColumnFold` — column names and output aliases. SQLite: ASCII letters
+  only (sqlite3StrICmp: `É` ≠ `é`, the Kelvin sign is not `k`). MySQL:
+  utf8mb3_general_ci's own lower-case table (`identfold_table.go`,
+  extracted from the server by `TestMySQLIdentFoldTableMatchesServer`,
+  `SQLETCH_UPDATE_IDENTFOLD=1` rewrites it) — Go's `strings.ToLower`
+  merges strictly more (486 BMP pairs, e.g. `ẞ`/`ß`). PostgreSQL:
+  identity (the facade already folds).
+- `RelationFolds` → (may, must) — table names and aliases. MySQL's
+  depend on `lower_case_table_names`, invisible offline: exact under 0
+  (Linux default, the devdb container), case-insensitive under 1/2. The
+  "may" key (MySQL: the column fold) joins names that could be one
+  relation under SOME configuration; "must" (MySQL: exact) only those
+  that are under EVERY one. SQLite/PostgreSQL: both keys equal their
+  column key.
+
+Fail-closed use: R3/R2 check a qualifier against EVERY relation it
+may name (`resolver.byMay` is a multimap; a guard on any candidate must
+cover the reference), and an unqualified column against every table a
+relation may name (`mayTables`). Decisions that SKIP a check — subquery
+shadowing (`scopeContains`), parameter nullability (doc 20 §3.3), the
+L005 lint's `ColumnResolver` — use "must". The native MySQL oracle
+accepts only what every configuration runs: qualifiers match exactly,
+alias uniqueness uses the "may" key, columns the server fold
+(`TestNativeDifferential` pins it against the server). The previous
+single Unicode-folded slot let an unguarded `a` (or `é` on SQLite)
+overwrite a guarded `A` (`É`) and let `a` shadow a guarded `A` in a
+subquery — missed SQLETCH115, pinned by `TestF3_MySQLCaseVariant*` /
 `TestF3_SQLiteNonASCII*`. Policy-side Unicode folds (designated-table
 `EqualFold`, the weaver's per-name counts) only ever over-match, which
 weaves more or refuses — never less.

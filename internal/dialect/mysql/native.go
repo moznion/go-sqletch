@@ -181,12 +181,14 @@ func (d *describer) scopeFrom(refs *ast.TableRefsClause) ([]nativeRel, error) {
 	// Effective qualifiers (alias-else-table) must be unique, or a
 	// qualified reference has no single referent — MySQL rejects the
 	// statement outright (ER_NONUNIQ_TABLE) before it looks at any
-	// column. The comparison is case-insensitive, matching MySQL's
-	// alias/identifier handling. Skipping this let `FROM t, t` and
-	// `FROM t AS a, u AS a` sail through with err=nil.
+	// column. Skipping this let `FROM t, t` and `FROM t AS a, u AS a`
+	// sail through with err=nil. The comparison uses the "may" relation
+	// key (identfold.go): `a` and `A` are distinct under
+	// lower_case_table_names=0 but ER_NONUNIQ_TABLE under 1/2, and a
+	// statement that fails under some configuration is refused.
 	seen := make(map[string]bool, len(scope))
 	for i := range scope {
-		key := strings.ToLower(scope[i].name)
+		key := identLower(scope[i].name)
 		if seen[key] {
 			return nil, &dialect.OracleError{Pos: -1,
 				Msg: fmt.Sprintf("not unique table/alias: %q", scope[i].name)}
@@ -239,34 +241,30 @@ func (d *describer) walkJoinConds(node ast.ResultSetNode) error {
 }
 
 // scopeTarget reports whether name matches a relation in scope by its
-// effective qualifier (alias-else-table): aliases match
-// case-insensitively, bare table names as spelled — mirroring resolve.
+// effective qualifier (alias-else-table), exactly as spelled —
+// mirroring resolve.
 func (d *describer) scopeTarget(name string) bool {
 	for i := range d.scope {
-		r := &d.scope[i]
-		if r.alias && strings.EqualFold(r.name, name) {
-			return true
-		}
-		if !r.alias && r.name == name {
+		if d.scope[i].name == name {
 			return true
 		}
 	}
 	return false
 }
 
-// resolve finds [qualifier.]name in scope. MySQL matches column names
-// and aliases case-insensitively; bare table names used as qualifiers
-// match as spelled (the devdb servers run case-sensitive table names).
+// resolve finds [qualifier.]name in scope. Qualifiers (aliases and bare
+// table names) match EXACTLY: that is the server under
+// lower_case_table_names=0 (the devdb container), and a qualifier that
+// resolves only under 1/2 is refused — the native oracle accepts only
+// what every configuration runs. Column names match through the
+// server's own identifier fold (identLower), never Go's Unicode folding.
 func (d *describer) resolve(qualifier, name string, pos int) (*nativeRel, *cache.Column, error) {
 	var relMatches []*nativeRel
 	scope := d.scope
 	for i := range scope {
 		r := &scope[i]
 		if qualifier != "" {
-			if r.alias && !strings.EqualFold(r.name, qualifier) {
-				continue
-			}
-			if !r.alias && r.name != qualifier {
+			if r.name != qualifier {
 				continue
 			}
 		}
@@ -281,7 +279,7 @@ func (d *describer) resolve(qualifier, name string, pos int) (*nativeRel, *cache
 	for _, r := range relMatches {
 		for i := range r.table.Cols {
 			c := &r.table.Cols[i]
-			if !strings.EqualFold(c.Name, name) {
+			if identLower(c.Name) != identLower(name) {
 				continue
 			}
 			if foundCol != nil {
@@ -481,8 +479,7 @@ func (d *describer) expandStar(f *ast.SelectField) ([]dialect.ColumnDesc, error)
 	for i := range d.scope {
 		r := &d.scope[i]
 		if qualifier != "" {
-			match := (r.alias && strings.EqualFold(r.name, qualifier)) || (!r.alias && r.name == qualifier)
-			if !match {
+			if r.name != qualifier { // exact, as resolve
 				continue
 			}
 		}
@@ -733,9 +730,10 @@ func (v *refVisitor) Enter(n ast.Node) (ast.Node, bool) {
 		}
 		if _, _, err := v.d.resolve(x.Name.Table.O, x.Name.Name.O, x.OriginTextPosition()); err != nil {
 			if v.allowAliases && x.Name.Table.O == "" {
-				// Case-insensitive alias fallback, matching MySQL.
+				// Output aliases compare like column names: through the
+				// server's identifier fold.
 				for a := range v.d.aliases {
-					if strings.EqualFold(a, x.Name.Name.O) {
+					if identLower(a) == identLower(x.Name.Name.O) {
 						return n, true
 					}
 				}

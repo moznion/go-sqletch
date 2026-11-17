@@ -620,3 +620,41 @@ func TestNativeServerVersionIsThePin(t *testing.T) {
 		t.Fatalf("ServerVersion must return the pin verbatim, got %q, %v", v, err)
 	}
 }
+
+// The native oracle accepts only what the server runs under EVERY
+// lower_case_table_names (identfold.go; server ground truth in
+// TestMySQLIdentFoldSemanticsMatchServer). A qualifier matches its
+// relation exactly — `U.id` against alias `u` fails on the devdb server
+// (lower_case_table_names=0) — while column names compare through the
+// server's own identifier fold, not Go's: `EMAIL` is `email`, but a
+// column `Ƀ` would not be `ƀ`.
+func TestNativeDescribeIdentifierCase(t *testing.T) {
+	o, err := NewNativeOracle([]cache.SchemaFile{{Path: "s.sql", Content: []byte(nativeTestDDL +
+		"CREATE TABLE fold_t (`Ƀ` INT, `É` INT);\n")}}, "8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, tt := range []struct{ name, sql string }{
+		{"alias qualifier case mismatch", "SELECT U.id FROM users AS u"},
+		{"table qualifier case mismatch", "SELECT USERS.id FROM users"},
+		{"star qualifier case mismatch", "SELECT U.* FROM users AS u"},
+		{"column merged only by Go's fold", "SELECT ƀ FROM fold_t"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if desc, err := o.Describe(ctx, tt.sql); err == nil {
+				t.Fatalf("described %q although the devdb server refuses it: %+v", tt.sql, desc.Columns)
+			}
+		})
+	}
+	for _, sql := range []string{
+		"SELECT u.EMAIL FROM users AS u",
+		"SELECT u.id FROM users AS u ORDER BY u.ID",
+		"SELECT u.email AS Mail FROM users AS u ORDER BY mail",
+		"SELECT é, Ƀ FROM fold_t",
+	} {
+		if _, err := o.Describe(ctx, sql); err != nil {
+			t.Errorf("%q: %v", sql, err)
+		}
+	}
+}

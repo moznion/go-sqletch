@@ -37,7 +37,13 @@ func (c *ColumnResolver) Column(qualifier, name string) (col *cache.Column, rela
 		}
 		rel = cands[0]
 	} else {
-		rel = c.res.byName[c.res.fold(qualifier)]
+		// The lint under-reports: resolve only a qualifier that
+		// certainly names exactly one relation.
+		rels := c.res.byMust[c.res.relMust(qualifier)]
+		if len(rels) != 1 || len(c.res.byMay[c.res.relMay(qualifier)]) != 1 {
+			return nil, ""
+		}
+		rel = rels[0]
 	}
 	if rel == nil || rel.table == nil {
 		return nil, ""

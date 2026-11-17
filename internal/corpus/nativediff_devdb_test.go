@@ -62,6 +62,11 @@ CREATE TABLE second (
     ref   BIGINT NOT NULL,
     label VARCHAR(32) NOT NULL
 );
+CREATE TABLE fold_t (
+    id  BIGINT PRIMARY KEY,
+    É   INT NOT NULL,
+    Ƀ   INT
+);
 `
 
 // Statements both backends must accept, byte-identically.
@@ -83,6 +88,10 @@ var agreeSQL = []string{
 	"INSERT INTO second (id, ref, label) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE label = ?",
 	"UPDATE second AS s SET s.label = ? WHERE s.id = ?",
 	"DELETE FROM second WHERE id = ? ORDER BY id LIMIT 3",
+	// Identifier case (identfold.go): columns compare through the
+	// server's own fold, qualifiers exactly as spelled.
+	"SELECT s.LABEL, s.Id FROM second AS s",
+	"SELECT f.é, f.Ƀ FROM fold_t AS f",
 }
 
 // Statements both backends must reject (engine parity: OracleError).
@@ -93,6 +102,11 @@ var bothRejectSQL = []string{
 	"SELECT id FROM every_type, second",
 	"INSERT INTO second (id, ref) VALUES (?, ?, ?)",
 	"UPDATE second SET ghost = ?",
+	// lower_case_table_names=0: qualifiers are case-sensitive, and Go's
+	// Unicode fold merges `ƀ` with `Ƀ` where the server does not.
+	"SELECT S.id FROM second AS s",
+	"SELECT SECOND.id FROM second",
+	"SELECT ƀ FROM fold_t",
 }
 
 // Statements the server accepts but the native backend refuses — the
