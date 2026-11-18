@@ -904,7 +904,7 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 	return out
 }
 
-// builtinFuncName returns the lowercased builtin name of a function
+// builtinFuncName returns the builtin name of a function
 // call ONLY when the call names a builtin unambiguously: an UNqualified
 // call (a single name part) or one explicitly qualified with the
 // pg_catalog schema. A user-schema-qualified call — `myschema.count(x)`,
@@ -915,7 +915,12 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 // funcWhitelist nor the strictAggs lookup can match. The pg_catalog
 // comparison is exact (not case-folded): the parser already downcases
 // unquoted identifiers to `pg_catalog`, while a quoted `"PG_CATALOG"`
-// is a different, non-catalog schema that must not be blessed.
+// is a different, non-catalog schema that must not be blessed. The
+// function name is returned exactly as the parser reports it, for the
+// same reason: PostgreSQL resolves function names exactly after
+// downcasing unquoted ASCII, so a quoted `"COUNT"` or an unquoted `mİn`
+// (non-ASCII is never downcased) is a user function, not count/min —
+// lowering it narrowed a NULL result (nullability_soundness_devdb_test).
 func builtinFuncName(funcname []*pgquery.Node) (string, bool) {
 	parts := make([]string, 0, len(funcname))
 	for _, fn := range funcname {
@@ -927,10 +932,10 @@ func builtinFuncName(funcname []*pgquery.Node) (string, bool) {
 	}
 	switch len(parts) {
 	case 1:
-		return strings.ToLower(parts[0]), true
+		return parts[0], true
 	case 2:
 		if parts[0] == "pg_catalog" {
-			return strings.ToLower(parts[1]), true
+			return parts[1], true
 		}
 	}
 	return "", false

@@ -134,7 +134,7 @@ type TargetItem struct {
 	Name      string // output alias ("" if none)
 	Star      bool   // item is * or qualifier.*
 	Qualifier string // "u" for u.*; "" for bare *
-	FuncName  string // lowercased function name when the item is a bare call
+	FuncName  string // builtin-lookup key when the item is a bare call: the name as the engine matches builtins (PG exact post-parse, MySQL/SQLite ASCII-lowered) — never a Go Unicode fold
 	// Total marks an expression that can never evaluate to NULL
 	// regardless of data: a non-NULL literal, EXISTS, an IS [NOT]
 	// NULL / boolean test, a non-null value function, a cast of a

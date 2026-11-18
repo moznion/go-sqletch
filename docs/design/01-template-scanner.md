@@ -138,7 +138,9 @@ PostgreSQL's lookup downcases ASCII only. `strings.ToUpper` maps `ı`→`I`
 and `ſ`→`S`, so every lexical scanner (template, policy, rules, lint,
 the MySQL relation locator, SQLite's RIGHT/FULL JOIN detector) used to
 read them as LIMIT/UNION/OFFSET/CASE/RIGHT. Never upper-case a token
-with `strings.ToUpper` to compare it with a keyword.
+with `strings.ToUpper` to compare it with a keyword. Builtin function
+names likewise (`TargetItem.FuncName`, design 05 §2): PostgreSQL exact,
+MySQL/SQLite `dialect.ASCIILower`.
 
 Downstream limits stay: a `$` result-column name is SQLETCH307 (no
 collision-free Go spelling; alias it), as is a caseless one like `名前`
