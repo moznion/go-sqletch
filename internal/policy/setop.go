@@ -1,8 +1,6 @@
 package policy
 
 import (
-	"strings"
-
 	"github.com/moznion/go-sqletch/internal/dialect"
 	"github.com/moznion/go-sqletch/internal/template"
 )
@@ -129,7 +127,7 @@ func setOpElems(profile dialect.LexerProfile, q *template.QueryTemplate) ([]soEl
 			e := soElem{tok: tok, abs: s.Span.Start + tok.Start, synth: s.Synth, dotted: prevDot}
 			prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
 			if tok.Kind == dialect.KindIdent {
-				e.up = strings.ToUpper(tok.Text)
+				e.up = dialect.ASCIIUpper(tok.Text)
 			}
 			if tok.Kind == dialect.KindRParen {
 				if depth == 0 {

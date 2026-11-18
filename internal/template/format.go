@@ -181,7 +181,7 @@ func lastSignificantToken(profile dialect.LexerProfile, text string) (string, in
 		switch t.Kind {
 		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 		case dialect.KindIdent:
-			tok, end = strings.ToUpper(t.Text), t.End
+			tok, end = dialect.ASCIIUpper(t.Text), t.End
 		default:
 			tok, end = t.Text, t.End
 		}

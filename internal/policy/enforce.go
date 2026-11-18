@@ -50,10 +50,11 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	// which stops the pipeline before this pass), so this fires only if
 	// the weaver regressed and let one through — the same
 	// catch-the-weaver role the conjunct re-derivation below plays.
+	may, _ := dialect.RelationFolds(profile)
 	over, overNested := overreadDeep(profile, fe, q, deep)
 	nested := append(tree.NestedDML(), overNested...)
 	applies := func(p *Policy) bool {
-		return analyzeApplicability(p, kind, rels, deep, conflict, nested).active || len(designatedOverread(p, over, kind)) > 0
+		return analyzeApplicability(p, may, kind, rels, deep, conflict, nested).active || len(designatedOverread(p, may, over, kind)) > 0
 	}
 
 	byName := map[string]*Policy{}
@@ -131,7 +132,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	onScans := map[int]*joinOnResult{}
 	for i := range pols {
 		p := &pols[i]
-		a := analyzeApplicability(p, kind, rels, deep, conflict, nested)
+		a := analyzeApplicability(p, may, kind, rels, deep, conflict, nested)
 		if _, ok := optOutFor(q, p.Name); ok {
 			continue
 		}
@@ -139,7 +140,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		// non-maximal rendering should have been refused at weave time.
 		// If it reached here, the woven output ships it unscoped — report
 		// it rather than let it leak.
-		if names := designatedOverread(p, over, kind); len(names) > 0 {
+		if names := designatedOverread(p, may, over, kind); len(names) > 0 {
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
 				"query reads policy-designated table %q inside a non-maximal rendering (a @choose alternative or @order-by @default) that policy %q cannot scope",
 				names[0], p.Name).
@@ -173,7 +174,7 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 			}
 			continue
 		}
-		if tgt, ok := updateConflictTarget(p, kind, rels, conflict); ok {
+		if tgt, ok := updateConflictTarget(p, may, kind, rels, conflict); ok {
 			// Weaver-regression backstop for SQLite UPDATE OR REPLACE
 			// (F17): even a present scoping conjunct scopes only the rows
 			// the UPDATE selects, never the colliding row the REPLACE

@@ -784,6 +784,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   nullability, the L005 `ColumnResolver`) uses "must". The native MySQL
   oracle accepts only what every lower_case_table_names runs: exact
   qualifiers, "may"-keyed alias uniqueness, server-fold columns.
+- Policies too (doc 14 §11.10, 2026-11-19): `Policy.designates` and the
+  hidden-read/overread counts key on "may" (`strings.EqualFold` missed
+  MySQL `İTEMS` ≡ `items` under lower_case_table_names=1 — an unscoped
+  read). Keywords are recognized with `dialect.ASCIIUpper` everywhere —
+  never `strings.ToUpper` (`lımıt`/`offſet`/`caſe` are identifiers to
+  every engine).
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

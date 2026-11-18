@@ -142,6 +142,26 @@ func RelationFolds(profile LexerProfile) (may, must func(string) string) {
 	return identity, identity
 }
 
+// ASCIIUpper upper-cases ASCII letters and leaves every other byte
+// untouched. It is the ONLY spelling for keyword recognition: every
+// engine matches keywords ASCII-only (MySQL and SQLite accept `lımıt`
+// and `offſet` as ordinary identifiers), while strings.ToUpper maps
+// `ı`→`I` and `ſ`→`S` and would read them as LIMIT and OFFSET.
+func ASCIIUpper(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'a' && c <= 'z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if b[j] >= 'a' && b[j] <= 'z' {
+					b[j] -= 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
 // ASCIILower lower-cases ASCII letters and leaves every other byte —
 // non-ASCII runes and invalid UTF-8 alike — untouched (SQLite's
 // sqlite3StrICmp, and MySQL's handling of the ASCII plane).

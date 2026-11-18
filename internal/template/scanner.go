@@ -732,7 +732,7 @@ func (qb *queryBuilder) feed(fs *fileScan, tok dialect.Token) {
 			"positional parameter %q is not allowed; use a named parameter (:name)", tok.Text)
 	case dialect.KindIdent:
 		if qb.depth == 0 {
-			qb.transition(strings.ToUpper(tok.Text), tok)
+			qb.transition(dialect.ASCIIUpper(tok.Text), tok)
 		}
 	}
 }
@@ -1194,9 +1194,9 @@ func (fs *fileScan) parseWhen(pos, nameEnd int) int {
 		atom.Kind = ValueInt
 		atom.Value = lit.Text
 	case lit.Kind == dialect.KindIdent &&
-		(strings.EqualFold(lit.Text, "true") || strings.EqualFold(lit.Text, "false")):
+		(dialect.ASCIILower(lit.Text) == "true" || dialect.ASCIILower(lit.Text) == "false"):
 		atom.Kind = ValueBool
-		atom.Value = strings.ToLower(lit.Text)
+		atom.Value = dialect.ASCIILower(lit.Text)
 		atom.RawValue = atom.Value
 	default:
 		return bad(fs.span(lit.Start, lit.End),
@@ -1886,12 +1886,12 @@ func (fs *fileScan) clauseKeywordOf(body string) string {
 	if t1 == nil || t1.Kind != dialect.KindIdent {
 		return ""
 	}
-	kw := strings.ToUpper(t1.Text)
+	kw := dialect.ASCIIUpper(t1.Text)
 	if kw != "ORDER" && kw != "GROUP" {
 		return ""
 	}
 	t2 := fs.firstTokenOf(b[t1.End:])
-	if t2 == nil || t2.Kind != dialect.KindIdent || strings.ToUpper(t2.Text) != "BY" {
+	if t2 == nil || t2.Kind != dialect.KindIdent || dialect.ASCIIUpper(t2.Text) != "BY" {
 		return ""
 	}
 	return kw
@@ -1985,7 +1985,7 @@ func (fs *fileScan) isSingleIdent(body string) bool {
 }
 
 func isAndToken(t *dialect.Token) bool {
-	return t.Kind == dialect.KindIdent && strings.ToUpper(t.Text) == "AND"
+	return t.Kind == dialect.KindIdent && dialect.ASCIIUpper(t.Text) == "AND"
 }
 
 func isCommaToken(t *dialect.Token) bool { return t.Kind == dialect.KindComma }
@@ -2060,7 +2060,7 @@ func (fs *fileScan) lastSignificantToken(from, to int) string {
 		switch tok.Kind {
 		case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 		case dialect.KindIdent:
-			last = strings.ToUpper(tok.Text)
+			last = dialect.ASCIIUpper(tok.Text)
 		default:
 			last = tok.Text
 		}
@@ -2119,7 +2119,7 @@ func (fs *fileScan) firstSignificantToken(text string) string {
 			pos = tok.End
 			continue
 		case dialect.KindIdent:
-			return strings.ToUpper(tok.Text)
+			return dialect.ASCIIUpper(tok.Text)
 		default:
 			return tok.Text
 		}
