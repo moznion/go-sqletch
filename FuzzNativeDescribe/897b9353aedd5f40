@@ -1,0 +1,2 @@
+go test fuzz v1
+string("DELETE FROM users ORDER BY id,0")

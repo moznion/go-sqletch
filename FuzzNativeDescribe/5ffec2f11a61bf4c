@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT no, no, no, no, no% n0 n0 n0")
