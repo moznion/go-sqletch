@@ -21,10 +21,11 @@ import (
 // instead of a silent leak.
 //
 // Inside a statement-level set operation the same holds per branch
-// (§13): each designated occurrence needs the conjunct in its OWN
-// branch core's WHERE (or its own join's ON), and the lexical branch
-// holding the occurrence must be the branch the parser assigned it —
-// a conjunct in one branch never vouches for another branch's read.
+// (§13), and for a CTE body or FROM subquery per nested core (§14):
+// each designated occurrence needs the conjunct in its OWN core's WHERE
+// (or its own join's ON), and the lexical core holding the occurrence
+// must be the one the parser's core maps to alone — a conjunct in one
+// core never vouches for another core's read.
 //
 // It also owns SQLETCH126: an opt-out naming an unknown policy, or
 // one that does not apply to the query — renaming a policy must never
@@ -109,22 +110,21 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 	// the lexical split that must agree with the parser's branches.
 	var where clauseScan
 	var so setOpScan
+	var cores coreMatch
 	if nBranches > 0 {
 		so = scanSetOp(profile, q)
+		cores = matchCores(rels, so, maxR)
 	} else {
 		where = whereClause(profile, q)
 	}
 	wherePresent := func(r topRel, conjunct string) bool {
 		cs := where
 		if r.branch >= 0 {
-			if !so.ok || len(so.branches) != nBranches || r.Loc < 0 {
+			li, ok := cores.locate(r, so, maxR)
+			if !ok {
 				return false
 			}
-			tOff, synth := maxR.Map.ToTemplate(r.Loc)
-			if bi, found := so.branchOf[tOff]; synth || !found || bi != r.branch {
-				return false
-			}
-			cs = so.branches[r.branch].where
+			cs = so.branches[li].where
 		}
 		return cs.lexOK && !cs.hasOR && segsContain(profile, cs.segs, conjunct)
 	}
@@ -220,7 +220,9 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 						segsContain(profile, res.cs.segs, conjunct)
 				}
 			} else {
-				present = wherePresent(r, conjunct)
+				// A placeholder-less predicate never scopes a nested core's
+				// read (§14.1): the weaver refuses it, so never credit it.
+				present = (hasPlaceholder || !r.nested) && wherePresent(r, conjunct)
 			}
 			if !present {
 				clause := "WHERE clause"

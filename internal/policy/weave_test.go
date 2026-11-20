@@ -265,8 +265,8 @@ func TestWeave_Rejections(t *testing.T) {
 			wantMsg: "subquery",
 		},
 		{
-			name:    "CTE body occurrence",
-			src:     "-- name: Q :many\nWITH r AS (SELECT * FROM orders) SELECT * FROM r\n",
+			name:    "WITH RECURSIVE body occurrence",
+			src:     "-- name: Q :many\nWITH RECURSIVE r AS (SELECT * FROM orders) SELECT * FROM r\n",
 			wantMsg: "subquery",
 		},
 		{

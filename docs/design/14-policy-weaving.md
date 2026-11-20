@@ -512,6 +512,11 @@ scope: each leaf core is woven like a top-level statement. Subqueries
 and CTE bodies — including those inside a branch, or in the set
 operation's own `WITH`/`ORDER BY` — stay rejected.
 
+**Nested-core refinement (owner decision 2026-11-20, §14).** On
+PostgreSQL, a non-recursive CTE body and a FROM-position subquery are
+eligible cores, scoped at their own WHERE like a branch. Sublinks,
+recursive CTEs, and MySQL/SQLite nested positions stay rejected.
+
 **Upsert refinement (owner decision 2026-08-21, audit-12 M10).** The
 spec only excludes `INSERT … VALUES` as a policy target ("no rows are
 filtered"), but an `INSERT … ON CONFLICT DO UPDATE` (PostgreSQL/SQLite;
@@ -1298,3 +1303,128 @@ suite relies on that. `SetOpBranches` is implemented and tested for
 MySQL, but admitting MySQL set operations is a separate decision
 (nullability attribution, the native oracle), pinned by
 `TestFrontend_SetOperationIsNotADMLKind`.
+
+## 14. Nested-core weaving (CTE bodies and FROM subqueries)
+
+**Status: IMPLEMENTED (2026-11-20, owner decision on the D6
+follow-up: scope "CTE and FROM subqueries", PostgreSQL only).** §13
+lifted D6 for statement-level set-operation branches. This section
+lifts it for two more positions, on PostgreSQL:
+
+- the body of a **non-recursive** `WITH` list entry whose body is a
+  query (`SELECT`, a set operation, a parenthesized query), and
+- a **FROM-position subquery** (`FROM (SELECT …) AS d`, `JOIN (…) d
+  ON …`, `LATERAL (…)`),
+
+recursively: a CTE body or derived table inside either of those is
+itself eligible, and a set operation inside one is split into its
+leaf cores exactly as §13 does. Everything else D6 rejected stays
+`SQLETCH125`:
+
+- subqueries in the WHERE/HAVING/SELECT/ORDER BY/… of any core
+  (`IN (SELECT …)`, `EXISTS (…)`, scalar subqueries) — a sublink is
+  not walked, so a designated table there is still a hidden read;
+- every body of a `WITH RECURSIVE` list (the flag covers the whole
+  list in PostgreSQL; a recursive term reads its own output, and
+  scoping it is left to a later decision);
+- data-modifying CTE bodies (F9, unchanged);
+- `INSERT … SELECT` bodies (unchanged);
+- MySQL and SQLite: their facades report no nested cores, so a nested
+  designated read stays hidden and refused (the capability exists in
+  all three so that enabling them is a compile-visible change).
+
+### 14.1 Semantics — every eligible core is a statement
+
+The §13.1 argument carries over unchanged: a policy means "every read
+of a designated table sees only in-scope rows", and a leaf `SELECT`
+core with its own FROM and WHERE slot is scoped where it reads. A CTE
+body or derived table is such a core. Scoping it at its own WHERE is
+the only placement that respects the meaning: the outer statement may
+aggregate, join, or anti-join the nested rows, and only a filter at
+the read site makes each of those operate on in-scope rows. This is
+also what PostgreSQL's row-level security does — it scopes every
+reference to the table, whatever its depth.
+
+An occurrence on the null-extended side of an outer join *inside* a
+nested core is woven into that join's ON clause (D2a), located by the
+same forward scan from the relation's template offset; a derived
+table that is itself on a null-extended side of the OUTER statement
+needs nothing extra — the conjunct inside it removes out-of-scope rows
+before the outer join null-extends the group, exactly the
+inner-join-group equivalence §D2 already relies on.
+
+A `{}`-less predicate is refused in a nested core (`SQLETCH125`): it
+references no relation, and inside a correlated (LATERAL) derived
+table or a CTE body an unqualified column could resolve to an outer
+or a different relation than the designated one. The top-level and
+set-operation-branch behaviour of such predicates is unchanged.
+
+A CTE whose name shadows a designated table keeps the conservative
+treatment of §11.1: references to the CTE name are counted as touching
+the designated table and are woven like one. That never leaks — it
+filters the CTE's rows by the scoping column, or fails verification
+when the CTE has no such column — so it needs no new rule.
+
+### 14.2 The AST view — `Tree.NestedCores`
+
+`dialect.Tree` gains `NestedCores() []Tree`: every eligible leaf core
+nested under the statement, as located sub-facades like
+`SetOpBranches` returns, in a deterministic walk order (WITH list
+before the operand cores, set-operation `larg` before `rarg`, a core's
+FROM items in order). The statement's own cores (the statement, or its
+`SetOpBranches`) are NOT listed. The PostgreSQL facade walks
+`SelectStmt.WithClause` (skipped entirely when `Recursive`) and
+`RangeSubselect` FROM items (through `JoinExpr`/`RangeTableSample`);
+it never enters a `SubLink`. MySQL and SQLite return nil.
+
+`topRelations` appends every nested core's own relations after the
+top-level cores', tagging each with its core index. The
+`Relations`/`DeepTables` count comparison (§11.1) therefore turns a
+designated read in an eligible nested position into an ordinary
+occurrence, and leaves one in any other position hidden.
+
+### 14.3 The lexical view, and how the two are matched
+
+`scanSetOp` (now the core scan for every multi-core statement — a set
+operation, or any statement with a nested core) additionally parses,
+after the flat pass, every parenthesized region that starts with
+`SELECT` or `WITH` — a WITH body, a FROM subquery, a LATERAL subquery,
+or a sublink — as a query of its own, recursively. The flat pass is
+unchanged, so a core's WHERE still sees every token of its
+parenthesized subexpressions; the nested pass only re-attributes the
+inner tokens (`branchOf`) to the innermost core. A region that does
+not parse as a query keeps its tokens with the enclosing core.
+
+The lexical scan finds cores the AST does not list (sublinks), so the
+two lists cannot be matched by index as §13.2 does. They are matched
+by **relation location** instead:
+
+1. For every AST core, the set of lexical cores holding its located
+   relations' name tokens. The core maps to a lexical core when that
+   set has exactly one member.
+2. A designated occurrence is woven (or, in Enforce, credited) only
+   when its AST core maps to a lexical `SELECT` core, and no OTHER AST
+   core has a relation in that same lexical core.
+
+Rule 2 is what makes a mis-split loud: if the lexical scan failed to
+open a nested core, its relations land in the enclosing lexical core,
+two AST cores collide, and the occurrence is `SQLETCH125` (Enforce:
+`SQLETCH124`) — never a conjunct in the enclosing core's WHERE. The
+woven statement is re-parsed and must yield the same cores with the
+same relations (`verifySetOpWeave`, now run for every multi-core
+statement).
+
+Top-level statements without nested cores keep the pre-§14 path
+(whole-statement WHERE, or §13's index-matched branches is subsumed
+by the location match), so their woven output is byte-identical.
+
+### 14.4 Tests
+
+Golden woven renderings (CTE body, set operation inside a CTE body,
+FROM subquery, LATERAL subquery, nested-in-nested, ON-weave inside a
+derived table, idempotence inside a CTE, untouched queries); the
+refusals (sublink, recursive CTE, `{}`-less predicate in a nested
+core, guarded join inside a CTE, MySQL/SQLite CTE); Enforce per core
+(a conjunct in the outer WHERE never vouches for a CTE body, and vice
+versa); facade conformance for `NestedCores`; the row-level devdb
+proof on real PostgreSQL and the Postgres leak fuzzer's nested seeds.

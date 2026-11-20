@@ -207,6 +207,20 @@ type Tree interface {
 	// independently (design 14 §13); it cross-checks this list against
 	// its own lexical branch split and refuses on any disagreement.
 	SetOpBranches() []Tree
+	// NestedCores returns every leaf query core nested under the
+	// statement in a position the policy weaver may scope (design 14
+	// §14): the body of a non-recursive WITH entry whose body is a
+	// query, and a FROM-position subquery (LATERAL included) —
+	// recursively, with a set operation inside either flattened into
+	// its leaf cores like SetOpBranches. Each is a located sub-facade
+	// (Kind StmtSelect) whose Relations are that core's own FROM
+	// relations. The statement's own cores (itself, or its
+	// SetOpBranches) are not listed, and nothing under a sublink
+	// (WHERE/SELECT-list/… subqueries) or a WITH RECURSIVE list is
+	// either. The order is deterministic for a given statement. A facade
+	// that does not support nested weaving returns nil, which keeps
+	// every nested designated read a refused hidden read.
+	NestedCores() []Tree
 	// DerivedRels returns the statement's own FROM-reachable derived
 	// tables, each wrapped in a sub-facade for recursive analysis.
 	DerivedRels() []SubRel

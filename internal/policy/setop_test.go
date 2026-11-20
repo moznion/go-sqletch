@@ -19,9 +19,10 @@ type branchWant struct {
 }
 
 // scanSetOp is the lexical half of the set-operation cross-check
-// (design 14 §13.2): it must find exactly the leaf cores, in document
-// order, with each core's own WHERE clause and insertion points —
-// never a subquery's or a CTE body's.
+// (design 14 §13.2): its statement-level cores (branches[:top]) must be
+// exactly the leaf cores, in document order, with each core's own WHERE
+// clause and insertion points — never a subquery's or a CTE body's
+// (those are nested cores, after top; §14.3).
 func TestScanSetOp(t *testing.T) {
 	cases := []struct {
 		name string
@@ -103,8 +104,8 @@ func TestScanSetOp(t *testing.T) {
 			if !so.ok {
 				t.Fatalf("scanSetOp not ok")
 			}
-			if len(so.branches) != len(tc.want) {
-				t.Fatalf("%d branches, want %d", len(so.branches), len(tc.want))
+			if so.top != len(tc.want) {
+				t.Fatalf("%d statement-level branches, want %d", so.top, len(tc.want))
 			}
 			at := func(off int, want string) string {
 				if off < 0 {
@@ -121,7 +122,7 @@ func TestScanSetOp(t *testing.T) {
 				}
 				return src[off:]
 			}
-			for i, b := range so.branches {
+			for i, b := range so.branches[:so.top] {
 				w := tc.want[i]
 				if b.leadKw != w.lead {
 					t.Errorf("branch %d lead = %q, want %q", i, b.leadKw, w.lead)
@@ -143,9 +144,9 @@ func TestScanSetOp(t *testing.T) {
 	}
 }
 
-// Relation name tokens are attributed to the core that contains them;
-// tokens of a subquery belong to the enclosing core, tokens of a
-// set-level clause to none.
+// Relation name tokens are attributed to the innermost core that
+// contains them (design 14 §14.3): a subquery's tokens to the subquery's
+// own nested core, listed after the statement-level cores.
 func TestScanSetOp_BranchOf(t *testing.T) {
 	body := "(SELECT id FROM orders o WHERE id IN (SELECT id FROM refunds)) UNION SELECT id FROM users ORDER BY (SELECT 1 FROM tail_t)"
 	src := "-- name: Q :many\n" + body + "\n"
@@ -154,16 +155,15 @@ func TestScanSetOp_BranchOf(t *testing.T) {
 	if !so.ok {
 		t.Fatal("not ok")
 	}
-	for name, want := range map[string]int{"orders": 0, "refunds": 0, "users": 1, "tail_t": 1} {
+	for name, want := range map[string]int{"orders": 0, "refunds": 2, "users": 1, "tail_t": 3} {
 		off := strings.Index(src, name)
 		got, ok := so.branchOf[off]
 		if !ok || got != want {
 			t.Errorf("branchOf(%s) = %d,%v; want %d", name, got, ok, want)
 		}
 	}
-	// An unparenthesized last core lexically swallows the set-level
-	// ORDER BY — attributing tail_t to branch 1 is harmless because the
-	// AST reports it as no branch's relation, so it is never looked up.
+	// The set-level ORDER BY's subquery is a (sublink) core of its own;
+	// the AST lists no core for it, so no parser core maps there.
 }
 
 // A WITH clause that does not have the modeled shape fails closed.

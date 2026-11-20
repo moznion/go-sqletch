@@ -537,6 +537,11 @@ func (t *tree) HasSetOperation() bool {
 // those set-level clauses and the chain link stripped — a subquery in
 // them stays visible only through the statement's DeepTables. SQLite
 // has no parenthesized compound operands, so the chain is flat.
+// NestedCores is nil: nested-core weaving (design 14 §14) is enabled on
+// PostgreSQL only, so a designated read in a CTE body or FROM subquery
+// stays a hidden read the weaver refuses.
+func (t *tree) NestedCores() []dialect.Tree { return nil }
+
 func (t *tree) SetOpBranches() []dialect.Tree {
 	s := t.sel()
 	if s == nil || s.Compound == nil {

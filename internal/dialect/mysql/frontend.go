@@ -471,6 +471,11 @@ func (t *tree) HasSetOperation() bool {
 // SQL in set-operation mode, which sees through parenthesized operands.
 // Clauses owned by a SetOprStmt/SetOprSelectList (the set-level WITH,
 // ORDER BY, LIMIT) belong to no branch.
+// NestedCores is nil: nested-core weaving (design 14 §14) is enabled on
+// PostgreSQL only, so a designated read in a CTE body or FROM subquery
+// stays a hidden read the weaver refuses.
+func (t *tree) NestedCores() []dialect.Tree { return nil }
+
 func (t *tree) SetOpBranches() []dialect.Tree {
 	so, ok := t.first().(*ast.SetOprStmt)
 	if !ok || so.SelectList == nil {
