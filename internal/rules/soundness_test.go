@@ -313,3 +313,46 @@ func TestR7Fold_SQLiteMixedCaseNotNullColumnWarns(t *testing.T) {
 		t.Fatalf("want SQLETCH212 for the mixed-case NOT NULL column, got %+v", diags)
 	}
 }
+
+// SQLite folds identifier case for ASCII letters ONLY (sqlite3StrICmp):
+// `É` and `é` are different aliases to the engine. Unicode folding
+// merged them in R3's by-name map, so the unguarded `é` registered after
+// the guarded `É` overwrote it and the skeleton reference `É.kind`
+// resolved to the unguarded join — a missed SQLETCH115. (Reachable once
+// the frontend parses non-ASCII identifiers.)
+func TestF3_SQLiteNonASCIICaseVariantsAreDistinct(t *testing.T) {
+	src := `-- name: Bad :many
+-- @param x: integer
+SELECT u.id FROM users AS u
+@if-present(x)
+JOIN audits AS É ON É.user_id = u.id AND É.id = :x
+@endif
+JOIN audits AS é ON é.user_id = u.id
+WHERE TRUE
+  AND É.kind = 'k'
+;
+`
+	diags := checkResolvedDialect(t, sqlite.Profile{}, sqlite.Frontend{}, src)
+	if !hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("want SQLETCH115 for the skeleton ref to the guarded `É`, got %+v", diags)
+	}
+}
+
+// The other direction: a skeleton reference to the unguarded `é` is fine
+// even though a guarded `É` exists (no false positive from merging).
+func TestF3_SQLiteNonASCIIUnguardedVariantIsFine(t *testing.T) {
+	src := `-- name: Ok :many
+-- @param x: integer
+SELECT u.id FROM users AS u
+JOIN audits AS é ON é.user_id = u.id
+@if-present(x)
+JOIN audits AS É ON É.user_id = u.id AND É.id = :x
+@endif
+WHERE TRUE
+  AND é.kind = 'k'
+;
+`
+	if diags := checkResolvedDialect(t, sqlite.Profile{}, sqlite.Frontend{}, src); hasCode(diags, diagnostics.CodeScopeViolation) {
+		t.Fatalf("unguarded `é` ref must not fire, got %+v", diags)
+	}
+}

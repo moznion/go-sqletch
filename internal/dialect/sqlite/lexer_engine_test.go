@@ -63,7 +63,7 @@ func sqliteReading(conn *sqlite3.Conn, sql string) string {
 
 // The engine reads `$` inside an unquoted identifier as part of it
 // (TestLexer_DollarInIdentifierMatchesSQLite). rqlite/sql's scanner
-// does not; the frontend's rewrite (dollar_ident.go) makes it accept the
+// does not; the frontend's rewrite (ident_rewrite.go) makes it accept the
 // same statements, which this pins against the engine.
 func TestLexer_DollarInIdentifierReadings(t *testing.T) {
 	conn, err := sqlite3.Open(":memory:")
