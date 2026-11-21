@@ -1018,6 +1018,39 @@ The weaver's own output carries the exact bound name, so Enforce still
 credits it, and an exact-case hand-written conjunct is still credited
 on all three dialects. No identifier quoting is introduced (§11.3).
 
+### 11.10 Designation and keywords use the engine's keys
+
+Owner decision 2026-11-17 ("fail closed for both", doc 01 identifier
+comparison keys), applied to policies 2026-11-19. Two Go Unicode folds
+in the policy path did not match any engine:
+
+- **Designation** (`Policy.designates`) used `strings.EqualFold`. On
+  MySQL under `lower_case_table_names=1/2` the server lowercases table
+  names through utf8mb3_general_ci, so `FROM İTEMS` reads table `items`
+  (verified on MySQL 8.4), but `EqualFold("İTEMS", "items")` is false:
+  the read went undesignated, unwoven, and Enforce passed it — a
+  silent all-tenant read on such servers. In the other direction
+  EqualFold joined names no engine joins (`ITEMſ`, the Kelvin sign).
+  Designation now compares the profile's "may" relation key
+  (`dialect.RelationFolds`): any table name SOME configuration could
+  resolve to a designated table is designated. SQLite: ASCII-only;
+  PostgreSQL: identity over the facade's folded names, so a quoted
+  `"Orders"` is a different table from `orders` and is no longer
+  designated (previously refused by §11.3's F7 rule). The per-name
+  hidden-read counts and the non-maximal overread set key on "may"
+  too. The woven-statement re-parse check (§13) compares table names
+  exactly — the weaver never changes them.
+- **Keywords** were recognized with `strings.ToUpper`, which maps `ı`→`I`
+  and `ſ`→`S`; every engine matches keywords ASCII-only (`lımıt` is an
+  identifier, even as an alias). The template scanner placed a missing
+  WHERE in front of `lımıt` (unparseable woven SQL), `scanSetOp` split
+  a branch at a `unıon` column, and `caſe` opened a CASE nest (a false
+  SQLETCH125). All keyword recognition now uses `dialect.ASCIIUpper`.
+  No silent leak was found through this path: the operand-position and
+  CASE tracking fail closed on every misread probed.
+
+Pinned by `designate_fold_test.go`.
+
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
 **Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy

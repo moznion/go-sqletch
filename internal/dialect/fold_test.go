@@ -63,3 +63,17 @@ func TestColumnAndRelationFolds(t *testing.T) {
 		}
 	}
 }
+
+// Keyword recognition upper-cases ASCII only, like every engine's
+// keyword lookup: `lımıt` (dotless ı) and `offſet` (long s) are
+// identifiers, never LIMIT/OFFSET, although strings.ToUpper says so.
+func TestASCIIUpper(t *testing.T) {
+	for in, want := range map[string]string{
+		"limit": "LIMIT", "Union": "UNION", "lımıt": "LıMıT", "offſet": "OFFſET",
+		"caſe": "CAſE", "Key": "KEY", "a\xffb": "A\xffB", "": "",
+	} {
+		if got := dialect.ASCIIUpper(in); got != want {
+			t.Errorf("ASCIIUpper(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

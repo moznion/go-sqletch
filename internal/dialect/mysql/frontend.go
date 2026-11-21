@@ -712,7 +712,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 			operandPos := setOp && opState != 0
 			nextState := 0
 			if tok.Kind == dialect.KindIdent {
-				switch u := strings.ToUpper(tok.Text); {
+				switch u := dialect.ASCIIUpper(tok.Text); {
 				case u == "UNION" || u == "INTERSECT" || u == "EXCEPT":
 					nextState = 1
 				case (u == "ALL" || u == "DISTINCT") && opState == 1:
@@ -741,7 +741,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 					continue
 				}
 				if ok2 && peek.Kind == dialect.KindIdent {
-					if u := strings.ToUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
+					if u := dialect.ASCIIUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
 						cteBody := prev == "AS"
 						skipParen()
 						if setOp && cteBody {
@@ -788,7 +788,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 				curAlias := aliasSlot
 				aliasSlot = false
 				if tok.Kind == dialect.KindIdent {
-					u := strings.ToUpper(tok.Text)
+					u := dialect.ASCIIUpper(tok.Text)
 					// STRAIGHT_JOIN has TWO positions in MySQL: a join
 					// operator (`a STRAIGHT_JOIN b`, always inside an already
 					// open FROM region) and a SELECT modifier (`SELECT

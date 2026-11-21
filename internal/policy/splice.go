@@ -394,7 +394,7 @@ func whereClause(profile dialect.LexerProfile, q *template.QueryTemplate) clause
 			prevDot = tok.Kind == dialect.KindOther && tok.Text == "."
 			var up string
 			if tok.Kind == dialect.KindIdent {
-				up = strings.ToUpper(tok.Text)
+				up = dialect.ASCIIUpper(tok.Text)
 			}
 			if depth == 0 && tok.Kind == dialect.KindSemicolon {
 				return result()
@@ -572,7 +572,7 @@ func joinOn(profile dialect.LexerProfile, q *template.QueryTemplate, relOff int,
 			}
 			var up string
 			if tok.Kind == dialect.KindIdent {
-				up = strings.ToUpper(tok.Text)
+				up = dialect.ASCIIUpper(tok.Text)
 			}
 			switch tok.Kind {
 			case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
@@ -790,7 +790,7 @@ func naturalIntroducesRight(profile dialect.LexerProfile, q *template.QueryTempl
 				// operand at the new depth starts fresh.
 				runHasNatural = false
 			case dialect.KindIdent:
-				up := strings.ToUpper(tok.Text)
+				up := dialect.ASCIIUpper(tok.Text)
 				if !dotted && joinKeywords[up] {
 					if up == "NATURAL" {
 						runHasNatural = true
@@ -899,7 +899,7 @@ func conjTokMatch(caseInsensitiveDialect bool, a, b conjTok) bool {
 	if !caseInsensitiveDialect {
 		return true
 	}
-	return !a.afterDot && !b.afterDot && foldKeywords[asciiUpper(a.text)]
+	return !a.afterDot && !b.afterDot && foldKeywords[dialect.ASCIIUpper(a.text)]
 }
 
 func conjTokensEqual(profile dialect.LexerProfile, a, b []conjTok) bool {
@@ -939,16 +939,6 @@ func asciiEqualFold(a, b string) bool {
 		}
 	}
 	return true
-}
-
-func asciiUpper(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if 'a' <= c && c <= 'z' {
-			b[i] = c - ('a' - 'A')
-		}
-	}
-	return string(b)
 }
 
 // segsContain reports whether any segment equals the conjunct's

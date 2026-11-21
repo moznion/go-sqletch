@@ -81,7 +81,7 @@ func unsupportedRightFullJoin(sqlText string) (int, bool) {
 		}
 		up := ""
 		if t.Kind == dialect.KindIdent {
-			up = strings.ToUpper(t.Text)
+			up = dialect.ASCIIUpper(t.Text)
 		}
 		toks = append(toks, tk{up: up, off: t.Start, isAS: up == "AS"})
 	}

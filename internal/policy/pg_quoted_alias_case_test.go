@@ -41,12 +41,16 @@ func TestWeave_PGQuotedMixedCaseAliasRefused(t *testing.T) {
 	}
 }
 
-// The mixed-case name need not be an alias: a quoted mixed-case table
-// name with no alias is bound as-is and folds the same way.
-func TestWeave_PGQuotedMixedCaseTableRefused(t *testing.T) {
+// A quoted mixed-case TABLE name is a different PostgreSQL table from
+// the (lower-case, config-validated) designated one: designation keys on
+// the engine's relation key (identity over the facade's folded names,
+// design 14 §11.8), so `"Orders"` is not `orders` and is left alone. A
+// designated table bound under a quoted mixed-case alias is still
+// refused above.
+func TestWeave_PGQuotedMixedCaseTableIsAnotherTable(t *testing.T) {
 	res := weaveOne(t, "-- name: Q :many\nSELECT id FROM \"Orders\"\n", tenantPolicy())
-	if len(res.Diags) != 1 || res.Diags[0].Code != diagnostics.CodePolicyUnweavable {
-		t.Fatalf("want exactly one SQLETCH125, got %+v", res.Diags)
+	if len(res.Diags) != 0 || len(res.Woven) != 0 {
+		t.Fatalf("\"Orders\" is not the designated orders table: diags %+v, woven %+v", res.Diags, res.Woven)
 	}
 }
 

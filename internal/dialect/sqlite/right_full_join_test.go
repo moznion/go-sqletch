@@ -50,6 +50,9 @@ func TestParse_RightFullJoin_NoFalsePositive(t *testing.T) {
 		"SELECT t.right FROM t",                     // `right` as a column
 		"SELECT x FROM a AS right JOIN b USING(id)", // explicit alias -> INNER
 		"SELECT x FROM a AS full JOIN b USING(id)",
+		// `rıght` (dotless ı) is an ordinary identifier to the engine,
+		// whose keyword match is ASCII-only: a bare alias, INNER join.
+		"SELECT x FROM a rıght JOIN b USING(id)",
 	}
 	for _, sql := range accept {
 		if _, err := (Frontend{}).Parse(sql); err != nil {

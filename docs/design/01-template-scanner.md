@@ -126,9 +126,19 @@ alias uniqueness uses the "may" key, columns the server fold
 single Unicode-folded slot let an unguarded `a` (or `é` on SQLite)
 overwrite a guarded `A` (`É`) and let `a` shadow a guarded `A` in a
 subquery — missed SQLETCH115, pinned by `TestF3_MySQLCaseVariant*` /
-`TestF3_SQLiteNonASCII*`. Policy-side Unicode folds (designated-table
-`EqualFold`, the weaver's per-name counts) only ever over-match, which
-weaves more or refuses — never less.
+`TestF3_SQLiteNonASCII*`. Policy designation keys on "may" too (doc 14
+§11.10): `strings.EqualFold` UNDER-matched MySQL — `İTEMS` reads `items`
+under lower_case_table_names=1 but was not designated, so it shipped
+unscoped.
+
+**Keywords are recognized ASCII-only** (`dialect.ASCIIUpper`), as every
+engine's keyword lookup does: MySQL 8.4 and SQLite accept `lımıt`,
+`unıon`, `offſet` as ordinary identifiers (even as table aliases), and
+PostgreSQL's lookup downcases ASCII only. `strings.ToUpper` maps `ı`→`I`
+and `ſ`→`S`, so every lexical scanner (template, policy, rules, lint,
+the MySQL relation locator, SQLite's RIGHT/FULL JOIN detector) used to
+read them as LIMIT/UNION/OFFSET/CASE/RIGHT. Never upper-case a token
+with `strings.ToUpper` to compare it with a keyword.
 
 Downstream limits stay: a `$` result-column name is SQLETCH307 (no
 collision-free Go spelling; alias it), as is a caseless one like `名前`
