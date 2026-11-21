@@ -209,17 +209,19 @@ type Tree interface {
 	SetOpBranches() []Tree
 	// NestedCores returns every leaf query core nested under the
 	// statement in a position the policy weaver may scope (design 14
-	// §14): the body of a non-recursive WITH entry whose body is a
-	// query, and a FROM-position subquery (LATERAL included) —
-	// recursively, with a set operation inside either flattened into
-	// its leaf cores like SetOpBranches. Each is a located sub-facade
-	// (Kind StmtSelect) whose Relations are that core's own FROM
-	// relations. The statement's own cores (itself, or its
-	// SetOpBranches) are not listed, and nothing under a sublink
-	// (WHERE/SELECT-list/… subqueries) or a WITH RECURSIVE list is
-	// either. The order is deterministic for a given statement. A facade
-	// that does not support nested weaving returns nil, which keeps
-	// every nested designated read a refused hidden read.
+	// §14, §15): the body of a non-recursive WITH entry whose body is a
+	// query, a FROM-position subquery (LATERAL included), and the body
+	// of an EXISTS / IN / op ANY / op ALL / scalar subquery in a core's
+	// WHERE or HAVING — recursively, with a set operation inside any of
+	// them flattened into its leaf cores like SetOpBranches. Each is a
+	// located sub-facade (Kind StmtSelect) whose Relations are that
+	// core's own FROM relations. The statement's own cores (itself, or
+	// its SetOpBranches) are not listed, and neither is a subquery in
+	// any other clause (SELECT list, ORDER BY, ON, …), an ARRAY
+	// subquery, or a WITH RECURSIVE list. The order is deterministic
+	// for a given statement. A facade that does not support nested
+	// weaving returns nil, which keeps every nested designated read a
+	// refused hidden read.
 	NestedCores() []Tree
 	// DerivedRels returns the statement's own FROM-reachable derived
 	// tables, each wrapped in a sub-facade for recursive analysis.
