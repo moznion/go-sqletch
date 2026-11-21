@@ -62,10 +62,9 @@ func sqliteReading(conn *sqlite3.Conn, sql string) string {
 }
 
 // The engine reads `$` inside an unquoted identifier as part of it
-// (TestLexer_DollarInIdentifierMatchesSQLite), but the rqlite/sql
-// frontend does not, so such a query is still refused at parse time.
-// Both halves are pinned: if rqlite starts accepting `$`, the profile is
-// already right and this test says the limitation is gone.
+// (TestLexer_DollarInIdentifierMatchesSQLite). rqlite/sql's scanner
+// does not; the frontend's rewrite (dollar_ident.go) makes it accept the
+// same statements, which this pins against the engine.
 func TestLexer_DollarInIdentifierReadings(t *testing.T) {
 	conn, err := sqlite3.Open(":memory:")
 	if err != nil {
@@ -84,8 +83,8 @@ func TestLexer_DollarInIdentifierReadings(t *testing.T) {
 		if got := sqliteReading(conn, sql); got != want {
 			t.Errorf("engine %q: got %q, want %q", sql, got, want)
 		}
-		if _, err := (Frontend{}).Parse(sql); err == nil {
-			t.Errorf("frontend now accepts %q: the `$`-identifier limitation is gone; update docs/design/01 and this test", sql)
+		if _, err := (Frontend{}).Parse(sql); err != nil {
+			t.Errorf("frontend refuses %q: %v", sql, err)
 		}
 	}
 }

@@ -32,10 +32,19 @@ func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
 		return nil, &dialect.ParseError{Pos: pos, Msg: "RIGHT/FULL JOIN is not supported by the SQLite frontend; rewrite it as a LEFT JOIN"}
 	}
 	r2b := runeToByteTable(sqlText)
-	p := rsql.NewParser(strings.NewReader(sqlText))
+	// `$` inside an unquoted identifier: rqlite cannot scan it, the
+	// engine can (dollar_ident.go). The rewrite keeps every offset.
+	parseText, words, err := rewriteDollarIdents(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	p := rsql.NewParser(strings.NewReader(parseText))
 	stmts, err := p.ParseStatements()
 	if err != nil {
 		return nil, toParseError(err, r2b)
+	}
+	if err := restoreDollarIdents(sqlText, stmts, r2b, words); err != nil {
+		return nil, err
 	}
 	return &tree{stmts: stmts, r2b: r2b}, nil
 }
