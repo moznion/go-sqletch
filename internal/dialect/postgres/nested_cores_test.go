@@ -9,9 +9,11 @@ import (
 )
 
 // NestedCores lists the leaf SELECT cores the policy weaver may scope
-// below the statement's own cores (design 14 §14): non-recursive WITH
-// bodies and FROM-position subqueries, recursively, set operations
-// flattened — never a sublink, never a WITH RECURSIVE body. Each core's
+// below the statement's own cores (design 14 §14, §15): non-recursive
+// WITH bodies, FROM-position subqueries, and EXISTS/ANY/ALL/scalar
+// sublinks in a WHERE or HAVING, recursively, set operations flattened
+// — never a sublink in any other clause or of another kind, never a
+// WITH RECURSIVE body. Each core's
 // relations are located in the original SQL.
 func TestFrontend_NestedCores(t *testing.T) {
 	cases := []struct {
@@ -20,8 +22,38 @@ func TestFrontend_NestedCores(t *testing.T) {
 		want [][]string // per core, its own relations ("table" or "table alias")
 	}{
 		{name: "plain statement", sql: "SELECT id FROM orders", want: nil},
-		{name: "sublink is not a nested core", sql: "SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)", want: nil},
-		{name: "scalar sublink is not a nested core", sql: "SELECT (SELECT max(id) FROM orders) FROM users", want: nil},
+		{name: "IN sublink in WHERE", sql: "SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)", want: [][]string{{"orders"}}},
+		{name: "SELECT-list sublink is not a nested core", sql: "SELECT (SELECT max(id) FROM orders) FROM users", want: nil},
+		{name: "ORDER BY sublink is not a nested core", sql: "SELECT id FROM users ORDER BY (SELECT max(id) FROM orders)", want: nil},
+		{name: "ON sublink is not a nested core", sql: "SELECT u.id FROM users u JOIN acc a ON a.id IN (SELECT id FROM orders)", want: nil},
+		{name: "ARRAY sublink is not a nested core", sql: "SELECT id FROM users WHERE ids @> ARRAY(SELECT id FROM orders)", want: nil},
+		{
+			name: "every eligible kind, in document order",
+			sql: "SELECT id FROM u WHERE EXISTS (SELECT 1 FROM t1) AND NOT EXISTS (SELECT 1 FROM t2) AND id IN (SELECT id FROM t3) " +
+				"AND id NOT IN (SELECT id FROM t4) AND id = ANY (SELECT id FROM t5) AND id > ALL (SELECT id FROM t6) AND id = (SELECT max(id) FROM t7)",
+			want: [][]string{{"t1"}, {"t2"}, {"t3"}, {"t4"}, {"t5"}, {"t6"}, {"t7"}},
+		},
+		{
+			name: "WHERE sublinks before HAVING sublinks, after FROM subqueries",
+			sql:  "SELECT k FROM (SELECT k FROM t1) d WHERE k IN (SELECT k FROM t2) GROUP BY k HAVING count(*) > (SELECT count(*) FROM t3)",
+			want: [][]string{{"t1"}, {"t2"}, {"t3"}},
+		},
+		{
+			name: "sublinks inside CASE, function arguments and a test expression",
+			sql:  "SELECT id FROM u WHERE CASE WHEN ok THEN id IN (SELECT id FROM t1) END AND coalesce((SELECT max(id) FROM t2), 0) > 0 AND (SELECT max(id) FROM t3) IN (SELECT id FROM t4)",
+			want: [][]string{{"t1"}, {"t2"}, {"t3"}, {"t4"}},
+		},
+		{
+			name: "sublink inside a sublink, and a set operation inside one",
+			sql:  "SELECT id FROM u WHERE EXISTS (SELECT 1 FROM t1 WHERE t1.id IN (SELECT id FROM t2 UNION SELECT id FROM t3))",
+			want: [][]string{{"t1"}, {"t2"}, {"t3"}},
+		},
+		{
+			name: "a sublink's own WITH and FROM subquery",
+			sql:  "SELECT id FROM u WHERE EXISTS (WITH z AS (SELECT id FROM t1) SELECT 1 FROM z JOIN (SELECT id FROM t2) q ON true)",
+			want: [][]string{{"t1"}, {"z", " q"}, {"t2"}},
+		},
+		{name: "a WITH RECURSIVE list inside a sublink is not walked", sql: "SELECT id FROM u WHERE EXISTS (WITH RECURSIVE z AS (SELECT id FROM t1) SELECT 1 FROM z)", want: [][]string{{"z"}}},
 		{name: "CTE body", sql: "WITH x AS (SELECT id FROM orders o) SELECT id FROM x", want: [][]string{{"orders o"}}},
 		{
 			name: "set operation inside a CTE body is flattened",
@@ -41,9 +73,9 @@ func TestFrontend_NestedCores(t *testing.T) {
 			want: [][]string{{"t1"}, {"z", " q"}, {"t2"}},
 		},
 		{
-			name: "a sublink inside a CTE body is not walked",
+			name: "a WHERE sublink inside a CTE body",
 			sql:  "WITH x AS (SELECT id FROM t1 WHERE id IN (SELECT id FROM t2)) SELECT id FROM x",
-			want: [][]string{{"t1"}},
+			want: [][]string{{"t1"}, {"t2"}},
 		},
 		{name: "WITH RECURSIVE is never walked", sql: "WITH RECURSIVE x AS (SELECT id FROM t1) SELECT id FROM x", want: nil},
 		{

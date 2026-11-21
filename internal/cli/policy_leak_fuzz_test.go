@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,6 +152,14 @@ type leakGen struct {
 	// by raw[0] in 0xE2..0xE8 (low bit still picking the policy
 	// variant), so every pre-existing seed decodes unchanged.
 	nest int
+	// sub emits a query whose designated reads sit in sublinks the
+	// weaver scopes on PostgreSQL (design 14 §15): 1 = WHERE sublink
+	// over a non-designated outer table, 2 = the same with a designated
+	// outer read too, 3 = HAVING sublink, 4 = WHERE sublink inside a CTE
+	// body. Selected by raw[0] in 0xEA..0xF1 (low bit still picking the
+	// policy variant). Such a query is judged by the tenant-2 influence
+	// oracle as well as by markers.
+	sub int
 }
 
 // newLeakGen decodes raw: raw[0] picks the policy variant and the
@@ -161,7 +170,11 @@ func newLeakGen(raw []byte, d leakDialect) *leakGen {
 	if sel >= 0xE2 && sel <= 0xE8 {
 		nest = int(sel-0xE0) / 2
 	}
-	return &leakGen{b: raw[1:], d: d, crWhere: sel == 0xF2 || sel == 0xF6, crTail: sel == 0xF4 || sel == 0xF6, nest: nest}
+	sub := 0
+	if sel >= 0xEA && sel <= 0xF0 {
+		sub = int(sel-0xE8) / 2
+	}
+	return &leakGen{b: raw[1:], d: d, crWhere: sel == 0xF2 || sel == 0xF6, crTail: sel == 0xF4 || sel == 0xF6, nest: nest, sub: sub}
 }
 
 // clauseLead is the separator before a clause keyword: a newline, or
@@ -411,12 +424,18 @@ func (g *leakGen) tail(rels []rel) string {
 type leakCase struct {
 	src string
 	dml bool
+	// influence: the designated reads are not projected (sublinks), so
+	// a leak shows as tenant-2 rows changing the tenant-1 answer.
+	influence bool
 }
 
 func (g *leakGen) generate() leakCase {
 	hdr := "-- name: Q :many\n-- @param f: " + g.d.paramType + "\n"
 	if g.nest > 0 {
 		return leakCase{src: hdr + g.nested() + "\n"}
+	}
+	if g.sub > 0 {
+		return leakCase{src: hdr + g.sublinked() + "\n", influence: true}
 	}
 	switch g.pick(10) {
 	case 7: // UPDATE
@@ -519,6 +538,141 @@ func (g *leakGen) nested() string {
 	return s
 }
 
+// sublinked emits a SELECT whose designated reads sit in sublinks of a
+// WHERE or HAVING (design 14 §15): IN, NOT IN, EXISTS and NOT EXISTS
+// (correlated to the outer acc row), op ANY, op ALL, a scalar
+// aggregate, and a sublink inside a sublink. Every sublink body is a
+// generated FROM (joins, null-extended sides) with an optional
+// generated WHERE, so the inner weave meets the same shapes as a
+// top-level one.
+func (g *leakGen) sublinked() string {
+	// body is one sublink body; corr names the outer relation it is
+	// correlated to ("" for none), and notNull filters the projected
+	// column's NULLs (a NULL makes NOT IN / ALL vacuously UNKNOWN).
+	body := func(corr string, proj func(r rel) string, notNull bool) string {
+		fromSQL, rels := g.from()
+		r, _ := firstDesignated(rels)
+		p := proj(r)
+		s := "SELECT " + p + " FROM " + fromSQL
+		var conds []string
+		if corr != "" {
+			conds = append(conds, r.name+".acc_id = "+corr+".id")
+		}
+		if notNull {
+			conds = append(conds, p+" IS NOT NULL")
+		}
+		if g.pick(3) == 2 {
+			conds = append(conds, "("+g.expr(rels, 1)+")")
+		}
+		if len(conds) > 0 {
+			s += " WHERE " + strings.Join(conds, " AND ")
+		}
+		return s
+	}
+	col := func(r rel) string { return r.name + "." + []string{"k", "acc_id", "v"}[g.pick(3)] }
+	one := func(rel) string { return "1" }
+	agg := func(r rel) string {
+		return []string{"count(*)", "max(" + r.name + ".k)", "count(" + r.name + ".acc_id)"}[g.pick(3)]
+	}
+	pred := func() string {
+		switch g.pick(8) {
+		case 0:
+			return "x.id IN (" + body("", col, false) + ")"
+		case 1:
+			return "x.id NOT IN (" + body("", col, g.pick(2) == 0) + ")"
+		case 2:
+			return "EXISTS (" + body("x", one, false) + ")"
+		case 3:
+			return "NOT EXISTS (" + body("x", one, false) + ")"
+		case 4:
+			return "x.id = ANY (" + body("", col, false) + ")"
+		case 5:
+			return "x.id >= ALL (" + body("", col, g.pick(2) == 0) + ")"
+		case 6:
+			return "x.id <= (" + body("x", agg, false) + ")"
+		default:
+			return "x.id IN (SELECT y.id FROM acc AS y WHERE EXISTS (" + body("y", one, false) + "))"
+		}
+	}
+	where := func() string {
+		s := pred()
+		switch g.pick(3) {
+		case 1:
+			s += " AND " + pred()
+		case 2:
+			s = "x.g IS NULL" + g.orOp() + s
+		}
+		return s
+	}
+	switch g.sub {
+	case 1:
+		s := "SELECT x.id AS r FROM acc AS x\nWHERE " + where()
+		if g.pick(2) == 1 {
+			s += "\n@if-present(f)\n  AND x.k = :f\n@endif"
+		}
+		return s
+	case 2:
+		return "SELECT p.secret AS s0, x.id AS r FROM acc AS x JOIN orders AS p ON p.acc_id = x.id\nWHERE " + where()
+	case 3:
+		h := "max(x.id) IN (" + body("", col, false) + ")"
+		if g.pick(2) == 1 {
+			h = "count(*) + (" + body("", agg, false) + ") > 20"
+		}
+		return "SELECT x.k AS r, count(*) AS c FROM acc AS x GROUP BY x.k\nHAVING " + h
+	default:
+		return "WITH w AS (\nSELECT x.id AS r FROM acc AS x WHERE " + where() + "\n)\nSELECT * FROM w"
+	}
+}
+
+// tenant2Perturbations rewrite tenant 2's rows. A query woven for
+// tenant 1 must answer the same under each. leakData is symmetric, so
+// tenant 2 holds no value tenant 1 lacks: removing tenant 2 moves
+// counts, and moving its rows to values tenant 1 never holds (acc 3,
+// k/v 2) moves IN / EXISTS / ANY / ALL membership.
+var tenant2Perturbations = []string{
+	"DELETE FROM orders WHERE tenant_id = 2",
+	"UPDATE orders SET acc_id = 3, k = 2, v = 2 WHERE tenant_id = 2",
+}
+
+// tenant2Influence reports the first perturbation of tenant 2's rows
+// that changes the answer of sql (rows compared as a multiset), each
+// run inside a rolled-back transaction; "" when none does.
+func tenant2Influence(t *testing.T, d leakDialect, eng leakEngine, sql string, args []any) (string, error) {
+	t.Helper()
+	canon := func(rows [][]string) string {
+		ss := make([]string, len(rows))
+		for i, r := range rows {
+			ss[i] = strings.Join(r, "\x01")
+		}
+		slices.Sort(ss)
+		return strings.Join(ss, "\x02")
+	}
+	_, base, err := eng.query(sql, args)
+	if err != nil {
+		return "", err
+	}
+	for _, pert := range tenant2Perturbations {
+		pert = d.rename(pert)
+		if err := eng.exec("BEGIN", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := eng.exec(pert, nil); err != nil {
+			t.Fatal(err)
+		}
+		_, rows, qerr := eng.query(sql, args)
+		if err := eng.exec("ROLLBACK", nil); err != nil {
+			t.Fatal(err)
+		}
+		if qerr != nil {
+			return "", qerr
+		}
+		if canon(rows) != canon(base) {
+			return pert, nil
+		}
+	}
+	return "", nil
+}
+
 // leakPolicies returns the tenant policy in one of two spellings: the
 // second carries a top-level OR, so an unparenthesized splice of the
 // PREDICATE (audit-11) is as observable as an unwrapped query clause.
@@ -603,6 +757,16 @@ func checkNoLeak(t *testing.T, d leakDialect, eng leakEngine, raw []byte) bool {
 					t.Fatalf("TENANT LEAK: tid=1 read a tenant-2 row (column %s)\ntemplate:\n%s\nwoven shape %s:\n%s",
 						c, lc.src, k, woven.SQL)
 				}
+			}
+		}
+		if lc.influence {
+			pert, err := tenant2Influence(t, d, eng, woven.SQL, leakArgs(woven.ParamsSeq))
+			if err != nil {
+				t.Fatalf("woven query fails under a tenant-2 perturbation: %v\ntemplate:\n%s\nwoven:\n%s", err, lc.src, woven.SQL)
+			}
+			if pert != "" {
+				t.Fatalf("TENANT LEAK: tenant 2's rows change tid=1's answer (after %q)\ntemplate:\n%s\nwoven shape %s:\n%s",
+					pert, lc.src, k, woven.SQL)
 			}
 		}
 	}
@@ -770,6 +934,27 @@ func nestedLeakSeeds() [][]byte {
 		{0xE6, 3, 0, 0, 0}, // LATERAL subquery, LEFT JOIN null-extended side
 		{0xE8, 1, 1, 0},    // CTE body holding a UNION ALL
 		{0xE9, 1, 1, 2},    // CTE body holding a UNION ALL, LIMIT; OR predicate
+	}
+}
+
+// sublinkLeakSeeds are sublink shapes (design 14 §15), one per sublink
+// kind and position. Only PostgreSQL weaves them; elsewhere they are
+// refused (SQLETCH125), which is not a finding.
+func sublinkLeakSeeds() [][]byte {
+	return [][]byte{
+		{0xEA, 0, 0, 0, 0, 0, 1}, // IN over a plain read; guarded outer conjunct
+		{0xEA, 1, 0, 0, 0, 0},    // NOT IN, NULLs filtered
+		{0xEA, 2, 0, 0, 0},       // correlated EXISTS
+		{0xEB, 3, 3, 0, 0, 0},    // correlated NOT EXISTS over a LEFT JOIN null-extended side; OR predicate
+		{0xEA, 4, 0, 0, 0, 0},    // = ANY
+		{0xEA, 5, 0, 0, 0, 0},    // >= ALL, NULLs filtered
+		{0xEA, 6, 0, 0, 0, 0},    // scalar aggregate, correlated
+		{0xEA, 7, 0, 0, 0},       // sublink inside a sublink
+		{0xEA, 0, 8, 0, 0, 2},    // IN over a self join, OR around the sublink
+		{0xEC, 2, 0, 0, 0},       // designated outer read plus a correlated EXISTS
+		{0xEE, 0, 1, 0, 0},       // HAVING IN
+		{0xEE, 0, 0, 0, 1},       // HAVING scalar aggregate
+		{0xF0, 1, 0, 0, 0, 0},    // NOT IN inside a CTE body
 	}
 }
 

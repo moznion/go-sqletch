@@ -142,7 +142,7 @@ func TestRequireAnnotation_DiagnosticSpellsTheFix(t *testing.T) {
 // opting out is the author's next move, and an opt-out discharges the
 // annotation obligation too.
 func TestRequireAnnotation_UnweavableStillReportsUnweavable(t *testing.T) {
-	res := weaveOne(t, "-- name: Q :many\nSELECT u.id FROM users u WHERE u.id IN (SELECT o.user_id FROM orders o)\n",
+	res := weaveOne(t, "-- name: Q :many\nSELECT u.id, (SELECT count(*) FROM orders o WHERE o.user_id = u.id) FROM users u\n",
 		requiringTenantPolicy())
 	if !hasCode(res.Diags, diagnostics.CodePolicyUnweavable) {
 		t.Fatalf("no SQLETCH125: %+v", res.Diags)
