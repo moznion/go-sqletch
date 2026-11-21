@@ -740,7 +740,8 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `ConnStringAllowedKeys`, before any file/network access) and exactly
   one host, else SQLETCH321 at the config path (`cli.acquireDiag`).
 - Ambient passwords (PGPASSWORD/.pgpass/service file) only for a
-  loopback effective host (localhost, 127/8, ::1, unix socket — judged
+  loopback effective host (localhost — ASCII case-insensitive only,
+  `localhoſt` is remote — 127/8, ::1, unix socket — judged
   even when the host came from PGHOST). Elsewhere: only a non-empty
   DSN-stated password (a stated EMPTY one would be passfile-filled, so
   the value is re-read with passfile pinned to os.DevNull) plus forced
@@ -814,6 +815,13 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   The perf lint's CTE-shadow check keys CTE names like the engine
   (`lint.cteNames`: PG unquoted ASCII-lowered / quoted exact, then the
   "may" relation key) — never `strings.EqualFold`.
+- Whitespace and case outside the engines too (2026-11-21): type-hint /
+  decltype trimming and splitting use `dialect.ASCIITrimSpace` /
+  `ASCIIFields` (U+00A0 is an identifier byte to MySQL/SQLite, unknown to
+  PG); `dialect.ASCIIEqualFold` for the PG DSN loopback check; the LSP
+  header parser compares `Content-Length` over ASCII with OWS-only
+  trimming. Go's Unicode case/space tables remain only where Go's own
+  rules apply (generated Go identifiers in internal/codegen).
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

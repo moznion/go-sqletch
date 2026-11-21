@@ -147,6 +147,9 @@ fold with `dialect.ASCIILower`/`ASCIIUpper`: PG 16 says `type "İnt4" does
 not exist`, MySQL 8.4 rejects `bİgint` (ERROR 1064), and
 sqlite3AffinityType matches its substrings ASCII-only — `ıntext` is TEXT
 affinity, which `strings.ToUpper` used to read as INTEGER.
+Whitespace around and inside a type name is ASCII too
+(`dialect.ASCIITrimSpace`/`ASCIIFields`): `bigint<U+00A0>unsigned` is one
+word to MySQL, `DATE<U+00A0>` no DATE to SQLite.
 
 Downstream limits stay: a `$` result-column name is SQLETCH307 (no
 collision-free Go spelling; alias it), as is a caseless one like `名前`
