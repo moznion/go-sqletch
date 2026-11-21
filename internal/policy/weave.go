@@ -84,8 +84,9 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	}
 
 	rels, nBranches := topRelations(tree)
+	may, _ := dialect.RelationFolds(profile)
 	w := &weaver{
-		profile: profile, q: q, maxR: maxR, kind: tree.Kind(),
+		profile: profile, may: may, q: q, maxR: maxR, kind: tree.Kind(),
 		rels: rels, deep: tree.DeepTables(),
 		conflict:  conflictArmOf(tree),
 		onInfo:    map[int]*joinOnResult{},
@@ -383,7 +384,7 @@ func (w *weaver) verifySetOpWeave(fe dialect.Frontend, woven *template.QueryTemp
 		return bad()
 	}
 	for i := range got {
-		if got[i].branch != w.rels[i].branch || !strings.EqualFold(got[i].Table, w.rels[i].Table) || got[i].Alias != w.rels[i].Alias {
+		if got[i].branch != w.rels[i].branch || got[i].Table != w.rels[i].Table || got[i].Alias != w.rels[i].Alias {
 			return bad()
 		}
 	}
@@ -425,11 +426,14 @@ type onNeed struct {
 
 type weaver struct {
 	profile dialect.LexerProfile
-	q       *template.QueryTemplate
-	maxR    ast.Rendering
-	kind    dialect.StmtKind
-	rels    []topRel
-	deep    []dialect.TableRef
+	// may is the profile's "may" relation key; designation and every
+	// per-table count key on it (Policy.designates).
+	may  func(string) string
+	q    *template.QueryTemplate
+	maxR ast.Rendering
+	kind dialect.StmtKind
+	rels []topRel
+	deep []dialect.TableRef
 	// nBranches is the core count (0 for a single-core statement with no
 	// nested cores, design 14 §14); setop is the lexical core split and
 	// cores its agreement with the parser's, set exactly when
@@ -535,36 +539,36 @@ func (c conflictArm) construct() string {
 // row the new values collide with — any tenant's — so the statement
 // cannot be woven. The target is the first top-level relation (an
 // UPDATE … FROM source cannot be a REPLACE victim).
-func updateConflictTarget(p *Policy, kind dialect.StmtKind, rels []topRel, conflict conflictArm) (topRel, bool) {
+func updateConflictTarget(p *Policy, may func(string) string, kind dialect.StmtKind, rels []topRel, conflict conflictArm) (topRel, bool) {
 	if kind != dialect.StmtUpdate || !conflict.del || len(rels) == 0 ||
-		rels[0].Table == "" || !p.designates(rels[0].Table) || !conflict.governedBy(p) {
+		rels[0].Table == "" || !p.designates(may, rels[0].Table) || !conflict.governedBy(p) {
 		return topRel{}, false
 	}
 	return rels[0], true
 }
 
-func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, conflict conflictArm, nested []dialect.NestedDML) applicability {
+func analyzeApplicability(p *Policy, may func(string) string, kind dialect.StmtKind, rels []topRel, deep []dialect.TableRef, conflict conflictArm, nested []dialect.NestedDML) applicability {
 	var a applicability
 	// A data-modifying CTE modifies rows under its OWN kind, whatever
 	// the outer statement is (finding F9, owner decision 2026-10-21):
 	// keying only on the outer kind let `WITH d AS (DELETE FROM t …)
 	// INSERT …` escape an `applies_to: [update, delete]` policy.
 	for i := range nested {
-		if d := nested[i]; d.Table != "" && p.designates(d.Table) && p.coversNested(d) {
+		if d := nested[i]; d.Table != "" && p.designates(may, d.Table) && p.coversNested(d) {
 			a.nestedHit = &nested[i]
 			break
 		}
 	}
 	topCount := map[string]int{}
 	for _, r := range rels {
-		if r.Table != "" && p.designates(r.Table) {
+		if r.Table != "" && p.designates(may, r.Table) {
 			a.topOcc = append(a.topOcc, r)
-			topCount[strings.ToLower(r.Table)]++
+			topCount[may(r.Table)]++
 		}
 	}
 	for _, tr := range deep {
-		if p.designates(tr.Name) {
-			topCount[strings.ToLower(tr.Name)]--
+		if p.designates(may, tr.Name) {
+			topCount[may(tr.Name)]--
 		}
 	}
 	for _, n := range topCount {
@@ -588,7 +592,7 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 	} else {
 		// UPDATE OR REPLACE on a designated target is active (to be
 		// REFUSED) under delete coverage alone, too (F17).
-		_, conflictTarget := updateConflictTarget(p, kind, rels, conflict)
+		_, conflictTarget := updateConflictTarget(p, may, kind, rels, conflict)
 		a.active = (p.appliesTo(kind) && (len(a.topOcc) > 0 || a.hidden)) || conflictTarget
 	}
 	if a.nestedHit != nil {
@@ -597,7 +601,8 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 	return a
 }
 
-// overreadDeep returns the set of lowercased base-table names that some
+// overreadDeep returns the set of base-table names, keyed by the
+// profile's "may" relation key, that some
 // non-maximal verified rendering reads more often than the maximal
 // rendering does. Only @choose alternatives and @order-by @default
 // bodies can introduce such a read: an @in arity-0 rendering emits a
@@ -617,9 +622,10 @@ func analyzeApplicability(p *Policy, kind dialect.StmtKind, rels []topRel, deep 
 // only in a non-first @choose alternative must be refused like one in
 // the maximal rendering (finding F9).
 func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template.QueryTemplate, maxDeep []dialect.TableRef) (map[string]bool, []dialect.NestedDML) {
+	may, _ := dialect.RelationFolds(profile)
 	base := map[string]int{}
 	for _, tr := range maxDeep {
-		base[strings.ToLower(tr.Name)]++
+		base[may(tr.Name)]++
 	}
 	over := map[string]bool{}
 	var nested []dialect.NestedDML
@@ -634,7 +640,7 @@ func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template
 		nested = append(nested, t.NestedDML()...)
 		cur := map[string]int{}
 		for _, tr := range t.DeepTables() {
-			cur[strings.ToLower(tr.Name)]++
+			cur[may(tr.Name)]++
 		}
 		for name, cnt := range cur {
 			if cnt > base[name] {
@@ -687,7 +693,7 @@ func overreadDeep(profile dialect.LexerProfile, fe dialect.Frontend, q *template
 // non-maximal rendering. It is empty unless the policy covers the
 // statement's kind (an INSERT's overread is a read in an INSERT … SELECT
 // case body, gated on coversSelect like every other read).
-func designatedOverread(p *Policy, over map[string]bool, kind dialect.StmtKind) []string {
+func designatedOverread(p *Policy, may func(string) string, over map[string]bool, kind dialect.StmtKind) []string {
 	if len(over) == 0 {
 		return nil
 	}
@@ -700,7 +706,7 @@ func designatedOverread(p *Policy, over map[string]bool, kind dialect.StmtKind) 
 	}
 	var out []string
 	for name := range over {
-		if p.designates(name) {
+		if p.designates(may, name) {
 			out = append(out, name)
 		}
 	}
@@ -766,8 +772,8 @@ func (w *weaver) joinOnFor(relOff int, ownJoin dialect.JoinType) *joinOnResult {
 // the requirement fail UNSCOPED, putting the safe direction at the
 // mercy of every caller honoring the error.
 func (w *weaver) apply(p *Policy) (*WovenPolicy, []whereNeed, []onNeed, []diagnostics.Diagnostic) {
-	a := analyzeApplicability(p, w.kind, w.rels, w.deep, w.conflict, w.nested)
-	over := designatedOverread(p, w.overread, w.kind)
+	a := analyzeApplicability(p, w.may, w.kind, w.rels, w.deep, w.conflict, w.nested)
+	over := designatedOverread(p, w.may, w.overread, w.kind)
 	if !a.active && len(over) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -846,7 +852,7 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 		return fail(w.unweavable(p, w.q.HeaderSpan,
 			"a designated table is read inside this INSERT's SELECT body, which sqletch cannot scope"))
 	}
-	if tgt, ok := updateConflictTarget(p, w.kind, w.rels, w.conflict); ok {
+	if tgt, ok := updateConflictTarget(p, w.may, w.kind, w.rels, w.conflict); ok {
 		// SQLite UPDATE OR REPLACE (F17): the woven WHERE would scope the
 		// rows the UPDATE selects, but the REPLACE deletes whichever row
 		// the new values collide with — another tenant's included.
@@ -950,7 +956,7 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 
 	// Parameter-hint agreement (design 14 §11.4).
 	if p.ParamName != "" && p.ParamType != "" {
-		if h, ok := w.q.TypeHints[p.ParamName]; ok && !strings.EqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
+		if h, ok := w.q.TypeHints[p.ParamName]; ok && !asciiEqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
 			return fail(w.unweavable(p, h.Span,
 				fmt.Sprintf("the query hints parameter %q as %q, but the policy declares %q", p.ParamName, h.SQLType, p.ParamType)))
 		}

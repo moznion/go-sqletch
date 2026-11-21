@@ -32,10 +32,20 @@ func (Frontend) Parse(sqlText string) (dialect.Tree, error) {
 		return nil, &dialect.ParseError{Pos: pos, Msg: "RIGHT/FULL JOIN is not supported by the SQLite frontend; rewrite it as a LEFT JOIN"}
 	}
 	r2b := runeToByteTable(sqlText)
-	p := rsql.NewParser(strings.NewReader(sqlText))
+	// `$` / non-ASCII inside an unquoted identifier: rqlite cannot scan
+	// them, the engine can (ident_rewrite.go). The rewrite keeps every
+	// rune offset.
+	parseText, words, err := rewriteIdents(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	p := rsql.NewParser(strings.NewReader(parseText))
 	stmts, err := p.ParseStatements()
 	if err != nil {
 		return nil, toParseError(err, r2b)
+	}
+	if err := restoreIdents(sqlText, stmts, r2b, words); err != nil {
+		return nil, err
 	}
 	return &tree{stmts: stmts, r2b: r2b}, nil
 }
@@ -71,7 +81,7 @@ func unsupportedRightFullJoin(sqlText string) (int, bool) {
 		}
 		up := ""
 		if t.Kind == dialect.KindIdent {
-			up = strings.ToUpper(t.Text)
+			up = dialect.ASCIIUpper(t.Text)
 		}
 		toks = append(toks, tk{up: up, off: t.Start, isAS: up == "AS"})
 	}
@@ -1350,7 +1360,8 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 					}
 				}
 			case *rsql.Call:
-				item.FuncName = strings.ToLower(e.Name.Name)
+				// SQLite matches function names ASCII-only.
+				item.FuncName = dialect.ASCIILower(e.Name.Name)
 				// A plain aggregate over one bare column: no FILTER,
 				// no OVER, not the star form.
 				if e.Filter == nil && e.Over == nil && !e.Star.IsValid() && len(e.Args) == 1 {
@@ -1487,7 +1498,7 @@ func totalExpr(e rsql.Expr) bool {
 		// NULL operand.
 		return totalExpr(v.X)
 	case *rsql.Call:
-		if v.Name != nil && strings.EqualFold(v.Name.Name, "coalesce") {
+		if v.Name != nil && dialect.ASCIILower(v.Name.Name) == "coalesce" {
 			for _, arg := range v.Args {
 				if totalExpr(arg) {
 					return true

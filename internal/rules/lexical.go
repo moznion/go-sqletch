@@ -2,7 +2,6 @@ package rules
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/dialect"
@@ -90,7 +89,7 @@ func checkAnchors(profile dialect.LexerProfile, q *template.QueryTemplate) []dia
 				switch tok.Kind {
 				case dialect.KindWhitespace, dialect.KindLineComment, dialect.KindBlockComment:
 				case dialect.KindIdent:
-					lastTok = strings.ToUpper(tok.Text)
+					lastTok = dialect.ASCIIUpper(tok.Text)
 				default:
 					lastTok = tok.Text
 				}

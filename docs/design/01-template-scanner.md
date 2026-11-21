@@ -79,10 +79,74 @@ fixes.
 SQLite unquoted identifiers continue through `$` (the engine's IdChar:
 `SELECT a$b FROM t` runs); a leading `$` still opens an engine variable,
 and a sqletch `:name` ends before `$` on every dialect (the template
-parameter grammar is sqletch's). The rqlite/sql frontend does NOT accept
-`$` inside an identifier, so such a query is still refused at parse time;
-`TestLexer_DollarInIdentifierReadings` pins both halves and fails when
-rqlite lifts the limitation.
+parameter grammar is sqletch's). SQLite's IdChar also admits EVERY byte
+>= 0x80 (accented letters, CJK, U+3000, invalid UTF-8). The rqlite/sql
+frontend's scanner takes only `[A-Za-z0-9_]`, so the frontend bridges
+both (`sqlite/ident_rewrite.go`): in every profile identifier, each `$`
+and each non-ASCII rune is replaced by ONE `_` for the parse only. Byte
+lengths may change but rune counts do not, and rqlite reports RUNE
+offsets, so every position maps through the original's rune table to
+the original bytes (runes decoded as rqlite's ReadRune does: an invalid
+byte is one RuneError). A reflection walk over the WHOLE AST (no
+hand-written walker to miss a node kind) then restores the name of every
+unquoted `*rsql.Ident` spanning a rewritten word from the original bytes.
+Fail-closed: a rewrite that becomes an rqlite keyword (`current$date` →
+CURRENT_DATE) or a rewritten word not covered by an identifier node is a
+parse error, so a rewritten name (which could collide with a real `a_b`)
+never reaches a facade. The engine always receives the original SQL.
+
+**Identifier comparison keys** (`dialect.IdentFolds`, owner decision
+2026-11-17). Every engine-side name comparison the rules make goes
+through a profile-supplied key, never a Go Unicode fold:
+
+- `ColumnFold` — column names and output aliases. SQLite: ASCII letters
+  only (sqlite3StrICmp: `É` ≠ `é`, the Kelvin sign is not `k`). MySQL:
+  utf8mb3_general_ci's own lower-case table (`identfold_table.go`,
+  extracted from the server by `TestMySQLIdentFoldTableMatchesServer`,
+  `SQLETCH_UPDATE_IDENTFOLD=1` rewrites it) — Go's `strings.ToLower`
+  merges strictly more (486 BMP pairs, e.g. `ẞ`/`ß`). PostgreSQL:
+  identity (the facade already folds).
+- `RelationFolds` → (may, must) — table names and aliases. MySQL's
+  depend on `lower_case_table_names`, invisible offline: exact under 0
+  (Linux default, the devdb container), case-insensitive under 1/2. The
+  "may" key (MySQL: the column fold) joins names that could be one
+  relation under SOME configuration; "must" (MySQL: exact) only those
+  that are under EVERY one. SQLite/PostgreSQL: both keys equal their
+  column key.
+
+Fail-closed use: R3/R2 check a qualifier against EVERY relation it
+may name (`resolver.byMay` is a multimap; a guard on any candidate must
+cover the reference), and an unqualified column against every table a
+relation may name (`mayTables`). Decisions that SKIP a check — subquery
+shadowing (`scopeContains`), parameter nullability (doc 20 §3.3), the
+L005 lint's `ColumnResolver` — use "must". The native MySQL oracle
+accepts only what every configuration runs: qualifiers match exactly,
+alias uniqueness uses the "may" key, columns the server fold
+(`TestNativeDifferential` pins it against the server). The previous
+single Unicode-folded slot let an unguarded `a` (or `é` on SQLite)
+overwrite a guarded `A` (`É`) and let `a` shadow a guarded `A` in a
+subquery — missed SQLETCH115, pinned by `TestF3_MySQLCaseVariant*` /
+`TestF3_SQLiteNonASCII*`. Policy designation keys on "may" too (doc 14
+§11.10): `strings.EqualFold` UNDER-matched MySQL — `İTEMS` reads `items`
+under lower_case_table_names=1 but was not designated, so it shipped
+unscoped.
+
+**Keywords are recognized ASCII-only** (`dialect.ASCIIUpper`), as every
+engine's keyword lookup does: MySQL 8.4 and SQLite accept `lımıt`,
+`unıon`, `offſet` as ordinary identifiers (even as table aliases), and
+PostgreSQL's lookup downcases ASCII only. `strings.ToUpper` maps `ı`→`I`
+and `ſ`→`S`, so every lexical scanner (template, policy, rules, lint,
+the MySQL relation locator, SQLite's RIGHT/FULL JOIN detector) used to
+read them as LIMIT/UNION/OFFSET/CASE/RIGHT. Never upper-case a token
+with `strings.ToUpper` to compare it with a keyword. Builtin function
+names likewise (`TargetItem.FuncName`, design 05 §2): PostgreSQL exact,
+MySQL/SQLite `dialect.ASCIILower`.
+
+Downstream limits stay: a `$` result-column name is SQLETCH307 (no
+collision-free Go spelling; alias it), as is a caseless one like `名前`
+(no exported Go spelling); accented names become exported fields
+(`prénom` → `Prénom`). A `$` or non-ASCII alias bound to a policy
+placeholder is SQLETCH125 (doc 14 §11.3, no quoting facility).
 
 **Line comments end where the dialect's engine ends them** (security
 audit F11/F12, owner decision 2026-10-21). PostgreSQL's scanner (and

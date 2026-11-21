@@ -58,13 +58,19 @@ func (p *Policy) appliesTo(k dialect.StmtKind) bool {
 // check for INSERT … SELECT bodies keys on it (design 14 §D6).
 func (p *Policy) coversSelect() bool { return p.appliesTo(dialect.StmtSelect) }
 
-// designates reports whether the policy designates the table name.
-// Matching is case-insensitive across all dialects: PostgreSQL folds
-// unquoted identifiers anyway, SQLite table names are case-insensitive,
-// and on MySQL the fold errs toward scoping more, never less.
-func (p *Policy) designates(table string) bool {
+// designates reports whether the table name, as the engine resolves it,
+// can be a table the policy designates. may is the profile's "may"
+// relation key (dialect.RelationFolds): equal whenever ANY server
+// configuration could resolve the two names to one table — MySQL's
+// utf8mb3_general_ci lowercasing (`İTEMS` reads `items` under
+// lower_case_table_names=1), SQLite's ASCII-only fold, PostgreSQL's
+// identity over already-folded facade names. Never a Go Unicode fold:
+// strings.EqualFold missed `İTEMS` (an undesignated, unscoped read) and
+// joined names no engine joins (`ITEMſ`, the Kelvin sign).
+func (p *Policy) designates(may func(string) string, table string) bool {
+	key := may(table)
 	for _, t := range p.Tables {
-		if strings.EqualFold(t, table) {
+		if may(t) == key {
 			return true
 		}
 	}

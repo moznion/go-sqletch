@@ -36,9 +36,9 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 		if cr.Star || len(cr.Fields) == 0 {
 			continue
 		}
-		var rel *relInfo
+		var cands []*relInfo
 		if len(cr.Fields) >= 2 {
-			qualifier := res.fold(cr.Fields[len(cr.Fields)-2])
+			qualifier := cr.Fields[len(cr.Fields)-2]
 			// Innermost-first resolution: a qualifier introduced by a
 			// nearer subquery scope shadows a same-named top-level
 			// relation, so this reference does not touch the top-level
@@ -52,10 +52,16 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 			// (schema.table.column) and a bare FROM alias — which carries
 			// no schema — can never shadow it, so such a reference is
 			// always resolved and checked against the top-level relation.
+			//
+			// Shadowing SKIPS the check, so it needs a name the engine
+			// certainly binds to the inner scope ("must" key); the
+			// relations the qualifier is checked against are every one it
+			// MAY name under some server configuration ("may" key) — a
+			// guard on any of them must cover the reference (fail closed).
 			if len(cr.Fields) == 2 && res.scopeContains(cr.ScopeAliases, qualifier) {
 				continue
 			}
-			rel = res.byName[qualifier]
+			cands = res.byMay[res.relMay(qualifier)]
 		} else {
 			if cr.InSubquery {
 				continue // conservative skip; see doc comment
@@ -68,32 +74,29 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 			// name equals an output alias. Skipping on name equality alone
 			// masked R3 for a guarded-column reference sharing an alias's
 			// spelling (F2).
-			if res.outputAliases[res.fold(name)] && res.inOrderBy[cr.Loc] {
+			if res.outputAliases[res.colFold(name)] && res.inOrderBy[cr.Loc] {
 				continue
 			}
-			cands := res.columnCandidates(name)
-			if len(cands) == 0 {
-				continue
-			}
+			cands = res.columnCandidates(name)
 			if len(cands) > 1 {
 				diags = append(diags, diagnostics.Errorf(diagnostics.CodeAmbiguousRef,
 					res.spanAt(cr.Loc, len(name)),
 					"unqualified column %q matches %d relations; qualify it", name, len(cands)))
 				continue
 			}
-			rel = cands[0]
-		}
-		if rel == nil || len(rel.guards) == 0 {
-			continue
 		}
 		refGuards := res.guardsAt(cr.Loc)
-		if !supersetAtoms(refGuards, rel.guards) {
+		for _, rel := range cands {
+			if len(rel.guards) == 0 || supersetAtoms(refGuards, rel.guards) {
+				continue
+			}
 			field := cr.Fields[len(cr.Fields)-1]
 			diags = append(diags, diagnostics.Errorf(diagnostics.CodeScopeViolation,
 				res.spanAt(cr.Loc, len(field)),
 				"%q resolves to the optional join %q guarded by %s, but this reference is not covered by that guard (R3)",
 				field, rel.name(), atomsString(rel.guards)).
 				WithHint("move this reference inside @if-present(%s)", atomsParamList(rel.guards)))
+			break
 		}
 	}
 
@@ -114,10 +117,13 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 			}
 			continue
 		}
-		if rel := res.byName[res.fold(ti.Qualifier)]; rel != nil && len(rel.guards) > 0 {
-			diags = append(diags, diagnostics.Errorf(diagnostics.CodeStarExpansion,
-				res.spanAt(ti.Loc, len(ti.Qualifier)),
-				"%s.* projects columns of an optional join; optional joins may not contribute result columns (R2)", ti.Qualifier))
+		for _, rel := range res.byMay[res.relMay(ti.Qualifier)] {
+			if len(rel.guards) > 0 {
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodeStarExpansion,
+					res.spanAt(ti.Loc, len(ti.Qualifier)),
+					"%s.* projects columns of an optional join; optional joins may not contribute result columns (R2)", ti.Qualifier))
+				break
+			}
 		}
 	}
 
@@ -163,8 +169,13 @@ func CheckResolved(profile dialect.LexerProfile, q *template.QueryTemplate, maxR
 type relInfo struct {
 	dialect.RelRef
 	guards []template.GuardAtom
-	table  *cache.Table
-	frag   *template.IfPresent
+	// table is the catalog table the relation names exactly (nil when
+	// none); mayTables is every catalog table it MAY name under some
+	// server configuration (the "may" relation key) — the candidates an
+	// unqualified column reference is checked against.
+	table     *cache.Table
+	mayTables []*cache.Table
+	frag      *template.IfPresent
 }
 
 func (r *relInfo) name() string {
@@ -185,18 +196,21 @@ type resolver struct {
 	q    *template.QueryTemplate
 	maxR ast.Rendering
 	rels []*relInfo
-	// byName is keyed by FOLDED relation name (alias else table) so a
-	// mixed-case qualifier resolves on case-insensitive dialects (F3).
-	byName map[string]*relInfo
-	// outputAliases is keyed by FOLDED alias name for the same reason.
+	// byMay maps a relation name's (alias else table) "may" key to every
+	// relation carrying it: a qualifier is checked against all relations
+	// it could name under some server configuration (F3; MySQL's
+	// lower_case_table_names). byMust is the same under the "must" key.
+	byMay  map[string][]*relInfo
+	byMust map[string][]*relInfo
+	// outputAliases is keyed by column-folded alias name.
 	outputAliases map[string]bool
 	// inOrderBy holds the parsed-SQL byte offset of every statement-level
 	// ORDER BY item, the only clause where a bare output-alias name binds
 	// to the alias rather than a table column (F2).
 	inOrderBy map[int]bool
-	// fold folds an identifier for dialect-correct name matching:
-	// case-folding on MySQL/SQLite, identity on PostgreSQL (F3).
-	fold func(string) string
+	// colFold is the engine's column-name key; relMay/relMust are its
+	// relation-name keys (dialect.IdentFolds).
+	colFold, relMay, relMust func(string) string
 }
 
 func newResolver(profile dialect.LexerProfile, q *template.QueryTemplate, maxR ast.Rendering,
@@ -204,11 +218,13 @@ func newResolver(profile dialect.LexerProfile, q *template.QueryTemplate, maxR a
 
 	res := &resolver{
 		q: q, maxR: maxR,
-		byName:        map[string]*relInfo{},
+		byMay:         map[string][]*relInfo{},
+		byMust:        map[string][]*relInfo{},
 		outputAliases: map[string]bool{},
 		inOrderBy:     map[int]bool{},
-		fold:          dialect.FoldIdent(profile),
+		colFold:       dialect.ColumnFold(profile),
 	}
+	res.relMay, res.relMust = dialect.RelationFolds(profile)
 	for _, rr := range maxTree.Relations() {
 		ri := &relInfo{RelRef: rr}
 		if frag := res.fragAt(rr.Loc); frag != nil {
@@ -217,15 +233,23 @@ func newResolver(profile dialect.LexerProfile, q *template.QueryTemplate, maxR a
 		}
 		if cat != nil && rr.Table != "" {
 			ri.table = cat.Lookup(rr.Table)
+			for i := range cat.Tables {
+				t := &cat.Tables[i]
+				if res.relMay(t.Name) == res.relMay(rr.Table) &&
+					(rr.Schema == "" || res.relMay(t.Schema) == res.relMay(rr.Schema)) {
+					ri.mayTables = append(ri.mayTables, t)
+				}
+			}
 		}
 		res.rels = append(res.rels, ri)
 		if n := ri.name(); n != "" {
-			res.byName[res.fold(n)] = ri
+			res.byMay[res.relMay(n)] = append(res.byMay[res.relMay(n)], ri)
+			res.byMust[res.relMust(n)] = append(res.byMust[res.relMust(n)], ri)
 		}
 	}
 	for _, ti := range maxTree.TargetItems() {
 		if ti.Name != "" {
-			res.outputAliases[res.fold(ti.Name)] = true
+			res.outputAliases[res.colFold(ti.Name)] = true
 		}
 	}
 	for _, loc := range maxTree.OrderByLocs() {
@@ -236,11 +260,13 @@ func newResolver(profile dialect.LexerProfile, q *template.QueryTemplate, maxR a
 	return res
 }
 
-// scopeContains reports whether qualifier (already folded) is among the
-// enclosing subquery scope names, comparing under the dialect's folding.
+// scopeContains reports whether qualifier certainly names one of the
+// enclosing subquery scope names ("must" key: shadowing skips a check,
+// so a name that only MAY match must not shadow).
 func (res *resolver) scopeContains(scope []string, qualifier string) bool {
+	q := res.relMust(qualifier)
 	for _, s := range scope {
-		if res.fold(s) == qualifier {
+		if res.relMust(s) == q {
 			return true
 		}
 	}
@@ -277,24 +303,23 @@ func (res *resolver) guardsAt(loc int) []template.GuardAtom {
 // identifier folding, so a mixed-case name matches on a
 // case-insensitive dialect (F3).
 func (res *resolver) col(tbl *cache.Table, name string) *cache.Column {
-	folded := res.fold(name)
+	folded := res.colFold(name)
 	for i := range tbl.Cols {
-		if res.fold(tbl.Cols[i].Name) == folded {
+		if res.colFold(tbl.Cols[i].Name) == folded {
 			return &tbl.Cols[i]
 		}
 	}
 	return nil
 }
 
+// columnCandidates returns every relation an unqualified column
+// reference may bind to: one whose name MAY denote a catalog table
+// (mayTables) having the column.
 func (res *resolver) columnCandidates(col string) []*relInfo {
-	folded := res.fold(col)
 	var out []*relInfo
 	for _, rel := range res.rels {
-		if rel.table == nil {
-			continue
-		}
-		for i := range rel.table.Cols {
-			if res.fold(rel.table.Cols[i].Name) == folded {
+		for _, t := range rel.mayTables {
+			if res.col(t, col) != nil {
 				out = append(out, rel)
 				break
 			}

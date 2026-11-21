@@ -71,6 +71,12 @@ CREATE TABLE upd_members (
     id     bigint PRIMARY KEY,
     org_id bigint
 );
+-- User functions whose names Go's Unicode/ASCII lowering turns into a
+-- whitelisted builtin's (count, min). PostgreSQL resolves function names
+-- exactly (its parser downcases unquoted ASCII only), so these are NOT
+-- the builtins and both return NULL.
+CREATE FUNCTION "COUNT"(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT NULL::bigint';
+CREATE FUNCTION mİn(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT NULL::bigint';
 `
 
 const nullSoundSeedSQL = `
@@ -334,6 +340,21 @@ ORDER BY m.oname NULLS LAST;
 UPDATE upd_members AS u SET org_id = NULL WHERE u.org_id IS NOT NULL RETURNING u.org_id;
 `,
 		note: "the WHERE tests the OLD row, RETURNING yields the NEW (NULL) row, so a skeleton `org_id IS NOT NULL` must NOT narrow the returned org_id (UPDATE is exempt from IS NOT NULL narrowing, design 05 §3a.3)",
+	},
+	// ---- function names compare exactly (design 05 §2, doc 01 keys) ----
+	{
+		name: "quoted_uppercase_function_is_not_count",
+		src: `-- name: QuotedCount :many
+SELECT "COUNT"(o.id) AS c FROM orgs AS o ORDER BY o.id;
+`,
+		note: "`\"COUNT\"` is a user function distinct from count (PostgreSQL function names are case-sensitive once quoted); lowercasing it matched funcWhitelist and narrowed a NULL result",
+	},
+	{
+		name: "non_ascii_function_is_not_min",
+		src: `-- name: DotlessMin :many
+SELECT mİn(o.id) AS m FROM orgs AS o GROUP BY o.id ORDER BY o.id;
+`,
+		note: "PostgreSQL keeps `mİn` as written (it downcases ASCII only); Go's ToLower maps İ to i, so the user function matched strictAggs[min] and narrowed a NULL result",
 	},
 }
 

@@ -382,7 +382,15 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   annotations are MANDATORY for them (new scanner directive); params
   need `-- @param` like MySQL. Affinity mapping has BOOLEAN/date-time
   carve-outs. @in arity-0 emission is per-dialect via Frag.Text /
-  dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`); devdb DSN
+  dialect.InEmptySQL (SQLite: `IN (SELECT NULL WHERE 0)`). `$` and
+  non-ASCII bytes inside unquoted identifiers (engine IdChar) are bridged
+  for rqlite by a rune-count-preserving rewrite (each such rune → one
+  `_`; rqlite offsets are runes) + reflection restore of every
+  `*rsql.Ident` (`sqlite/ident_rewrite.go`); keyword-forming or uncovered
+  rewrites are parse errors — never let a rewritten name reach a facade.
+  SQLite folds identifier case ASCII-only (`É` ≠ `é`; see the
+  identifier-comparison section) — never fold its names with
+  `strings.ToLower`. devdb DSN
   is a file path resolved config-relative via `cli.sqliteDSNPath`
   (`:memory:` and `file:` URIs pass through), reset = drop all
   tables/views, version pin compares dotted prefix ("3.50" vs
@@ -765,6 +773,36 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 - Driver boundary pinned (`TestPgEnumDriverBoundary`): pgx falls back to
   the Go value's codec for an unregistered enum OID, through the
   underlying type of `type T string`.
+
+## Known decisions: identifier comparison keys (design 01)
+
+- Owner decision 2026-11-17 ("fail closed for both"): every engine-side
+  name comparison goes through `dialect.IdentFolds` — `ColumnFold` and
+  `RelationFolds` (may, must) — never a Go Unicode fold. MySQL columns
+  use the server's utf8mb3_general_ci lower-case table
+  (`mysql/identfold_table.go`, re-derived by the devdb
+  `TestMySQLIdentFoldTableMatchesServer`; `SQLETCH_UPDATE_IDENTFOLD=1`
+  rewrites it). MySQL relation names depend on lower_case_table_names
+  (exact under 0, folded under 1/2), invisible offline: "may" = folded,
+  "must" = exact. SQLite: ASCII-only for all keys. PostgreSQL: identity.
+- Checks resolve through "may" (R3/R2 `byMay` is a MULTIMAP: a guard on
+  ANY candidate must cover the reference — never collapse it back to
+  one slot, that is how an unguarded `a` overwrote a guarded `A`);
+  anything that SKIPS a check (subquery shadowing, doc-20 param
+  nullability, the L005 `ColumnResolver`) uses "must". The native MySQL
+  oracle accepts only what every lower_case_table_names runs: exact
+  qualifiers, "may"-keyed alias uniqueness, server-fold columns.
+- Policies too (doc 14 §11.10, 2026-11-19): `Policy.designates` and the
+  hidden-read/overread counts key on "may" (`strings.EqualFold` missed
+  MySQL `İTEMS` ≡ `items` under lower_case_table_names=1 — an unscoped
+  read). Keywords are recognized with `dialect.ASCIIUpper` everywhere —
+  never `strings.ToUpper` (`lımıt`/`offſet`/`caſe` are identifiers to
+  every engine).
+- Builtin function names (`TargetItem.FuncName`, the nullability
+  whitelist key, 2026-11-19): PostgreSQL EXACT as parsed (quoted
+  `"COUNT"` / unquoted `mİn` are user functions — lowering them narrowed
+  NULL results on a real server), MySQL/SQLite `dialect.ASCIILower`
+  (MySQL 8.4 matches builtins ASCII-only). Never TiDB's `FnName.L`.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

@@ -166,7 +166,7 @@ func lexRendering(profile dialect.LexerProfile, r ast.Rendering) ([]ptok, bool) 
 		pt := ptok{Token: tok, depth: depth}
 		switch tok.Kind {
 		case dialect.KindIdent:
-			pt.upper = strings.ToUpper(tok.Text)
+			pt.upper = dialect.ASCIIUpper(tok.Text)
 		case dialect.KindLParen:
 			depth++
 		case dialect.KindRParen:

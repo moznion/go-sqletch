@@ -717,7 +717,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 			operandPos := setOp && opState != 0
 			nextState := 0
 			if tok.Kind == dialect.KindIdent {
-				switch u := strings.ToUpper(tok.Text); {
+				switch u := dialect.ASCIIUpper(tok.Text); {
 				case u == "UNION" || u == "INTERSECT" || u == "EXCEPT":
 					nextState = 1
 				case (u == "ALL" || u == "DISTINCT") && opState == 1:
@@ -746,7 +746,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 					continue
 				}
 				if ok2 && peek.Kind == dialect.KindIdent {
-					if u := strings.ToUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
+					if u := dialect.ASCIIUpper(peek.Text); u == "SELECT" || u == "WITH" || u == "VALUES" {
 						cteBody := prev == "AS"
 						skipParen()
 						if setOp && cteBody {
@@ -793,7 +793,7 @@ func locateRelationsIn(sql string, rels []dialect.RelRef, setOp bool) {
 				curAlias := aliasSlot
 				aliasSlot = false
 				if tok.Kind == dialect.KindIdent {
-					u := strings.ToUpper(tok.Text)
+					u := dialect.ASCIIUpper(tok.Text)
 					// STRAIGHT_JOIN has TWO positions in MySQL: a join
 					// operator (`a STRAIGHT_JOIN b`, always inside an already
 					// open FROM region) and a SELECT modifier (`SELECT
@@ -1122,11 +1122,14 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 			// total builtin. Leaving FuncName blank keeps the nullability
 			// analyzer's funcWhitelist/strictAggs from matching it, so its
 			// column is not narrowed to non-nullable on a false pretense.
+			// MySQL matches builtin names ASCII-only (`İFNULL(…)` is a
+			// stored-function lookup on 8.4), so never TiDB's
+			// strings.ToLower-folded FnName.L.
 			if e.Schema.O == "" {
-				item.FuncName = e.FnName.L
+				item.FuncName = dialect.ASCIILower(e.FnName.O)
 			}
 		case *ast.AggregateFuncExpr:
-			item.FuncName = strings.ToLower(e.F)
+			item.FuncName = dialect.ASCIILower(e.F)
 			// MySQL has no FILTER clause, and window functions parse
 			// as WindowFuncExpr — a plain aggregate over one bare
 			// column qualifies.
@@ -1167,7 +1170,7 @@ func totalExpr(e ast.ExprNode) bool {
 		// MySQL CAST returns NULL on conversion failure — never total.
 		return false
 	case *ast.FuncCallExpr:
-		if v.FnName.L == "coalesce" {
+		if dialect.ASCIILower(v.FnName.O) == "coalesce" {
 			for _, arg := range v.Args {
 				if totalExpr(arg) {
 					return true
