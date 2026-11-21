@@ -517,6 +517,13 @@ PostgreSQL, a non-recursive CTE body and a FROM-position subquery are
 eligible cores, scoped at their own WHERE like a branch. Sublinks,
 recursive CTEs, and MySQL/SQLite nested positions stay rejected.
 
+**Sublink refinement (owner decision 2026-11-21, §15; not yet
+implemented).** On PostgreSQL, the body of an `EXISTS`/`IN`/`ANY`/
+`ALL`/scalar sublink in the WHERE or HAVING of an eligible core of a
+SELECT statement is an eligible core too.
+Other sublink positions and kinds, DML, and construct bodies stay
+rejected.
+
 **Upsert refinement (owner decision 2026-08-21, audit-12 M10).** The
 spec only excludes `INSERT … VALUES` as a policy target ("no rows are
 filtered"), but an `INSERT … ON CONFLICT DO UPDATE` (PostgreSQL/SQLite;
@@ -1461,3 +1468,304 @@ core, guarded join inside a CTE, MySQL/SQLite CTE); Enforce per core
 (a conjunct in the outer WHERE never vouches for a CTE body, and vice
 versa); facade conformance for `NestedCores`; the row-level devdb
 proof on real PostgreSQL and the Postgres leak fuzzer's nested seeds.
+
+## 15. Sublink weaving, phase 1 (WHERE/HAVING subqueries)
+
+**Status: SETTLED (owner decision 2026-11-21, §15.9) — not yet
+implemented.** §14 left every sublink `SQLETCH125`. This section lifts
+that for the most common sublink positions, on PostgreSQL only, and
+only in SELECT statements. Later phases are listed in §15.8 so the
+boundary is explicit.
+
+### 15.1 Scope
+
+Phase 1 makes a sublink's body an **eligible core** (§14) when:
+
+1. **The sublink kind** (pg_query `SubLink.SubLinkType`, raw parse
+   tree) is one of:
+   - `EXISTS_SUBLINK` — `EXISTS (…)`, and `NOT EXISTS (…)` (a
+     `BoolExpr NOT` around it);
+   - `ANY_SUBLINK` — `x IN (…)`, `x NOT IN (…)`, and `x op ANY (…)` /
+     `x op SOME (…)` for any operator;
+   - `ALL_SUBLINK` — `x op ALL (…)`;
+   - `EXPR_SUBLINK` — a scalar subquery `(SELECT …)` used as a value.
+2. **The sublink lies in the WHERE or HAVING clause of an eligible
+   core.** An eligible core is the statement itself, a set-operation
+   branch (§13), a CTE body or FROM subquery (§14), or another
+   eligible sublink body (this section). The rule applies recursively.
+   Anywhere inside the clause's expression counts, at any depth:
+   under `AND`/`OR`/`NOT`, inside `CASE`, function arguments, or the
+   left operand of another sublink. The rule is about the clause, not
+   the expression's shape.
+3. **The top-level statement is a SELECT.** §14 does not walk a DML
+   statement's WITH/FROM, and phase 1 does not walk its WHERE either.
+4. **The sublink's tokens are template skeleton text**, outside every
+   `@if-present`/`@when`/`@choose`/filter-tree body (§15.5).
+
+The body is then woven exactly like a §14 nested core. Each leaf core
+gets a WHERE conjunct per designated occurrence, or an ON conjunct
+for a null-extended one (D2a). Idempotence and OR-wrapping work per
+core. A set operation inside the body is split into its operands
+(§13), and CTE bodies and FROM subqueries inside it are eligible
+(§14).
+
+Everything else stays `SQLETCH125`. That is the same hidden-read
+refusal as today: the `Relations`/`DeepTables` count comparison of
+§14.2 reports any designated read that `NestedCores` does not list.
+The positions that stay refused are:
+
+- **Sublinks in other clauses:** the SELECT list, `ORDER BY`,
+  `GROUP BY`, a join's `ON`, `LIMIT`/`OFFSET`, window definitions,
+  `VALUES` rows, and FROM-position function arguments;
+- **Other sublink kinds:** `ARRAY(…)`, row comparison
+  (`ROWCOMPARE_SUBLINK`), and `MULTIEXPR`
+  (`UPDATE … SET (a, b) = (SELECT …)`);
+- **Any sublink in an UPDATE/DELETE/INSERT statement**;
+- **A sublink inside a template construct body** (§15.5);
+- **Shapes already refused:** a `WITH RECURSIVE` list inside a
+  sublink, a `TABLE t`/`VALUES` operand reading a designated table,
+  and a `{}`-less predicate in a sublink core (the §14.1 rule
+  carries over);
+- **MySQL and SQLite**, which keep returning no nested cores.
+
+### 15.2 Semantics — scoping the read site
+
+The §13.1/§14.1 argument carries over. A policy means "every read of a
+designated table sees only in-scope rows". A sublink body is a read
+with its own FROM and WHERE slot, so it is scoped where it reads. This
+is the placement PostgreSQL row-level security uses. The effect per
+kind:
+
+| Form | Woven meaning |
+|---|---|
+| `EXISTS (…)` | true iff an **in-scope** row satisfies the body |
+| `NOT EXISTS (…)` | true iff no **in-scope** row satisfies the body |
+| `x IN (…)` / `x op ANY (…)` | true iff `x op v` for some **in-scope** row's `v` (three-valued) |
+| `x NOT IN (…)` / `x op ALL (…)` | true iff `x op v` for every **in-scope** row's `v`; vacuously true when there are none (three-valued) |
+| scalar `(…)` | the value computed over **in-scope** rows (NULL when none) |
+
+These semantics are the documented behaviour (owner decision Q3). Two
+consequences must be stated in the manual (12):
+
+- **Anti-joins can return more outer rows.** A `NOT EXISTS`, `NOT IN`
+  or `op ALL` over a designated table sees fewer rows once it is
+  scoped, so more rows of the enclosing query qualify. Those rows
+  belong to a non-designated table, or to a designated one that is
+  scoped in its own core. Out-of-scope rows used to decide the answer,
+  which was the leak; now they do not.
+- **NULLs come only from in-scope rows.** A NULL in an out-of-scope
+  row no longer turns `NOT IN` / `op ALL` into UNKNOWN. RLS gives the
+  same answer.
+
+**Correlation and name resolution.** Sublinks are usually correlated.
+`{}` is substituted with the bound name of the sublink's own
+relation. PostgreSQL resolves a qualified reference to the innermost
+scope that has that range-table name, so the woven `o.tenant_id`
+binds to the sublink's `o` even when the outer query also has an `o`
+or an unaliased table of the same name. That is the binding we want,
+and the reason a `{}` predicate is safe here. A `{}`-less predicate
+has no such anchor: an unqualified column could resolve outward. It
+stays refused, as in §14.1.
+
+### 15.3 The AST view — `NestedCores` enters eligible SubLinks
+
+The PostgreSQL `NestedCores` walk gains one step. For each leaf core
+it already visits, after the FROM items, it walks the core's
+`WhereClause` and `HavingClause` expression trees:
+
+- On a `SubLink` whose type is `EXISTS`, `ANY`, `ALL` or `EXPR`, it
+  recurses into `query(SubLink.Subselect, emit=true)`. A set operation
+  there is flattened, and the body's own WITH, FROM subqueries and
+  WHERE/HAVING sublinks follow recursively.
+- On a `SubLink` of any other type, it does not enter the body. Its
+  relations stay hidden and are refused.
+- In both cases it walks the sublink's `Testexpr`, because that is an
+  outer-scope expression of the same clause
+  (`(SELECT …) IN (SELECT …)`). A `Subselect` is never reached through
+  an expression walk.
+- It never walks the target list, sort, group, window or limit
+  expressions.
+
+The walk order extends §14.2's rule deterministically: WITH list,
+then operand cores, then FROM subqueries, then WHERE sublinks before
+HAVING sublinks, each in document order. A sublink core is a located
+sub-facade like any other, so `topRelations`, `coreTrees` and
+`verifySetOpWeave` need no change. A facade conformance test pins the
+eligible/ineligible split (§15.7).
+
+### 15.4 The lexical view — already in place
+
+`scanSetOp` already opens every parenthesized region that starts with
+`SELECT`/`WITH`/`TABLE`/`VALUES`, sublinks included (§14.3), and gives
+each region its own insertion points: after `WHERE`, before the first
+tail keyword, and at the core's end, which for a sublink is just
+before its closing `)`. Matching by relation location, the
+"one parser core per lexical core" rule, and the post-weave check
+that the parser finds woven conjuncts in exactly the cores that
+needed one (`verifySetOpWeave`) all apply unchanged. Before §15 these
+lexical sublink cores existed only so that collisions were detected.
+Now they are also weaving targets.
+
+The enclosing core's flat WHERE scan still sees the sublink's tokens
+at depth > 0, so they never count as top-level conjuncts of the
+enclosing core. That keeps idempotence and Enforce credit within one
+core: a correlated `o.tenant_id = :tenant_id` written *inside* a
+sublink never vouches for the outer `o` (`weave_nested_test` already
+pins this shape), and an outer conjunct never vouches for a sublink
+read.
+
+### 15.5 Template constructs — refused in phase 1
+
+`setOpElems` turns every non-skeleton item into one opaque element. A
+sublink inside an `@if-present` body is therefore invisible to the
+lexical view. Its relation's token is in no lexical core, `locate`
+fails, and the occurrence is refused. That is fail-closed, and phase 1
+keeps it (owner decision Q2: construct bodies are phase 2). The
+limitation matters in practice: an optional filter `@if-present(tag)
+AND o.id IN (SELECT order_id FROM order_tags WHERE tag = :tag)
+@endif` over a designated `order_tags` stays `SQLETCH125`. The author
+can opt out and scope the read by hand.
+
+Lifting this means splicing into a construct's `Body`. The woven
+conjunct must inherit the construct's guard set: it exists exactly
+when the read exists, which differs from D5, where a conjunct is
+always unconditional. Enforce would then credit it per shape.
+
+### 15.6 Examples (designated `orders`, `order_items`, `users`; `{}.tenant_id = :tenant_id`)
+
+```sql
+-- IN
+SELECT u.id FROM users u WHERE u.id IN (SELECT o.user_id FROM orders o)
+-- woven
+SELECT u.id FROM users u WHERE (u.tenant_id = $1) AND u.id IN (SELECT o.user_id FROM orders o WHERE (o.tenant_id = $1))
+
+-- correlated NOT EXISTS, existing inner WHERE
+SELECT o.id FROM orders o
+WHERE NOT EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id)
+-- woven
+SELECT o.id FROM orders o
+WHERE (o.tenant_id = $1) AND NOT EXISTS (SELECT 1 FROM order_items i WHERE (i.tenant_id = $1) AND i.order_id = o.id)
+
+-- op ALL
+SELECT a.id FROM acc a WHERE a.limit_amount >= ALL (SELECT total FROM orders)
+-- woven
+SELECT a.id FROM acc a WHERE a.limit_amount >= ALL (SELECT total FROM orders WHERE (orders.tenant_id = $1))
+
+-- scalar subquery in WHERE, inner tail clauses
+SELECT o.id FROM orders o WHERE o.total > (SELECT total FROM orders ORDER BY created_at DESC LIMIT 1)
+-- woven
+SELECT o.id FROM orders o WHERE (o.tenant_id = $1) AND o.total > (SELECT total FROM orders WHERE (orders.tenant_id = $1) ORDER BY created_at DESC LIMIT 1)
+
+-- HAVING sublink (HAVING itself is still no policy slot; the sublink body's WHERE is)
+SELECT a.kind, count(*) FROM acc a GROUP BY a.kind
+HAVING count(*) > (SELECT count(*) FROM orders)
+-- woven
+SELECT a.kind, count(*) FROM acc a GROUP BY a.kind
+HAVING count(*) > (SELECT count(*) FROM orders WHERE (orders.tenant_id = $1))
+
+-- set operation inside IN, inside a CTE body
+WITH x AS (SELECT id FROM acc WHERE id IN (SELECT user_id FROM orders UNION SELECT id FROM users))
+SELECT id FROM x
+-- woven
+WITH x AS (SELECT id FROM acc WHERE id IN (SELECT user_id FROM orders WHERE (orders.tenant_id = $1) UNION SELECT id FROM users WHERE (users.tenant_id = $1)))
+SELECT id FROM x
+
+-- OR around a sublink: the outer conjunct wraps, the inner one is independent
+SELECT o.id FROM orders o WHERE o.flag OR o.id IN (SELECT order_id FROM order_items)
+-- woven
+SELECT o.id FROM orders o WHERE (o.tenant_id = $1) AND (o.flag OR o.id IN (SELECT order_id FROM order_items WHERE (order_items.tenant_id = $1)))
+```
+
+Still refused (`SQLETCH125`):
+
+```sql
+SELECT u.id, (SELECT count(*) FROM orders o WHERE o.user_id = u.id) FROM users u   -- SELECT-list sublink (phase 2)
+SELECT a.id FROM acc a WHERE a.ids @> ARRAY(SELECT id FROM orders)                 -- ARRAY sublink (phase 2)
+DELETE FROM acc WHERE id IN (SELECT user_id FROM orders)                           -- DML (phase 3)
+SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM orders WHERE true)            -- with a {}-less predicate configured
+SELECT u.id FROM users u WHERE u.id > 0
+@if-present(tag) AND u.id IN (SELECT user_id FROM orders WHERE tag = :tag) @endif  -- construct body (phase 2)
+```
+
+### 15.7 Tests
+
+- **Facade:** `NestedCores` lists the bodies of EXISTS, NOT EXISTS,
+  IN, NOT IN, `op ANY`/`SOME`, `op ALL` and scalar sublinks in WHERE
+  and HAVING, including nested sublinks, sublinks in a CTE body or
+  FROM subquery, a set operation inside IN, and sublinks inside
+  `CASE` or function arguments. It lists nothing for
+  SELECT-list/ORDER BY/ON/LIMIT sublinks, `ARRAY`/row-compare
+  sublinks, or DML. The walk order is pinned.
+- **Golden weaves:** the §15.6 shapes, plus idempotence inside a
+  sublink, an ON-weave inside a sublink's outer join, a parenthesized
+  body `IN ((SELECT …))`, and untouched shapes (a sublink over a
+  non-designated table).
+- **Refusals:** every §15.1 exclusion, plus a sublink inside each
+  construct kind.
+- **Enforce:** credit stays per core in both directions, including
+  the correlated outer-alias conjunct written inside a sublink.
+- **Leak oracle (new — the marker oracle is not enough).** The
+  existing fuzzer counts a leak when a tenant-2 marker appears in a
+  tenant-1 result. A WHERE sublink leaks through *influence*: tenant-2
+  rows change which tenant-1 rows qualify, and no marker is ever
+  projected. Phase 1 adds a differential oracle. Inside a rolled-back
+  transaction, run the woven tenant-1 query on the seeded data, then
+  again after deleting (or mutating) every tenant-2 row. The two
+  results must be identical. The seed data is asymmetric enough that
+  an unscoped EXISTS, NOT EXISTS, ALL or scalar subquery changes the
+  answer, and a pinned test checks that the oracle is live: the
+  unwoven query must fail it.
+- **Fuzzer:** new selector bytes add the IN, NOT IN, ANY, ALL,
+  EXISTS, correlated NOT EXISTS, scalar and HAVING shapes, alone and
+  inside a §14 nested core. Existing seeds decode unchanged, as in
+  §14.
+- **devdb:** a row-level proof on real PostgreSQL for each kind in
+  §15.2.
+
+### 15.8 Later phases (not settled)
+
+- **Phase 2:** sublinks inside template construct bodies (§15.5);
+  sublinks in the SELECT list, `ORDER BY`, a join's `ON`, and `CASE`
+  in those positions; `ARRAY(…)`. A scalar SELECT-list subquery
+  projects designated data, so the marker oracle applies there as
+  well.
+- **Phase 3:** sublinks in UPDATE/DELETE WHERE, and `MULTIEXPR`. This
+  overlaps the open D6 follow-up that hidden reads inside an
+  UPDATE/DELETE are gated on the outer kind rather than on
+  `coversSelect()`.
+- **Orthogonal:** `WITH RECURSIVE`, and MySQL/SQLite nested positions.
+
+### 15.9 Owner decisions (2026-11-21)
+
+- **Q1 — `op ANY`/`op ALL` in phase 1: yes.** They read exactly like
+  `IN`/`NOT IN`; §15.1 admits `ANY_SUBLINK` whatever its `OperName`,
+  and `ALL_SUBLINK`.
+- **Q2 — construct-body sublinks: phase 2**, not a phase 1b (§15.5,
+  §15.8).
+- **Q3 — the §15.2 semantics are adopted** as the documented
+  behaviour (RLS-equivalent; anti-joins may return more outer rows).
+- **Q4 — the `SQLETCH125` wording changes.** The current text names
+  "a WHERE/SELECT-list subquery" as unscopable, and that is no longer
+  true once phase 1 lands. The implementation PR rewrites it as
+  follows, and keeps the code, manual and spec in step:
+  - `internal/policy/weave.go` (the hidden-read refusal): "a
+    designated table appears inside a subquery or CTE body sqletch
+    cannot scope (a subquery outside a WHERE/HAVING clause, an
+    ARRAY or row-comparison subquery, a WITH RECURSIVE body, a
+    subquery inside a template construct, or a nested position this
+    dialect or statement kind does not support)".
+  - `docs/manual/08-diagnostics.md` SQLETCH125: "inside a SELECT-list,
+    ORDER BY, ON or other non-WHERE/HAVING subquery, an `ARRAY`/row
+    comparison subquery, a subquery inside an `@if-present`/`@when`/
+    `@choose` body, any subquery of an UPDATE/DELETE/INSERT, a `WITH
+    RECURSIVE` body, or — on MySQL/SQLite — any subquery/CTE".
+  - `docs/manual/12-policies.md`: the refused-positions list is
+    reworded to match, a sublink bullet with an example joins the
+    §14 bullet, and it states the §15.2 consequences.
+  - `docs/spec.md` "Cross-Query Policies", the
+    `internal/dialect/frontend.go` `NestedCores` doc comment, and
+    CLAUDE.md are updated to match.
+
+  These texts describe phase 1 behaviour, so they ship with the
+  implementation and not with this design change. Shipping them
+  earlier would document behaviour that does not exist yet.
