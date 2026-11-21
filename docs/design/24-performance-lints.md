@@ -178,7 +178,9 @@ TOP-LEVEL statement's WHERE/ON predicates are inspected (a subquery's
 columns would need scope resolution the facade does not model), a
 relation named like a statement-level CTE is skipped (the CTE shadows
 the base table, so the catalog's types are not the compared column's;
-the R3 resolver alone would hand back the base table's), set
+the R3 resolver alone would hand back the base table's; "named like"
+is the engine's relation key — PostgreSQL folding for the CTE token,
+then the "may" key, never `strings.EqualFold`, 2026-11-21), set
 operations are skipped (SQLite's `Relations()` is the first core's),
 and the operands must be a bare column vs. a bare placeholder (or an
 `IN` list of them). PostgreSQL also accepts one `::type` /

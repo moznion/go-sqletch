@@ -177,6 +177,13 @@ func TestPerfTypes_CTEShadowsTable(t *testing.T) {
 		{"recursive, second cte shadows", "WITH RECURSIVE x AS (SELECT 1 AS n), users AS (SELECT 1.5 AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric", nil},
 		{"quoted shadowing name", `WITH "users" AS (SELECT 1.5::numeric AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric`, nil},
 		{"other cte name", "WITH recent AS (SELECT 1 AS n) SELECT u.email FROM users AS u WHERE u.id = :p::numeric", []string{"u.id = :p::numeric"}},
+		{"unquoted case variant shadows", "WITH USERS AS (SELECT 1.5::numeric AS age) SELECT u.age FROM users u WHERE u.age = :p::numeric", nil},
+		// PostgreSQL keeps these apart (PG 16: `WITH "Users" ... FROM
+		// users` reads the base table; folding is ASCII-only and quoted
+		// names are exact), so the base table's column is compared and
+		// the lint fires; strings.EqualFold used to call them shadowed.
+		{"quoted mixed-case cte is another name", `WITH "Users" AS (SELECT 1 AS n) SELECT u.age FROM users u WHERE u.age = :p::numeric`, []string{"u.age = :p::numeric"}},
+		{"long s cte is another name", "WITH uſers AS (SELECT 1 AS n) SELECT u.age FROM users u WHERE u.age = :p::numeric", []string{"u.age = :p::numeric"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,5 +280,24 @@ LIMIT 1
 func TestPerfTypes_MySQLFlagsAgree(t *testing.T) {
 	if mysqlFlagUnsigned != mysql.FlagUnsigned || mysqlFlagBinary != mysql.FlagBinary {
 		t.Fatal("mysql TypeRef flag bits drifted from internal/dialect/mysql")
+	}
+}
+
+// On MySQL the CTE name compares under the "may" relation key: `USERS`
+// may shadow `users` (lower_case_table_names=1), `uſers` never does.
+func TestPerfTypes_MySQLCTEShadowKey(t *testing.T) {
+	bigint := mysqlType(t, "bigint")
+	for _, tc := range []struct {
+		cte, from string
+		want      []string
+	}{
+		{"USERS", "users", nil}, {"uſers", "users", []string{"u.code = :p"}},
+	} {
+		cte, want := tc.cte, tc.want
+		src := "-- name: Q :one\n-- @param p: x\nWITH " + cte + " AS (SELECT 1 AS code) SELECT u.id FROM " + tc.from + " AS u WHERE u.code = :p\n"
+		got := spanTexts(src, perfTypes(t, "mysql", src, map[string]dialect.TypeRef{"p": bigint}), diagnostics.CodePerfTypeMismatch)
+		if !slices.Equal(got, want) {
+			t.Errorf("WITH %s: got %q, want %q", cte, got, want)
+		}
 	}
 }

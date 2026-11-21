@@ -89,21 +89,23 @@ var bareIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // facade reports quoted names case-preserved), a name not already in
 // folded form — e.g. the alias `"A"` — becomes `a` once unquoted and
 // can bind to another relation in scope (security finding F7, CWE-178;
-// owner decision 2026-10-21: fail closed, no quoting). bareIdentRe has
-// already restricted the name to ASCII, so ASCII lower-casing is
-// PostgreSQL's folding exactly. Case-insensitive dialects (MySQL,
+// owner decision 2026-10-21: fail closed, no quoting). PostgreSQL
+// downcases an unquoted identifier over ASCII only (PG 16: `É` names the
+// alias `"É"`), so the key is dialect.ASCIILower, never strings.ToLower,
+// which claimed `"É"` folds to `é`. Both callers refuse a non-bare
+// (non-ASCII) name first anyway. Case-insensitive dialects (MySQL,
 // SQLite) resolve both spellings to the same relation: never refused.
 func unquotedFoldChanges(profile dialect.LexerProfile, name string) bool {
 	if p, ok := profile.(dialect.CaseInsensitiveIdents); ok && p.CaseInsensitiveIdents() {
 		return false
 	}
-	return strings.ToLower(name) != name
+	return dialect.ASCIILower(name) != name
 }
 
 // foldChangeWhy states the rule and its rationale for a bound name
 // unquotedFoldChanges rejects; shared by SQLETCH125 and SQLETCH124.
 func foldChangeWhy(name string) string {
-	return fmt.Sprintf("the name bound to the predicate placeholder (%q) is a quoted mixed-case identifier; the conjunct substitutes it unquoted, and PostgreSQL folds an unquoted identifier to lower case (%q), which can name a different relation and leave this table unscoped", name, strings.ToLower(name))
+	return fmt.Sprintf("the name bound to the predicate placeholder (%q) is a quoted mixed-case identifier; the conjunct substitutes it unquoted, and PostgreSQL folds an unquoted identifier to lower case (%q), which can name a different relation and leave this table unscoped", name, dialect.ASCIILower(name))
 }
 
 // foldChangeHint is the compliant rewrite for foldChangeWhy.
