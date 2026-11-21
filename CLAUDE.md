@@ -278,7 +278,10 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   folded form (quoted `"A"`) is SQLETCH125 and never credited by
   Enforce (SQLETCH124): unquoted it folds to `a` and can scope another
   relation (F7, owner decision 2026-10-21: fail closed, still no
-  quoting). `policy.unquotedFoldChanges` is the one check both share.
+  quoting). `policy.unquotedFoldChanges` is the one check both share
+  (`dialect.ASCIILower` — PG downcases ASCII only, so `"É"` does not
+  fold); Enforce also refuses a non-bare bound name (SQLETCH124),
+  mirroring the weaver's SQLETCH125 (doc 14 §11.10).
 - Enforcement (SQLETCH124) re-derives conjunct presence from the woven
   template inside cli.resolvedChecks — do not "optimize" it into
   trusting the weaver's own record; catching weaver regressions is its
@@ -808,6 +811,9 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `ASCIIUpper` — `İnt4`/`bİgint` are unknown types (SQLETCH311), and
   `ıntext` is TEXT affinity as in sqlite3AffinityType
   (`TestAffinityRef_MatchesEngine` uses the bundled engine as oracle).
+  The perf lint's CTE-shadow check keys CTE names like the engine
+  (`lint.cteNames`: PG unquoted ASCII-lowered / quoted exact, then the
+  "may" relation key) — never `strings.EqualFold`.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

@@ -197,6 +197,16 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 		// WHERE presence for every occurrence of such a predicate.
 		hasPlaceholder := strings.Contains(p.Predicate, Placeholder)
 		for _, r := range a.topOcc {
+			if hasPlaceholder && !bareIdentRe.MatchString(boundName(r.RelRef)) {
+				// The weaver refuses a non-bare bound name (SQLETCH125,
+				// §11.3); never credit a conjunct built from one, so the
+				// two passes agree on what "scoped" means.
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+					"query touches policy-designated table %q, but policy %q cannot be proved to scope it: the name bound to the predicate placeholder (%q) is not a bare identifier",
+					r.Table, p.Name, boundName(r.RelRef)).
+					WithHint("%s, or opt out with `-- @policy-optout: %s (reason)`", foldChangeHint, p.Name))
+				break
+			}
 			if hasPlaceholder && unquotedFoldChanges(profile, boundName(r.RelRef)) {
 				// F7: the bound name folds to a different identifier
 				// unquoted, so no conjunct built from it scopes this

@@ -2,7 +2,6 @@ package lint
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/cache"
@@ -46,7 +45,7 @@ func CheckTypes(profile dialect.LexerProfile, dialectName string, q *template.Qu
 			if !ok {
 				continue
 			}
-			ctes := cteNames(toks)
+			ctes := cteNames(profile, toks)
 			pc := predicateContexts(toks)
 			for i := range toks {
 				if !pc.top[i] {
@@ -71,7 +70,7 @@ func CheckTypes(profile dialect.LexerProfile, dialectName string, q *template.Qu
 				if len(params) == 0 {
 					continue
 				}
-				column := resolveColumn(res, ctes, col)
+				column := resolveColumn(profile, res, ctes, col)
 				if column == nil {
 					continue
 				}
@@ -167,7 +166,7 @@ func tokenText(sql string, ops []ptok) string {
 // unresolved, and nil when it resolves through a relation named like a
 // statement-level CTE: the CTE shadows the base table, so the catalog's
 // types are not the compared column's (under-report, never guess).
-func resolveColumn(res *rules.ColumnResolver, ctes []string, col []ptok) *cache.Column {
+func resolveColumn(profile dialect.LexerProfile, res *rules.ColumnResolver, ctes []string, col []ptok) *cache.Column {
 	name := identText(col[len(col)-1])
 	var c *cache.Column
 	var rel string
@@ -179,8 +178,9 @@ func resolveColumn(res *rules.ColumnResolver, ctes []string, col []ptok) *cache.
 	default:
 		return nil
 	}
+	may, _ := dialect.RelationFolds(profile)
 	for _, cte := range ctes {
-		if strings.EqualFold(cte, rel) {
+		if cte == may(rel) {
 			return nil
 		}
 	}
@@ -191,7 +191,19 @@ func resolveColumn(res *rules.ColumnResolver, ctes []string, col []ptok) *cache.
 // the identifier after WITH / RECURSIVE and after each depth-0 comma,
 // up to the main statement's verb. Only these can shadow a top-level
 // relation (a CTE inside a subquery scopes that subquery alone).
-func cteNames(toks []ptok) []string {
+//
+// Each name is returned as the engine's "may" relation key, the one the
+// resolved relation is compared under (so a possible shadow suppresses
+// the lint: under-report, never noise). On PostgreSQL that is the
+// server's folding — unquoted downcased over ASCII only, quoted exact —
+// so `"Users"` and `uſers` do not shadow `users`; strings.EqualFold
+// joined both and missed MySQL `İTEMS` ≡ `items` (lower_case_table_names=1).
+func cteNames(profile dialect.LexerProfile, toks []ptok) []string {
+	may, _ := dialect.RelationFolds(profile)
+	pgFold := true
+	if ci, ok := profile.(dialect.CaseInsensitiveIdents); ok && ci.CaseInsensitiveIdents() {
+		pgFold = false
+	}
 	if len(toks) == 0 || !toks[0].isIdent("WITH") {
 		return nil
 	}
@@ -208,7 +220,11 @@ func cteNames(toks []ptok) []string {
 		case t.Kind == dialect.KindComma:
 			expect = true
 		case expect && (t.Kind == dialect.KindIdent || t.Kind == dialect.KindQuotedIdent):
-			out = append(out, identText(t))
+			name := identText(t)
+			if pgFold && t.Kind == dialect.KindIdent {
+				name = dialect.ASCIILower(name)
+			}
+			out = append(out, may(name))
 			expect = false
 		}
 	}

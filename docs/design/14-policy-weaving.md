@@ -1054,7 +1054,17 @@ in the policy path did not match any engine:
   No silent leak was found through this path: the operand-position and
   CASE tracking fail closed on every misread probed.
 
-Pinned by `designate_fold_test.go`.
+- **Bound-name folding** (2026-11-21): `unquotedFoldChanges` keyed on
+  `strings.ToLower`, but PostgreSQL downcases unquoted identifiers over
+  ASCII only (PG 16: unquoted `É` names the alias `"É"`). It now uses
+  `dialect.ASCIILower`. Enforce also refuses (SQLETCH124) a non-bare
+  bound name under a `{}` predicate, as the weaver already did
+  (SQLETCH125): before, `"É"` on PostgreSQL was refused only by the
+  ToLower accident, with the false rationale "folds to `é`", and a
+  hand-written `é.tenant_id = …` was CREDITED on MySQL/SQLite while the
+  weaver refused the same occurrence — the passes must agree.
+
+Pinned by `designate_fold_test.go` and `bound_name_fold_test.go`.
 
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
