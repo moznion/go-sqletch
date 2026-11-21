@@ -63,12 +63,17 @@ func (TypeMap) GoType(oid uint32) (dialect.GoTypeRef, bool) {
 // substrings they swept in every declaration that merely contained the
 // word (LIFETIME, CANDIDATE), handing the caller a time.Time field for
 // a column holding an integer.
+//
+// Case folds ASCII only, as sqlite3AffinityType does (its
+// sqlite3UpperToLower table): Go's ToUpper turns the dotless `ı` into
+// `I`, so `ıntext` read as INTEGER where the engine gives TEXT affinity
+// (TestAffinityRef_MatchesEngine).
 func AffinityRef(decltype string) (dialect.TypeRef, bool) {
-	d := strings.ToLower(strings.TrimSpace(decltype))
+	d := dialect.ASCIILower(strings.TrimSpace(decltype))
 	if d == "" {
 		return dialect.TypeRef{}, false
 	}
-	u := strings.ToUpper(d)
+	u := dialect.ASCIIUpper(d)
 	ref := func(code uint32) (dialect.TypeRef, bool) {
 		return dialect.TypeRef{OID: code, Name: d}, true
 	}
@@ -108,7 +113,7 @@ func bareTypeName(d string) string {
 // stripped; resolution then follows the affinity rules, so any
 // declarable SQLite type name works.
 func (TypeMap) TypeByName(name string) (dialect.TypeRef, bool) {
-	n := strings.ToLower(strings.TrimSpace(name))
+	n := dialect.ASCIILower(strings.TrimSpace(name))
 	if i := strings.IndexByte(n, '('); i >= 0 {
 		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
 			n = strings.Join(strings.Fields(n[:i]+" "+n[i+j+1:]), " ")

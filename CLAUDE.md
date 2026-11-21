@@ -329,7 +329,7 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
 
 - `-- @param name: type` hints: parsed per query (the comment stays in
   the skeleton verbatim); resolved via the dialect's `TypeByName`
-  (lowercased, length args stripped); unknown param or type name →
+  (ASCII-lowercased, length args stripped); unknown param or type name →
   diagnostic. On Tier 2 they SUPPLY the type (mandatory). On Tier 1
   they ASSERT it: an annotation that disagrees with the oracle's
   inferred OID is SQLETCH213 and the oracle's type wins — never a
@@ -795,6 +795,11 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `"COUNT"` / unquoted `mİn` are user functions — lowering them narrowed
   NULL results on a real server), MySQL/SQLite `dialect.ASCIILower`
   (MySQL 8.4 matches builtins ASCII-only). Never TiDB's `FnName.L`.
+- Type names (2026-11-21): `TypeByName` on all three dialects and SQLite
+  `AffinityRef` (engine decltypes) fold with `dialect.ASCIILower` /
+  `ASCIIUpper` — `İnt4`/`bİgint` are unknown types (SQLETCH311), and
+  `ıntext` is TEXT affinity as in sqlite3AffinityType
+  (`TestAffinityRef_MatchesEngine` uses the bundled engine as oracle).
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

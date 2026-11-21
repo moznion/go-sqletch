@@ -148,9 +148,11 @@ var typesByName = map[string]dialect.TypeRef{
 }
 
 // TypeByName resolves a SQL type name from a `-- @param` hint.
-// "bigint unsigned" style modifiers fold into the flag bits.
+// "bigint unsigned" style modifiers fold into the flag bits. Case folds
+// ASCII only, as MySQL's keyword lookup does: `bİgint` is ERROR 1064 on
+// the server, though strings.ToLower makes it bigint.
 func (TypeMap) TypeByName(name string) (dialect.TypeRef, bool) {
-	n := strings.ToLower(strings.TrimSpace(name))
+	n := dialect.ASCIILower(strings.TrimSpace(name))
 	// Strip length/precision arguments: varchar(16) -> varchar.
 	if i := strings.IndexByte(n, '('); i >= 0 {
 		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
