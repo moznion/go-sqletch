@@ -790,6 +790,11 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   read). Keywords are recognized with `dialect.ASCIIUpper` everywhere —
   never `strings.ToUpper` (`lımıt`/`offſet`/`caſe` are identifiers to
   every engine).
+- Builtin function names (`TargetItem.FuncName`, the nullability
+  whitelist key, 2026-11-19): PostgreSQL EXACT as parsed (quoted
+  `"COUNT"` / unquoted `mİn` are user functions — lowering them narrowed
+  NULL results on a real server), MySQL/SQLite `dialect.ASCIILower`
+  (MySQL 8.4 matches builtins ASCII-only). Never TiDB's `FnName.L`.
 
 ## Known v0.1 decisions and limits (documented, revisit deliberately)
 

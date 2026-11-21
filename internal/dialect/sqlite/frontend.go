@@ -1355,7 +1355,8 @@ func (t *tree) TargetItems() []dialect.TargetItem {
 					}
 				}
 			case *rsql.Call:
-				item.FuncName = strings.ToLower(e.Name.Name)
+				// SQLite matches function names ASCII-only.
+				item.FuncName = dialect.ASCIILower(e.Name.Name)
 				// A plain aggregate over one bare column: no FILTER,
 				// no OVER, not the star form.
 				if e.Filter == nil && e.Over == nil && !e.Star.IsValid() && len(e.Args) == 1 {
@@ -1492,7 +1493,7 @@ func totalExpr(e rsql.Expr) bool {
 		// NULL operand.
 		return totalExpr(v.X)
 	case *rsql.Call:
-		if v.Name != nil && strings.EqualFold(v.Name.Name, "coalesce") {
+		if v.Name != nil && dialect.ASCIILower(v.Name.Name) == "coalesce" {
 			for _, arg := range v.Args {
 				if totalExpr(arg) {
 					return true

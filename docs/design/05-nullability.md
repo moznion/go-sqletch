@@ -186,6 +186,16 @@ exact alignment: any star target item, or a length mismatch between
 target items and described columns, disables it — a `count(*)` target
 must never vouch for a differently-indexed column.
 
+The whitelist keys on `TargetItem.FuncName`, which each facade spells
+the way its ENGINE matches builtin names (owner decision 2026-11-17
+"engine keys", applied to function names 2026-11-19): PostgreSQL exact
+as the parser reports it (it downcases unquoted ASCII only), MySQL and
+SQLite ASCII-lowered (MySQL 8.4: `İFNULL(NULL, 1)` is "FUNCTION
+d.İFNULL does not exist"). A Go fold made the user functions `"COUNT"`
+and `mİn` impersonate count/min on PostgreSQL — NULL results narrowed,
+pinned in `nullability_soundness_devdb_test.go`
+(`quoted_uppercase_function_is_not_count`, `non_ascii_function_is_not_min`).
+
 ## 3. Column decision
 
 Per result column, in order:
