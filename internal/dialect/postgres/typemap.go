@@ -119,9 +119,11 @@ func (TypeMap) WritableName(oid uint32) (string, bool) {
 	return n, ok
 }
 
-// TypeByName resolves a SQL type name from a `-- @param` hint.
+// TypeByName resolves a SQL type name from a `-- @param` hint. Case
+// folds ASCII only, as the server's downcasing of an unquoted name does:
+// `İnt4` is no type to PostgreSQL, though strings.ToLower makes it int4.
 func (TypeMap) TypeByName(name string) (dialect.TypeRef, bool) {
-	n := strings.ToLower(strings.TrimSpace(name))
+	n := dialect.ASCIILower(strings.TrimSpace(name))
 	// Strip length/precision arguments: varchar(16) -> varchar.
 	if i := strings.IndexByte(n, '('); i >= 0 {
 		if j := strings.IndexByte(n[i:], ')'); j >= 0 {

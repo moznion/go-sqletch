@@ -141,6 +141,12 @@ read them as LIMIT/UNION/OFFSET/CASE/RIGHT. Never upper-case a token
 with `strings.ToUpper` to compare it with a keyword. Builtin function
 names likewise (`TargetItem.FuncName`, design 05 §2): PostgreSQL exact,
 MySQL/SQLite `dialect.ASCIILower`.
+Type names likewise (each dialect's `TypeMap.TypeByName` for `-- @param`
+/ `-- @column` hints, and SQLite's `AffinityRef` over engine decltypes)
+fold with `dialect.ASCIILower`/`ASCIIUpper`: PG 16 says `type "İnt4" does
+not exist`, MySQL 8.4 rejects `bİgint` (ERROR 1064), and
+sqlite3AffinityType matches its substrings ASCII-only — `ıntext` is TEXT
+affinity, which `strings.ToUpper` used to read as INTEGER.
 
 Downstream limits stay: a `$` result-column name is SQLETCH307 (no
 collision-free Go spelling; alias it), as is a caseless one like `名前`
