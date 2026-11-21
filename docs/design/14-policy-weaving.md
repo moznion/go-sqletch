@@ -517,8 +517,7 @@ PostgreSQL, a non-recursive CTE body and a FROM-position subquery are
 eligible cores, scoped at their own WHERE like a branch. Sublinks,
 recursive CTEs, and MySQL/SQLite nested positions stay rejected.
 
-**Sublink refinement (owner decision 2026-11-21, §15; not yet
-implemented).** On PostgreSQL, the body of an `EXISTS`/`IN`/`ANY`/
+**Sublink refinement (owner decision 2026-11-21, §15).** On PostgreSQL, the body of an `EXISTS`/`IN`/`ANY`/
 `ALL`/scalar sublink in the WHERE or HAVING of an eligible core of a
 SELECT statement is an eligible core too.
 Other sublink positions and kinds, DML, and construct bodies stay
@@ -1513,8 +1512,7 @@ proof on real PostgreSQL and the Postgres leak fuzzer's nested seeds.
 
 ## 15. Sublink weaving, phase 1 (WHERE/HAVING subqueries)
 
-**Status: SETTLED (owner decision 2026-11-21, §15.9) — not yet
-implemented.** §14 left every sublink `SQLETCH125`. This section lifts
+**Status: IMPLEMENTED (2026-11-21, owner decisions §15.9).** §14 left every sublink `SQLETCH125`. This section lifts
 that for the most common sublink positions, on PostgreSQL only, and
 only in SELECT statements. Later phases are listed in §15.8 so the
 boundary is explicit.
@@ -1531,6 +1529,12 @@ Phase 1 makes a sublink's body an **eligible core** (§14) when:
      `x op SOME (…)` for any operator;
    - `ALL_SUBLINK` — `x op ALL (…)`;
    - `EXPR_SUBLINK` — a scalar subquery `(SELECT …)` used as a value.
+     A row comparison `(a, b) = (SELECT …)` is an `EXPR_SUBLINK` in the
+     raw parse tree as well (`ROWCOMPARE_SUBLINK` only appears after
+     parse analysis), so it is scoped too. Scoping is correct for it in
+     the same way as for a scalar subquery: it compares against the
+     in-scope row. This is a mechanical refinement made during
+     implementation.
 2. **The sublink lies in the WHERE or HAVING clause of an eligible
    core.** An eligible core is the statement itself, a set-operation
    branch (§13), a CTE body or FROM subquery (§14), or another
@@ -1559,9 +1563,8 @@ The positions that stay refused are:
 - **Sublinks in other clauses:** the SELECT list, `ORDER BY`,
   `GROUP BY`, a join's `ON`, `LIMIT`/`OFFSET`, window definitions,
   `VALUES` rows, and FROM-position function arguments;
-- **Other sublink kinds:** `ARRAY(…)`, row comparison
-  (`ROWCOMPARE_SUBLINK`), and `MULTIEXPR`
-  (`UPDATE … SET (a, b) = (SELECT …)`);
+- **Other sublink kinds:** `ARRAY(…)` and `MULTIEXPR`
+  (`UPDATE … SET (a, b) = (SELECT …)`, which is DML anyway);
 - **Any sublink in an UPDATE/DELETE/INSERT statement**;
 - **A sublink inside a template construct body** (§15.5);
 - **Shapes already refused:** a `WITH RECURSIVE` list inside a
@@ -1662,7 +1665,12 @@ read.
 sublink inside an `@if-present` body is therefore invisible to the
 lexical view. Its relation's token is in no lexical core, `locate`
 fails, and the occurrence is refused. That is fail-closed, and phase 1
-keeps it (owner decision Q2: construct bodies are phase 2). The
+keeps it (owner decision Q2: construct bodies are phase 2).
+`checkSetOpOccurrences` refuses a nested occurrence whose relation
+lies inside any construct's emission with a message that names the
+construct body, rather than with the guarded-join or "cannot be
+located" diagnostics. The reverse nesting, a construct inside a
+subquery, is already an R1 scan error (`SQLETCH006`). The
 limitation matters in practice: an optional filter `@if-present(tag)
 AND o.id IN (SELECT order_id FROM order_tags WHERE tag = :tag)
 @endif` over a designated `order_tags` stays `SQLETCH125`. The author
@@ -1723,6 +1731,7 @@ Still refused (`SQLETCH125`):
 ```sql
 SELECT u.id, (SELECT count(*) FROM orders o WHERE o.user_id = u.id) FROM users u   -- SELECT-list sublink (phase 2)
 SELECT a.id FROM acc a WHERE a.ids @> ARRAY(SELECT id FROM orders)                 -- ARRAY sublink (phase 2)
+SELECT a.id FROM acc a JOIN users u ON u.id IN (SELECT user_id FROM orders)        -- ON sublink (phase 2)
 DELETE FROM acc WHERE id IN (SELECT user_id FROM orders)                           -- DML (phase 3)
 SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM orders WHERE true)            -- with a {}-less predicate configured
 SELECT u.id FROM users u WHERE u.id > 0
@@ -1731,13 +1740,22 @@ SELECT u.id FROM users u WHERE u.id > 0
 
 ### 15.7 Tests
 
+Implemented as: `TestFrontend_NestedCores` (facade);
+`TestWeave_Sublink_Golden`, `TestWeave_Sublink_Unweavable`,
+`TestEnforce_Sublink_PerCore` and `TestWeave_Sublink_SQLiteStillRefused`
+(`internal/policy/weave_sublink_test.go`); and, in the leak fuzzer,
+`leakGen.sublinked` (raw[0] 0xEA..0xF1), the `tenant2Influence` oracle,
+`sublinkLeakSeeds`, and the devdb `TestPolicyWeaveNoLeak_SublinkSeedsAreLive`.
+The oracle has two perturbations: deleting tenant 2's rows, and moving
+them to values tenant 1 never holds. `leakData` is symmetric, so
+deletion alone cannot move IN/EXISTS membership.
+
 - **Facade:** `NestedCores` lists the bodies of EXISTS, NOT EXISTS,
   IN, NOT IN, `op ANY`/`SOME`, `op ALL` and scalar sublinks in WHERE
   and HAVING, including nested sublinks, sublinks in a CTE body or
   FROM subquery, a set operation inside IN, and sublinks inside
   `CASE` or function arguments. It lists nothing for
-  SELECT-list/ORDER BY/ON/LIMIT sublinks, `ARRAY`/row-compare
-  sublinks, or DML. The walk order is pinned.
+  SELECT-list/ORDER BY/ON/LIMIT sublinks, `ARRAY` sublinks, or DML. The walk order is pinned.
 - **Golden weaves:** the §15.6 shapes, plus idempotence inside a
   sublink, an ON-weave inside a sublink's outer join, a parenthesized
   body `IN ((SELECT …))`, and untouched shapes (a sublink over a
@@ -1793,7 +1811,7 @@ SELECT u.id FROM users u WHERE u.id > 0
   - `internal/policy/weave.go` (the hidden-read refusal): "a
     designated table appears inside a subquery or CTE body sqletch
     cannot scope (a subquery outside a WHERE/HAVING clause, an
-    ARRAY or row-comparison subquery, a WITH RECURSIVE body, a
+    ARRAY subquery, a WITH RECURSIVE body, a
     subquery inside a template construct, or a nested position this
     dialect or statement kind does not support)".
   - `docs/manual/08-diagnostics.md` SQLETCH125: "inside a SELECT-list,
@@ -1808,6 +1826,9 @@ SELECT u.id FROM users u WHERE u.id > 0
     `internal/dialect/frontend.go` `NestedCores` doc comment, and
     CLAUDE.md are updated to match.
 
-  These texts describe phase 1 behaviour, so they ship with the
-  implementation and not with this design change. Shipping them
-  earlier would document behaviour that does not exist yet.
+  These texts describe phase 1 behaviour, so they shipped with the
+  implementation and not with the design change. In the final wording,
+  `weave.go` names "a subquery outside a WHERE/HAVING clause, an ARRAY
+  subquery, a WITH RECURSIVE body, or a nested position this dialect or
+  statement kind does not support". A subquery inside a construct body
+  has its own diagnostic (§15.5).

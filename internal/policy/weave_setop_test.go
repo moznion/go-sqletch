@@ -118,8 +118,8 @@ func TestWeave_SetOp_Unweavable(t *testing.T) {
 		name, body, wantMsg string
 	}{
 		{
-			name:    "subquery inside a branch",
-			body:    "SELECT id FROM users WHERE id IN (SELECT user_id FROM orders) UNION SELECT id FROM archive",
+			name:    "SELECT-list subquery inside a branch",
+			body:    "SELECT id, (SELECT max(id) FROM orders) AS m FROM users UNION SELECT id, 0 FROM archive",
 			wantMsg: "subquery",
 		},
 		{

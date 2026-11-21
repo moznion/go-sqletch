@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -190,7 +191,7 @@ func newMySQLLeakEngine(tb testing.TB) leakEngine {
 }
 
 func FuzzPolicyWeaveNoLeak_Postgres(f *testing.F) {
-	for _, s := range append(leakSeeds(), nestedLeakSeeds()...) {
+	for _, s := range slices.Concat(leakSeeds(), nestedLeakSeeds(), sublinkLeakSeeds()) {
 		f.Add(s)
 	}
 	eng := newPostgresLeakEngine(f)
@@ -241,6 +242,38 @@ func TestPolicyWeaveNoLeak_NestedSeedsAreLive(t *testing.T) {
 		}
 		if !readsT2 {
 			t.Errorf("nested seed %d never reads tenant 2 unwoven; its leak check is vacuous:\n%s", i, lc.src)
+		}
+	}
+}
+
+// The sublink seeds must stay usable on PostgreSQL (woven, not refused)
+// and their unwoven queries must be influenced by tenant 2's rows —
+// otherwise the influence oracle (design 14 §15.7) judges them
+// vacuously.
+func TestPolicyWeaveNoLeak_SublinkSeedsAreLive(t *testing.T) {
+	eng := newPostgresLeakEngine(t)
+	d := postgresLeakDialect
+	for i, raw := range sublinkLeakSeeds() {
+		lc := newLeakGen(raw, d).generate()
+		if !lc.influence {
+			t.Fatalf("sublink seed %d is not judged by the influence oracle:\n%s", i, lc.src)
+		}
+		if !checkNoLeak(t, d, eng, raw) {
+			t.Errorf("sublink seed %d is not usable (refused or unrunnable):\n%s", i, lc.src)
+			continue
+		}
+		drv := driverFor(config.Config{Dialect: d.name})
+		fl, _ := template.NewScanner(drv.profile).ScanFile("q.sql", []byte(lc.src))
+		r, err := ast.Render(drv.profile, fl.Queries[0], nil)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		pert, err := tenant2Influence(t, d, eng, r.SQL, leakArgs(r.ParamsSeq))
+		if err != nil {
+			t.Fatalf("unwoven query fails: %v\n%s", err, r.SQL)
+		}
+		if pert == "" {
+			t.Errorf("sublink seed %d is never influenced by tenant 2 unwoven; its leak check is vacuous:\n%s", i, lc.src)
 		}
 	}
 }

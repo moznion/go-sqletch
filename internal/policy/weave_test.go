@@ -260,8 +260,8 @@ func TestWeave_Rejections(t *testing.T) {
 			wantMsg: "no ON expression",
 		},
 		{
-			name:    "subquery-only occurrence",
-			src:     "-- name: Q :many\nSELECT id FROM reports WHERE order_id IN (SELECT id FROM orders)\n",
+			name:    "SELECT-list subquery occurrence",
+			src:     "-- name: Q :many\nSELECT id, (SELECT max(id) FROM orders) AS m FROM reports\n",
 			wantMsg: "subquery",
 		},
 		{
@@ -282,8 +282,8 @@ func TestWeave_Rejections(t *testing.T) {
 		{
 			// A set-operation branch itself is woven (design 14 §13); a
 			// subquery INSIDE a branch is still unscoped territory.
-			name:    "subquery inside a set-operation branch",
-			src:     "-- name: Q :many\nSELECT id FROM archive WHERE id IN (SELECT id FROM orders) UNION SELECT id FROM users\n",
+			name:    "SELECT-list subquery inside a set-operation branch",
+			src:     "-- name: Q :many\nSELECT id, (SELECT max(id) FROM orders) AS m FROM archive UNION SELECT id, 0 FROM users\n",
 			wantMsg: "subquery",
 		},
 		{
