@@ -123,8 +123,8 @@ func TestWeave_SetOp_Unweavable(t *testing.T) {
 			wantMsg: "subquery",
 		},
 		{
-			name:    "statement-level CTE body",
-			body:    "WITH x AS (SELECT id FROM orders) SELECT id FROM x UNION SELECT id FROM users",
+			name:    "statement-level WITH RECURSIVE body",
+			body:    "WITH RECURSIVE x AS (SELECT id FROM orders) SELECT id FROM x UNION SELECT id FROM users",
 			wantMsg: "subquery",
 		},
 		{

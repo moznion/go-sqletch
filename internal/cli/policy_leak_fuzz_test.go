@@ -145,13 +145,23 @@ type leakGen struct {
 	// the policy variant) so every pre-existing seed decodes unchanged
 	// and the liveness test sees them rarely.
 	crWhere, crTail bool
+	// nest wraps a SELECT in a nested core the weaver scopes on
+	// PostgreSQL (design 14 §14): 1 = CTE body, 2 = FROM subquery,
+	// 3 = LATERAL subquery, 4 = CTE body holding a UNION ALL. Selected
+	// by raw[0] in 0xE2..0xE8 (low bit still picking the policy
+	// variant), so every pre-existing seed decodes unchanged.
+	nest int
 }
 
 // newLeakGen decodes raw: raw[0] picks the policy variant and the
 // lone-CR comment placement, the rest drives the productions.
 func newLeakGen(raw []byte, d leakDialect) *leakGen {
 	sel := raw[0] & 0xFE
-	return &leakGen{b: raw[1:], d: d, crWhere: sel == 0xF2 || sel == 0xF6, crTail: sel == 0xF4 || sel == 0xF6}
+	nest := 0
+	if sel >= 0xE2 && sel <= 0xE8 {
+		nest = int(sel-0xE0) / 2
+	}
+	return &leakGen{b: raw[1:], d: d, crWhere: sel == 0xF2 || sel == 0xF6, crTail: sel == 0xF4 || sel == 0xF6, nest: nest}
 }
 
 // clauseLead is the separator before a clause keyword: a newline, or
@@ -405,6 +415,9 @@ type leakCase struct {
 
 func (g *leakGen) generate() leakCase {
 	hdr := "-- name: Q :many\n-- @param f: " + g.d.paramType + "\n"
+	if g.nest > 0 {
+		return leakCase{src: hdr + g.nested() + "\n"}
+	}
 	switch g.pick(10) {
 	case 7: // UPDATE
 		var s string
@@ -461,6 +474,49 @@ func (g *leakGen) generate() leakCase {
 		fromSQL, rels := g.from()
 		return leakCase{src: hdr + "SELECT " + projection(rels) + "\nFROM " + fromSQL + g.where(rels) + g.tail(rels) + "\n"}
 	}
+}
+
+// nested emits a SELECT whose designated reads all sit in a nested core
+// (design 14 §14). The inner query carries no construct — constructs
+// are top-level only (R1) — so its WHERE is a plain expression; the
+// outer query adds an optional tail.
+func (g *leakGen) nested() string {
+	inner := func() string {
+		fromSQL, rels := g.from()
+		s := "SELECT " + projection(rels) + "\nFROM " + fromSQL
+		if g.pick(4) != 0 {
+			s += "\nWHERE " + g.expr(rels, 0)
+		}
+		return s
+	}
+	var s string
+	switch g.nest {
+	case 1:
+		s = "WITH w AS (\n" + inner() + "\n)\nSELECT * FROM w"
+	case 2:
+		s = "SELECT * FROM (\n" + inner() + "\n) AS w"
+	case 3:
+		s = "SELECT w.* FROM acc AS x CROSS JOIN LATERAL (\n" + inner() + "\n) AS w"
+	default:
+		// Both branches project the same column list (s0 only), since
+		// UNION needs matching arity.
+		branch := func() string {
+			o := []rel{{"o", true}}
+			b := "SELECT o.secret AS s0 FROM orders AS o"
+			if g.pick(2) == 0 {
+				b += " WHERE " + g.expr(o, 1)
+			}
+			return b
+		}
+		s = "WITH w AS (\n" + branch() + "\nUNION ALL\n" + branch() + "\n)\nSELECT * FROM w"
+	}
+	switch g.pick(3) {
+	case 1:
+		s += "\nORDER BY 1"
+	case 2:
+		s += "\nLIMIT 1000"
+	}
+	return s
 }
 
 // leakPolicies returns the tenant policy in one of two spellings: the
@@ -696,6 +752,24 @@ func leakSeeds() [][]byte {
 		// AND o.v = 1 ELSE o.v = 1 END` — a scoping conjunct confined to
 		// one CASE arm.
 		{0, 0, 0, 1, 6, 0, 1, 3, 6, 1, 0, 1, 4, 0, 1, 4, 0, 1, 4, 1},
+	}
+}
+
+// nestedLeakSeeds are nested-core shapes (design 14 §14): a CTE body,
+// a FROM subquery, a LATERAL subquery, and a CTE body holding a UNION
+// ALL, over a plain read, a LEFT JOIN null-extended side, a self join,
+// and the OR predicate variant. Only PostgreSQL weaves them; elsewhere
+// they are refused (SQLETCH125), which is not a finding.
+func nestedLeakSeeds() [][]byte {
+	return [][]byte{
+		{0xE2, 0, 0, 0}, // CTE body, plain read, no WHERE
+		{0xE3, 3, 0, 1, 2, 6, 0, 0, 11, 6, 0, 0, 0}, // CTE body, LEFT JOIN null-extended side, WHERE 1 = 1 OR o.id = 1; OR predicate
+		{0xE4, 8, 0, 0},    // FROM subquery, self join (two occurrences)
+		{0xE5, 9, 0, 0, 0}, // FROM subquery, join chain through the nullable side; OR predicate
+		{0xE6, 0, 0, 0},    // LATERAL subquery, plain read
+		{0xE6, 3, 0, 0, 0}, // LATERAL subquery, LEFT JOIN null-extended side
+		{0xE8, 1, 1, 0},    // CTE body holding a UNION ALL
+		{0xE9, 1, 1, 2},    // CTE body holding a UNION ALL, LIMIT; OR predicate
 	}
 }
 

@@ -313,6 +313,14 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   branches. Disagreement = SQLETCH125/124, never a best guess.
 - `exprScan` is the single WHERE-expression reader for statements
   and branches — extend it, don't fork it.
+- Nested-core weaving (doc 14 §14, owner decision 2026-11-20,
+  PostgreSQL only): non-recursive CTE bodies and FROM subqueries are
+  cores like set-op branches (`Tree.NestedCores`). Parser and lexical
+  cores are matched by RELATION LOCATION (`coreMatch`), never by index —
+  the lexical scan also opens sublink cores. `verifySetOpWeave` asks the
+  re-parsed tree which cores got a woven top-level WHERE conjunct; that
+  AST check, not lexical completeness, is what stops a conjunct landing
+  in an enclosing core. Sublinks and WITH RECURSIVE stay SQLETCH125.
 - MySQL: a set operation is StmtOther ⇒ R1 SQLETCH103 before weaving;
   admitting it is a separate decision (nullability, native oracle).
 - R1 set-operation operands (spec R1, 2026-09-29): WHERE/HAVING

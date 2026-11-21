@@ -13,7 +13,10 @@ import (
 	gomysqlclient "github.com/go-mysql-org/go-mysql/client"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/moznion/go-sqletch/internal/ast"
+	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/template"
 )
 
 // The server dialects of FuzzPolicyWeaveNoLeak_SQLite (see
@@ -186,7 +189,7 @@ func newMySQLLeakEngine(tb testing.TB) leakEngine {
 }
 
 func FuzzPolicyWeaveNoLeak_Postgres(f *testing.F) {
-	for _, s := range leakSeeds() {
+	for _, s := range append(leakSeeds(), nestedLeakSeeds()...) {
 		f.Add(s)
 	}
 	eng := newPostgresLeakEngine(f)
@@ -203,6 +206,42 @@ func FuzzPolicyWeaveNoLeak_MySQL(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		checkNoLeak(t, mysqlLeakDialectFor(), eng, raw)
 	})
+}
+
+// The nested seeds must stay usable on PostgreSQL (woven, not refused)
+// and their unwoven queries must read tenant 2 — otherwise the
+// nested-core property (design 14 §14) is checked vacuously.
+func TestPolicyWeaveNoLeak_NestedSeedsAreLive(t *testing.T) {
+	eng := newPostgresLeakEngine(t)
+	d := postgresLeakDialect
+	for i, raw := range nestedLeakSeeds() {
+		lc := newLeakGen(raw, d).generate()
+		if !checkNoLeak(t, d, eng, raw) {
+			t.Errorf("nested seed %d is not usable (refused or unrunnable):\n%s", i, lc.src)
+			continue
+		}
+		drv := driverFor(config.Config{Dialect: d.name})
+		fl, _ := template.NewScanner(drv.profile).ScanFile("q.sql", []byte(lc.src))
+		r, err := ast.Render(drv.profile, fl.Queries[0], nil)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		cols, rows, err := eng.query(r.SQL, leakArgs(r.ParamsSeq))
+		if err != nil {
+			t.Fatalf("unwoven query fails: %v\n%s", err, r.SQL)
+		}
+		readsT2 := false
+		for _, row := range rows {
+			for j, c := range cols {
+				if strings.HasPrefix(c, "s") && row[j] == "T2" {
+					readsT2 = true
+				}
+			}
+		}
+		if !readsT2 {
+			t.Errorf("nested seed %d never reads tenant 2 unwoven; its leak check is vacuous:\n%s", i, lc.src)
+		}
+	}
 }
 
 // The liveness guard per server dialect: the generator must stay inside

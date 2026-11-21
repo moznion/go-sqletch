@@ -34,20 +34,32 @@ type branchScan struct {
 	whereKwEnd, tailStart, end int
 }
 
-// setOpScan is the lexical split of a set-operation statement into its
-// leaf cores, in document order — the independent counterpart of
-// dialect.Tree.SetOpBranches that the weaver and the enforcement pass
-// cross-check against it.
+// setOpScan is the lexical split of a statement into its leaf cores —
+// the independent counterpart of dialect.Tree.SetOpBranches and
+// dialect.Tree.NestedCores that the weaver and the enforcement pass
+// cross-check against it (design 14 §13.2, §14.3). The statement's own
+// cores come first, in document order; the cores of parenthesized
+// queries nested inside them (WITH bodies, FROM subqueries, sublinks)
+// follow, outer before inner.
 type setOpScan struct {
 	// ok is false when the statement does not have the modeled shape
 	// (then nothing may be woven into, or credited to, any branch).
 	ok       bool
 	branches []*branchScan
+	// top is the number of the statement's own cores: branches[:top]
+	// are they, branches[top:] the nested ones.
+	top int
 	// branchOf maps the template offset of every original (non-woven)
-	// token inside a core to that core's index. It is how an AST
-	// relation's location is attributed to a lexical branch.
+	// token inside a core to the index of the INNERMOST core holding it.
+	// It is how an AST relation's location is attributed to a lexical
+	// core.
 	branchOf map[int]int
 }
+
+// nestedRegion is a parenthesized query met while scanning a core or a
+// WITH list: i is the index of its first element (after the '('), d
+// the paren depth of its content.
+type nestedRegion struct{ i, d int }
 
 // soElem is one significant element of a query's item stream: a token
 // of a skeleton item, or a whole construct item.
@@ -94,7 +106,79 @@ func scanSetOp(profile dialect.LexerProfile, q *template.QueryTemplate) setOpSca
 			return setOpScan{}
 		}
 	}
+	p.out.top = len(p.out.branches)
+	p.nested()
 	return p.out
+}
+
+// nested parses the parenthesized queries recorded during the flat pass
+// (design 14 §14.3), outer before inner: each becomes cores of its own,
+// and its tokens are re-attributed to them in branchOf. The flat pass
+// is untouched by this — the enclosing core's WHERE scan already saw
+// every token of the region. A region that does not parse as a query
+// is rolled back whole: its tokens stay with the enclosing core, so an
+// AST core living there collides with the enclosing one and is refused,
+// never woven into the enclosing core's WHERE.
+func (p *setOpParser) nested() {
+	for qi := 0; qi < len(p.regions); qi++ {
+		r := p.regions[qi]
+		nBranches, nRegions := len(p.out.branches), len(p.regions)
+		p.saved = map[int]int{}
+		p.i, p.failed = r.i, false
+		p.query(r.d)
+		if !p.failed {
+			if e, ok := p.peek(); !ok || e.item != nil || e.depth != r.d-1 || e.tok.Kind != dialect.KindRParen {
+				p.failed = true
+			}
+		}
+		if p.failed {
+			for off, prev := range p.saved {
+				if prev < 0 {
+					delete(p.out.branchOf, off)
+				} else {
+					p.out.branchOf[off] = prev
+				}
+			}
+			p.out.branches = p.out.branches[:nBranches]
+			p.regions = p.regions[:nRegions]
+		}
+		p.saved = nil
+	}
+	p.failed = false
+}
+
+// startsQuery reports whether the element at index i opens a query: a
+// bare SELECT, WITH, TABLE or VALUES keyword, possibly behind further
+// opening parentheses (`((SELECT …))`). A join group `(a JOIN b …)`
+// does not qualify. Missing a query here is never a leak — the
+// post-weave AST check (verifySetOpWeave) refuses a conjunct that did
+// not land in its own core — but every shape recognized here is one
+// that can be woven.
+func (p *setOpParser) startsQuery(i int) bool {
+	for ; i < len(p.elems); i++ {
+		e := p.elems[i]
+		if e.item == nil && e.tok.Kind == dialect.KindLParen {
+			continue
+		}
+		return e.ident("SELECT") || e.ident("WITH") || e.ident("TABLE") || e.ident("VALUES")
+	}
+	return false
+}
+
+// attribute records the core holding the token at template offset off,
+// remembering the previous owner while a nested region is being parsed
+// so a failed region can be rolled back.
+func (p *setOpParser) attribute(off, idx int) {
+	if p.saved != nil {
+		if _, seen := p.saved[off]; !seen {
+			prev, had := p.out.branchOf[off]
+			if !had {
+				prev = -1
+			}
+			p.saved[off] = prev
+		}
+	}
+	p.out.branchOf[off] = idx
 }
 
 // setOpElems flattens the item stream into significant elements.
@@ -151,6 +235,11 @@ type setOpParser struct {
 	i       int
 	out     setOpScan
 	failed  bool
+	// regions are the parenthesized queries found so far, parsed after
+	// the flat pass; saved holds the pre-region branchOf owners while a
+	// region is being parsed (nil otherwise).
+	regions []nestedRegion
+	saved   map[int]int
 }
 
 func (p *setOpParser) peek() (soElem, bool) {
@@ -222,6 +311,11 @@ func (p *setOpParser) skipWith(d int) {
 			p.failed = true
 			return
 		}
+		// A query body (not a data-modifying one) is a nested region; a
+		// parenthesized body `((SELECT …) UNION …)` is one too.
+		if p.startsQuery(p.i + 1) {
+			p.regions = append(p.regions, nestedRegion{i: p.i + 1, d: d + 1})
+		}
 		p.skipParen(d)
 		if p.failed {
 			return
@@ -290,7 +384,7 @@ func (p *setOpParser) core(d int) {
 				b.where = ex.result()
 				ex = nil
 			}
-			if ex == nil && sawFrom && b.whereKwEnd < 0 && b.tailStart < 0 && whereBoundary(e.item) {
+			if ex == nil && e.depth == d && sawFrom && b.whereKwEnd < 0 && b.tailStart < 0 && whereBoundary(e.item) {
 				b.tailStart = e.item.Raw().Start
 			}
 			b.end = e.item.Raw().End
@@ -302,7 +396,10 @@ func (p *setOpParser) core(d int) {
 			break
 		}
 		if !e.synth {
-			p.out.branchOf[e.abs] = idx
+			p.attribute(e.abs, idx)
+		}
+		if e.tok.Kind == dialect.KindLParen && p.startsQuery(p.i+1) {
+			p.regions = append(p.regions, nestedRegion{i: p.i + 1, d: e.depth + 1})
 		}
 		if ex != nil && ex.step(e.tok, e.up, e.abs, e.depth == d, e.dotted) {
 			b.where = ex.result()

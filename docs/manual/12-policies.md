@@ -79,14 +79,45 @@ statement and the executed statement differ.
   UNION ALL (SELECT id FROM orders o WHERE (o.tenant_id = $1) LIMIT 5)
   ```
 
-  The set operation's own `WITH`/`ORDER BY`/`LIMIT` belong to no
-  operand: a designated table there is a subquery/CTE read (below).
+  The set operation's own `ORDER BY`/`LIMIT` belong to no operand: a
+  designated table there is a subquery read (below); its `WITH`
+  bodies are scoped like any CTE body (next item).
   (MySQL rejects top-level set operations altogether, `SQLETCH103`.)
 
+- On PostgreSQL, the body of a **non-recursive CTE** and a
+  **FROM-position subquery** (`FROM (SELECT …) d`, `JOIN (…) d ON …`,
+  `LATERAL (…)`) are scoped the same way, at their own `WHERE` — or
+  their own join's `ON` — recursively, with a set operation inside one
+  split into its operands. This is what lets a query read several
+  designated tables through one `UNION ALL` and filter, sort, and page
+  the result once:
+
+  ```sql
+  -- written
+  WITH a AS (
+      SELECT o.id, o.created_at FROM orders o
+      UNION ALL
+      SELECT i.id, i.created_at FROM order_items i
+  )
+  SELECT id FROM a WHERE id > :min ORDER BY created_at LIMIT 10
+  -- woven
+  WITH a AS (
+      SELECT o.id, o.created_at FROM orders o WHERE (o.tenant_id = $1)
+      UNION ALL
+      SELECT i.id, i.created_at FROM order_items i WHERE (i.tenant_id = $1)
+  )
+  SELECT id FROM a WHERE id > $2 ORDER BY created_at LIMIT 10
+  ```
+
+  A predicate without a `{}` placeholder is not woven into a CTE body
+  or FROM subquery (`SQLETCH125`): with no relation to bind, an
+  unqualified column there could resolve to an outer relation.
+
 Positions sqletch cannot scope are rejected with `SQLETCH125` rather
-than silently skipped: a designated table inside a subquery or CTE
-(also one inside a set-operation operand, or in the set operation's
-own clauses); read by a `TABLE t`/`VALUES` operand, which has no
+than silently skipped: a designated table inside a WHERE/SELECT-list
+subquery (`IN (SELECT …)`, `EXISTS (…)`, a scalar subquery), a
+`WITH RECURSIVE` body, or — on MySQL and SQLite — any CTE body or
+subquery; read by a `TABLE t`/`VALUES` operand, which has no
 `WHERE` to extend; joined with `USING`/`NATURAL` on a
 null-extended side (no `ON` expression to extend — rewrite as an
 explicit `ON`); introduced by a guarded `@if-present` join; or bound
@@ -163,7 +194,8 @@ Weaving covers what the weaver reaches; a separate enforcement pass
 proves the invariant from the compiled result itself: for every
 relation whose table a policy designates, a matching conjunct must be
 present in the query's WHERE clause — for a set operation, the WHERE
-clause of the relation's own operand — **in every reachable shape**
+clause of the relation's own operand; for a CTE body or FROM subquery,
+its own WHERE clause — **in every reachable shape**
 (`SQLETCH124` otherwise). It runs in the same pass the LSP uses, so a
 violation appears live in your editor.
 

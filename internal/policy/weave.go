@@ -56,7 +56,13 @@ type Result struct {
 // must re-parse to the same branch structure; any disagreement is
 // SQLETCH125.
 //
-// A designated table the weaver cannot scope — subquery/CTE position,
+// On PostgreSQL the same holds for every nested core the parser lists
+// (§14) — a non-recursive CTE body or a FROM subquery — matched to the
+// lexical core scan by relation location and re-checked against the
+// re-parsed woven statement.
+//
+// A designated table the weaver cannot scope — a sublink, a WITH
+// RECURSIVE body, a nested position the dialect does not support,
 // USING/NATURAL join on a null-extended side, guarded join, non-bare
 // bound name, conflicting parameter hint — is SQLETCH125: loud and
 // incomplete beats silent and incomplete.
@@ -92,6 +98,7 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	if nBranches > 0 {
 		so := scanSetOp(profile, q)
 		w.setop = &so
+		w.cores = matchCores(rels, so, maxR)
 	} else {
 		w.where = whereClause(profile, q)
 	}
@@ -166,7 +173,7 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 		// branch core's — the same four cases either way.
 		whereKwEnd, tailStart, end, where := q.WhereKwEnd, q.TailStart, q.StmtEnd, w.where
 		if b >= 0 {
-			bs := w.setop.branches[b]
+			bs := w.setop.branches[w.cores.lexOf[b]]
 			whereKwEnd, tailStart, end, where = bs.whereKwEnd, bs.tailStart, bs.end, bs.where
 		}
 		switch {
@@ -189,7 +196,11 @@ func Weave(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q *
 	woven := splice(q, ins)
 	registerParams(woven, res.Woven)
 	if nBranches > 0 {
-		if d, ok := w.verifySetOpWeave(fe, woven, res.Woven); !ok {
+		whereCores := map[int]bool{}
+		for _, b := range branchOrder {
+			whereCores[b] = true
+		}
+		if d, ok := w.verifySetOpWeave(fe, woven, res.Woven, whereCores); !ok {
 			return Result{Query: q, Diags: append(res.Diags, d)}
 		}
 	}
@@ -204,24 +215,28 @@ type whereNeed struct {
 	conj   string
 }
 
-// topRel is one top-level relation occurrence: a FROM/target relation
-// of the statement, or of one set-operation branch core (branch >= 0;
-// -1 outside a set operation).
+// topRel is one scoped relation occurrence: a FROM/target relation of
+// the statement, of one set-operation branch core, or of one nested
+// core (a CTE body or FROM subquery, design 14 §14). branch is the
+// occurrence's core index (-1 for the statement itself when it has a
+// single core and no nested cores); nested marks a nested core's.
 type topRel struct {
 	dialect.RelRef
 	branch int
+	nested bool
 }
 
-// topRelations returns the statement's top-level relation occurrences
-// and its set-operation branch count (0 when it is not a set
-// operation). Inside a set operation the occurrences are the branch
-// cores' own relations, tagged with their branch — the whole-statement
-// Relations() is meaningless there (PostgreSQL/MySQL report none,
-// SQLite the first core's only). Shared by Weave and Enforce so both
-// read the same occurrences.
+// topRelations returns the statement's scoped relation occurrences and
+// its core count (0 when the statement is a single core with no nested
+// cores — the pre-§13 whole-statement path). Otherwise the occurrences
+// are tagged with their core: the statement's own cores first (itself,
+// or its set-operation branches — the whole-statement Relations() is
+// meaningless inside a set operation: PostgreSQL/MySQL report none,
+// SQLite the first core's only), then Tree.NestedCores. Shared by
+// Weave and Enforce so both read the same occurrences.
 func topRelations(tree dialect.Tree) ([]topRel, int) {
-	bs := tree.SetOpBranches()
-	if bs == nil {
+	cores, nTop := coreTrees(tree)
+	if cores == nil {
 		rels := tree.Relations()
 		out := make([]topRel, len(rels))
 		for i, r := range rels {
@@ -230,21 +245,120 @@ func topRelations(tree dialect.Tree) ([]topRel, int) {
 		return out, 0
 	}
 	var out []topRel
-	for i, b := range bs {
-		for _, r := range b.Relations() {
-			out = append(out, topRel{RelRef: r, branch: i})
+	for i, c := range cores {
+		for _, r := range c.Relations() {
+			out = append(out, topRel{RelRef: r, branch: i, nested: i >= nTop})
 		}
 	}
-	return out, len(bs)
+	return out, len(cores)
 }
 
-// verifySetOpWeave re-parses the woven maximal rendering of a set
-// operation and requires the same branch structure: the same number of
-// branches, each with the same relations. Every insertion lands inside
-// one core's WHERE/ON slot, so this can only fail if the lexical split
+// coreTrees lists the statement's cores in topRelations' index order —
+// its own cores (itself, or its set-operation branches; nTop of them),
+// then Tree.NestedCores — or nil for a single-core statement with no
+// nested cores.
+func coreTrees(tree dialect.Tree) (cores []dialect.Tree, nTop int) {
+	nested := tree.NestedCores()
+	bs := tree.SetOpBranches()
+	if bs == nil && nested == nil {
+		return nil, 0
+	}
+	if bs == nil {
+		bs = []dialect.Tree{tree}
+	}
+	return append(append([]dialect.Tree{}, bs...), nested...), len(bs)
+}
+
+// coreMatch is the agreement between the parser's cores and the lexical
+// core scan (design 14 §14.3), established by relation location rather
+// than by index — the lexical scan also finds sublink cores the parser
+// does not list.
+type coreMatch struct {
+	// lexOf maps a parser core index to the lexical core holding every
+	// one of its located relations; absent when they are not all in one
+	// lexical core (or none could be located).
+	lexOf map[int]int
+	// owners counts, per lexical core, the distinct parser cores with a
+	// located relation in it.
+	owners map[int]int
+}
+
+// matchCores attributes every located relation to the innermost
+// lexical core holding its name token. A relation whose token is not
+// in any core (a guarded join's, inside a construct body) contributes
+// nothing; the occurrence loop refuses a designated one on its own.
+func matchCores(rels []topRel, so setOpScan, maxR ast.Rendering) coreMatch {
+	m := coreMatch{lexOf: map[int]int{}, owners: map[int]int{}}
+	if !so.ok {
+		return m
+	}
+	seen := map[int]map[int]bool{} // parser core -> lexical cores
+	for _, r := range rels {
+		if r.Loc < 0 {
+			continue
+		}
+		tOff, synth := maxR.Map.ToTemplate(r.Loc)
+		if synth {
+			continue
+		}
+		li, found := so.branchOf[tOff]
+		if !found {
+			continue
+		}
+		if seen[r.branch] == nil {
+			seen[r.branch] = map[int]bool{}
+		}
+		seen[r.branch][li] = true
+	}
+	for core, lex := range seen {
+		for li := range lex {
+			m.owners[li]++
+			if len(lex) == 1 {
+				m.lexOf[core] = li
+			}
+		}
+	}
+	return m
+}
+
+// locate reports the lexical core a designated occurrence may be scoped
+// in: the occurrence's own token lies in it, its parser core maps to it
+// alone, and no other parser core has a relation there. Anything less
+// is a disagreement between the two views.
+func (m coreMatch) locate(r topRel, so setOpScan, maxR ast.Rendering) (int, bool) {
+	if !so.ok || r.Loc < 0 {
+		return 0, false
+	}
+	tOff, synth := maxR.Map.ToTemplate(r.Loc)
+	if synth {
+		return 0, false
+	}
+	li, found := so.branchOf[tOff]
+	if !found {
+		return 0, false
+	}
+	if mapped, ok := m.lexOf[r.branch]; !ok || mapped != li || m.owners[li] != 1 {
+		return 0, false
+	}
+	return li, true
+}
+
+// verifySetOpWeave re-parses the woven maximal rendering of a
+// multi-core statement and requires the same core structure: the same
+// cores, each with the same relations. Every insertion lands inside one
+// core's WHERE/ON slot, so this can only fail if the lexical split
 // mis-placed one — which must surface as SQLETCH125, never as a woven
 // statement of a different shape.
-func (w *weaver) verifySetOpWeave(fe dialect.Frontend, woven *template.QueryTemplate, wps []WovenPolicy) (diagnostics.Diagnostic, bool) {
+//
+// It also asks the PARSER where the woven WHERE conjuncts landed
+// (design 14 §14.3): exactly the cores in whereCores must have a
+// top-level WHERE conjunct located in woven (synthesized) text. A
+// conjunct the lexical split put into the wrong core — an enclosing
+// core, because a nested query went unrecognized — shows up as a woven
+// conjunct in a core that should have none and as none in the core
+// that needed it; either is a refusal, whatever the lexical views
+// agreed on.
+func (w *weaver) verifySetOpWeave(fe dialect.Frontend, woven *template.QueryTemplate, wps []WovenPolicy, whereCores map[int]bool) (diagnostics.Diagnostic, bool) {
 	name := ""
 	for _, wp := range wps {
 		if !wp.OptedOut && len(wp.Conjuncts) > 0 {
@@ -271,6 +385,22 @@ func (w *weaver) verifySetOpWeave(fe dialect.Frontend, woven *template.QueryTemp
 	}
 	for i := range got {
 		if got[i].branch != w.rels[i].branch || got[i].Table != w.rels[i].Table || got[i].Alias != w.rels[i].Alias {
+			return bad()
+		}
+	}
+	cores, _ := coreTrees(tree)
+	for i, c := range cores {
+		wovenConj := false
+		for _, loc := range c.TopConjunctLocs() {
+			if loc < 0 {
+				continue
+			}
+			if _, synth := r.Map.ToTemplate(loc); synth {
+				wovenConj = true
+				break
+			}
+		}
+		if wovenConj != whereCores[i] {
 			return bad()
 		}
 	}
@@ -304,11 +434,13 @@ type weaver struct {
 	kind dialect.StmtKind
 	rels []topRel
 	deep []dialect.TableRef
-	// nBranches is the set-operation branch count (0 outside a set
-	// operation); setop is the lexical branch split, non-nil exactly
-	// when nBranches > 0.
+	// nBranches is the core count (0 for a single-core statement with no
+	// nested cores, design 14 §14); setop is the lexical core split and
+	// cores its agreement with the parser's, set exactly when
+	// nBranches > 0.
 	nBranches int
 	setop     *setOpScan
+	cores     coreMatch
 	// conflict reports a statement whose conflict handling modifies
 	// existing rows (ON CONFLICT DO UPDATE, MySQL ON DUPLICATE KEY
 	// UPDATE / REPLACE, SQLite INSERT/UPDATE OR REPLACE) — refused on a
@@ -729,7 +861,18 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 	}
 	if a.hidden {
 		return fail(w.unweavable(p, w.q.HeaderSpan,
-			"a designated table appears inside a subquery or CTE body, which sqletch cannot scope"))
+			"a designated table appears inside a subquery or CTE body sqletch cannot scope (a WHERE/SELECT-list subquery, a WITH RECURSIVE body, or a nested position this dialect does not support)"))
+	}
+	if !strings.Contains(p.Predicate, Placeholder) {
+		for _, occ := range a.topOcc {
+			if occ.nested {
+				// §14.1: with no relation reference, an unqualified column
+				// inside a CTE body or (LATERAL) FROM subquery may resolve to
+				// an outer or a different relation than the designated one.
+				return fail(w.unweavable(p, w.relSpan(occ.RelRef),
+					fmt.Sprintf("table %q is read inside a CTE body or FROM subquery, where a predicate without a `{}` placeholder cannot be bound to it", occ.Table)))
+			}
+		}
 	}
 	if w.setop != nil {
 		if d, ok := w.checkSetOpOccurrences(p, a); !ok {
@@ -880,9 +1023,9 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 // operand has no WHERE slot). A conjunct is only ever woven into the
 // branch both sides agree on.
 func (w *weaver) checkSetOpOccurrences(p *Policy, a applicability) (diagnostics.Diagnostic, bool) {
-	if !w.setop.ok || len(w.setop.branches) != w.nBranches {
+	if !w.setop.ok {
 		return w.unweavable(p, w.q.HeaderSpan,
-			"the branches of this set operation could not be located in the template (a set operator inside a construct body, or an operand shape sqletch does not model)"), false
+			"the cores of this statement (set-operation branches, CTE bodies, FROM subqueries) could not be located in the template (a set operator inside a construct body, or a shape sqletch does not model)"), false
 	}
 	for _, occ := range a.topOcc {
 		if w.guardedAt(occ.Loc) {
@@ -890,11 +1033,10 @@ func (w *weaver) checkSetOpOccurrences(p *Policy, a applicability) (diagnostics.
 			// with the guarded-join diagnostic by the occurrence loop.
 			continue
 		}
-		relOff, ok := w.relTemplateOff(occ.RelRef)
-		bi, found := w.setop.branchOf[relOff]
-		if !ok || !found || bi != occ.branch {
+		bi, ok := w.cores.locate(occ, *w.setop, w.maxR)
+		if !ok {
 			return w.unweavable(p, w.relSpan(occ.RelRef),
-				fmt.Sprintf("table %q in a set-operation branch cannot be located in the template", occ.Table)), false
+				fmt.Sprintf("table %q in a set-operation branch, CTE body, or FROM subquery cannot be located in the template", occ.Table)), false
 		}
 		if kw := w.setop.branches[bi].leadKw; kw != "SELECT" {
 			return w.unweavable(p, w.relSpan(occ.RelRef),
@@ -988,7 +1130,13 @@ func (w *weaver) wherePresent(branch int, conjunct string) bool {
 // one set-operation branch core.
 func (w *weaver) whereScan(branch int) clauseScan {
 	if branch >= 0 {
-		return w.setop.branches[branch].where
+		li, ok := w.cores.lexOf[branch]
+		if !ok {
+			// Unreachable after checkSetOpOccurrences; read as unknown
+			// (credits nothing) rather than as some other core's WHERE.
+			return clauseScan{start: -1, end: -1}
+		}
+		return w.setop.branches[li].where
 	}
 	return w.where
 }

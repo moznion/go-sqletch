@@ -553,6 +553,77 @@ func (t *tree) SetOpBranches() []dialect.Tree {
 // result columns by OID (resorigtbl), immune to name collisions.
 func (t *tree) HasUnresolvableProvenance() bool { return false }
 
+// NestedCores walks the statement's eligible nested positions (design
+// 14 §14): non-recursive WITH bodies that are queries, and FROM-position
+// RangeSubselects (through joins and TABLESAMPLE), recursively. A set
+// operation met anywhere is flattened into its leaf cores (larg before
+// rarg). SubLinks are never entered. RangeVar locations are absolute,
+// so every sub-facade's Relations stay located. Only a SELECT statement
+// has nested cores here: a DML statement's WITH/FROM is not walked, so
+// a designated read there stays a refused hidden read.
+func (t *tree) NestedCores() []dialect.Tree {
+	sel := t.sel()
+	if sel == nil {
+		return nil
+	}
+	var out []dialect.Tree
+	var query func(s *pgquery.SelectStmt, emit bool)
+	var fromItem func(n *pgquery.Node)
+	withBodies := func(wc *pgquery.WithClause) {
+		if wc == nil || wc.Recursive {
+			return
+		}
+		for _, c := range wc.Ctes {
+			cte := c.GetCommonTableExpr()
+			if cte == nil || cte.Ctequery == nil {
+				continue
+			}
+			if s := cte.Ctequery.GetSelectStmt(); s != nil {
+				query(s, true)
+			}
+		}
+	}
+	fromItem = func(n *pgquery.Node) {
+		switch {
+		case n == nil:
+		case n.GetRangeSubselect() != nil:
+			if sq := n.GetRangeSubselect().Subquery; sq != nil {
+				if s := sq.GetSelectStmt(); s != nil {
+					query(s, true)
+				}
+			}
+		case n.GetJoinExpr() != nil:
+			fromItem(n.GetJoinExpr().Larg)
+			fromItem(n.GetJoinExpr().Rarg)
+		case n.GetRangeTableSample() != nil:
+			fromItem(n.GetRangeTableSample().Relation)
+		}
+	}
+	// query visits one query: its WITH bodies, then its operand cores
+	// and their FROM subqueries. emit is false for the top-level
+	// statement, whose own cores Relations/SetOpBranches report.
+	query = func(s *pgquery.SelectStmt, emit bool) {
+		withBodies(s.WithClause)
+		if s.Op != pgquery.SetOperation_SETOP_NONE {
+			if s.Larg != nil {
+				query(s.Larg, emit)
+			}
+			if s.Rarg != nil {
+				query(s.Rarg, emit)
+			}
+			return
+		}
+		if emit {
+			out = append(out, subTree(&pgquery.Node{Node: &pgquery.Node_SelectStmt{SelectStmt: s}}))
+		}
+		for _, item := range s.FromClause {
+			fromItem(item)
+		}
+	}
+	query(sel, false)
+	return out
+}
+
 // fromItems returns the statement's FROM-position item list.
 func (t *tree) fromItems() []*pgquery.Node {
 	n := t.stmt()
