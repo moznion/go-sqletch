@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.0.10](https://github.com/moznion/go-sqletch/compare/v0.0.9...v0.0.10) - 2026-11-21
+
+- build(deps): bump Songmu/tagpr from 1.21.3 to 1.21.4 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/195
+- fix(postgres): lex numeric literals like scan.l (FuzzLexerVsPgScan crasher) by @moznion in https://github.com/moznion/go-sqletch/pull/198
+- fix(sqlite,mysql): lex numeric literals like their engines by @moznion in https://github.com/moznion/go-sqletch/pull/199
+- fix(sqlite): continue unquoted identifiers through `$` like the engine by @moznion in https://github.com/moznion/go-sqletch/pull/200
+- build(deps): bump the go-modules group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/197
+- build(deps): bump Songmu/tagpr from 1.21.4 to 1.22.0 by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/203
+- build(deps): bump the go-modules group across 1 directory with 4 updates by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/204
+- feat(sqlite): accept `$` in unquoted identifiers despite rqlite/sql by @moznion in https://github.com/moznion/go-sqletch/pull/201
+- feat(sqlite): accept non-ASCII unquoted identifiers; fold case ASCII-only by @moznion in https://github.com/moznion/go-sqletch/pull/202
+- fix(mysql,rules): compare identifiers with the engine's own keys by @moznion in https://github.com/moznion/go-sqletch/pull/205
+- fix(policy): designate and recognize keywords with the engine's keys by @moznion in https://github.com/moznion/go-sqletch/pull/206
+- fix(dialect): key builtin function names the way each engine does by @moznion in https://github.com/moznion/go-sqletch/pull/207
+- build(deps): bump github.com/jackc/pgx/v5 from 5.12.0 to 5.13.0 in the go-modules group across 1 directory by @dependabot[bot] in https://github.com/moznion/go-sqletch/pull/208
+- feat(policy): weave into CTE bodies and FROM subqueries on PostgreSQL by @moznion in https://github.com/moznion/go-sqletch/pull/209
+- fix(dialect): fold type names ASCII-only, the way each engine does by @moznion in https://github.com/moznion/go-sqletch/pull/210
+- fix(policy,lint): key bound names and CTE names the way the engine does by @moznion in https://github.com/moznion/go-sqletch/pull/212
+- fix: ASCII-only case and whitespace in the remaining Go-Unicode sites by @moznion in https://github.com/moznion/go-sqletch/pull/214
+
 ## [v0.0.9](https://github.com/moznion/go-sqletch/compare/v0.0.8...v0.0.9) - 2026-10-24
 
 - fix(cli): refuse symlinks under static-expansion output (SQLETCH306) by @moznion in https://github.com/moznion/go-sqletch/pull/178
