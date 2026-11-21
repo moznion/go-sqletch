@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- \xf0\x94\x8a0000000\n-- \xf0\x94\x8a0000000")

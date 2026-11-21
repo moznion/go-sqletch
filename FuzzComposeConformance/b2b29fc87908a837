@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:C :many\nFROM@if-present(y)@endif@if-present(x,b0,a1,a00)8@endif@if-present(a)@endif@if-present(z)@endifX2")
