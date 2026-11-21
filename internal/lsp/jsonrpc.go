@@ -122,10 +122,12 @@ func (c *conn) read() (*Message, error) {
 		if !ok {
 			return nil, fmt.Errorf("lsp: malformed header %q", line)
 		}
-		// Header names are case-insensitive; only Content-Length
-		// matters, the rest (Content-Type) are skipped.
-		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
-			length, err = strconv.Atoi(strings.TrimSpace(value))
+		// Header names are case-insensitive over ASCII (RFC 9110 field
+		// names are tokens); only Content-Length matters, the rest
+		// (Content-Type) are skipped. Whitespace is the header OWS
+		// (space / tab), never unicode.IsSpace.
+		if asciiEqualFold(strings.Trim(name, " \t"), "Content-Length") {
+			length, err = strconv.Atoi(strings.Trim(value, " \t\r"))
 			if err != nil {
 				return nil, fmt.Errorf("lsp: bad Content-Length: %w", err)
 			}
@@ -207,4 +209,25 @@ func (c *conn) writeResponse(id *json.RawMessage, result any) error {
 
 func (c *conn) writeError(id *json.RawMessage, code int, message string) error {
 	return c.write(Message{ID: id, Error: &ResponseError{Code: code, Message: message}})
+}
+
+// asciiEqualFold is strings.EqualFold over ASCII letters only (this
+// package stays stdlib-only, so it cannot use dialect.ASCIIEqualFold).
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }

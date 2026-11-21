@@ -52,7 +52,7 @@ func CheckSetOpBranches(t *testing.T, fe dialect.Frontend, cases []SetOpCase) {
 					s += " " + r.Alias
 				}
 				got = append(got, s)
-				if r.Table != "" && (r.Loc < 0 || r.Loc > len(tc.SQL) || !strings.HasPrefix(strings.ToLower(tc.SQL[r.Loc:]), strings.ToLower(r.Table))) {
+				if r.Table != "" && (r.Loc < 0 || r.Loc > len(tc.SQL) || !strings.HasPrefix(dialect.ASCIILower(tc.SQL[r.Loc:]), dialect.ASCIILower(r.Table))) {
 					t.Errorf("%q branch %d: relation %q Loc=%d does not point at its name", tc.SQL, i, r.Table, r.Loc)
 				}
 			}

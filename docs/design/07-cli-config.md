@@ -92,7 +92,10 @@ user-supplied PostgreSQL DSN becomes a connection config, used by
    same host that `sslmode=prefer` adds is not a second host.
 3. **Loopback host** (`localhost`, 127.0.0.0/8, `::1`, a unix-socket
    directory): libpq's ordinary behavior — an ambient password from
-   PGPASSWORD/`.pgpass`/a service file is used.
+   PGPASSWORD/`.pgpass`/a service file is used. `localhost` is matched
+   ASCII-case-insensitively ONLY (2026-11-21): `strings.EqualFold` folds
+   the long s, so `localhoſt` used to pass as loopback although the
+   pure-Go resolver sends it to DNS.
 4. **Any other host** (judged on the effective host, even when it came
    from PGHOST — the rule is about where the password goes): only a
    password the DSN itself states, non-empty, is used; anything ambient

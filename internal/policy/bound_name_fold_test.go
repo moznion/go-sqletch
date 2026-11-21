@@ -50,3 +50,17 @@ func TestEnforce_NonBareBoundNameNotCredited(t *testing.T) {
 		})
 	}
 }
+
+// Hint agreement (§11.4) trims ASCII whitespace only, like the hint
+// regexp's own `\s`: a type padded with U+00A0 is not the policy's
+// `bigint` (strings.TrimSpace used to make them agree).
+func TestWeave_HintAgreementTrimsASCIIOnly(t *testing.T) {
+	res := weaveOne(t, "-- name: Q :many\n-- @param tenant_id: bigint\u00a0\nSELECT id FROM orders WHERE ok\n", tenantPolicy())
+	if !hasCode(res.Diags, diagnostics.CodePolicyUnweavable) {
+		t.Fatalf("want SQLETCH125 for a disagreeing hint, got %+v", res.Diags)
+	}
+	res = weaveOne(t, "-- name: Q :many\n-- @param tenant_id: BIGINT \nSELECT id FROM orders WHERE ok\n", tenantPolicy())
+	if diagnostics.HasErrors(res.Diags) {
+		t.Fatalf("an agreeing hint was refused: %+v", res.Diags)
+	}
+}

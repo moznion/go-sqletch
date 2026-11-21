@@ -67,9 +67,10 @@ func (TypeMap) GoType(oid uint32) (dialect.GoTypeRef, bool) {
 // Case folds ASCII only, as sqlite3AffinityType does (its
 // sqlite3UpperToLower table): Go's ToUpper turns the dotless `ı` into
 // `I`, so `ıntext` read as INTEGER where the engine gives TEXT affinity
-// (TestAffinityRef_MatchesEngine).
+// (TestAffinityRef_MatchesEngine). Whitespace likewise (sqlite3Isspace):
+// U+00A0 is an identifier byte, so `DATE<U+00A0>` is no DATE carve-out.
 func AffinityRef(decltype string) (dialect.TypeRef, bool) {
-	d := dialect.ASCIILower(strings.TrimSpace(decltype))
+	d := dialect.ASCIILower(dialect.ASCIITrimSpace(decltype))
 	if d == "" {
 		return dialect.TypeRef{}, false
 	}
@@ -104,7 +105,7 @@ func bareTypeName(d string) string {
 	if i := strings.IndexByte(d, '('); i >= 0 {
 		d = d[:i]
 	}
-	return strings.TrimSpace(d)
+	return dialect.ASCIITrimSpace(d)
 }
 
 // TypeByName resolves a `-- @param name: type` / `-- @column name:
@@ -113,10 +114,10 @@ func bareTypeName(d string) string {
 // stripped; resolution then follows the affinity rules, so any
 // declarable SQLite type name works.
 func (TypeMap) TypeByName(name string) (dialect.TypeRef, bool) {
-	n := dialect.ASCIILower(strings.TrimSpace(name))
+	n := dialect.ASCIILower(dialect.ASCIITrimSpace(name))
 	if i := strings.IndexByte(n, '('); i >= 0 {
 		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
-			n = strings.Join(strings.Fields(n[:i]+" "+n[i+j+1:]), " ")
+			n = strings.Join(dialect.ASCIIFields(n[:i]+" "+n[i+j+1:]), " ")
 		}
 	}
 	if n == "" {

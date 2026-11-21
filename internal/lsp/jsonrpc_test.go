@@ -140,3 +140,25 @@ func TestConn_WriteResponseNullResult(t *testing.T) {
 		t.Errorf("null result must be explicit: %s", buf.String())
 	}
 }
+
+// Header names compare ASCII-case-insensitively and are padded only by
+// space/tab (RFC 9110 OWS): a name or value padded with U+00A0 is not
+// Content-Length, though strings.TrimSpace used to strip it.
+func TestConn_ContentLengthHeaderIsASCII(t *testing.T) {
+	for _, wire := range []string{
+		"content-length: 2\r\n\r\n{}",
+		"CONTENT-LENGTH:\t2 \r\n\r\n{}",
+	} {
+		if _, err := newConn(strings.NewReader(wire), io.Discard).read(); err != nil {
+			t.Errorf("%q: %v", wire, err)
+		}
+	}
+	for _, wire := range []string{
+		"Content-Length\u00a0: 2\r\n\r\n{}",
+		"Content-Length: 2\u00a0\r\n\r\n{}",
+	} {
+		if _, err := newConn(strings.NewReader(wire), io.Discard).read(); err == nil {
+			t.Errorf("%q: accepted a non-ASCII-padded header", wire)
+		}
+	}
+}

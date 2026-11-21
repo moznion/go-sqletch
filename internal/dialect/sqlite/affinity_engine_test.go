@@ -75,3 +75,23 @@ func TestTypeByName_FoldsASCIIOnly(t *testing.T) {
 		}
 	}
 }
+
+// SQLite's whitespace is ASCII (sqlite3Isspace); U+00A0 is an identifier
+// byte, so a decltype `DATE<U+00A0>` is not the DATE carve-out (the
+// engine gives it NUMERIC affinity like any unknown name), though
+// strings.TrimSpace stripped it to `date`.
+func TestAffinityRef_ASCIIWhitespaceOnly(t *testing.T) {
+	for _, decl := range []string{"DATE\u00a0", "\u0085boolean", "DATETIME\u00a0(3)"} {
+		if tr, ok := AffinityRef(decl); !ok || tr.OID != TypeNumeric {
+			t.Errorf("AffinityRef(%q) = (%+v, %v), want NUMERIC", decl, tr, ok)
+		}
+	}
+	if tr, ok := AffinityRef(" DATE\t"); !ok || tr.OID != TypeTime {
+		t.Errorf("ASCII-padded DATE = (%+v, %v), want the carve-out", tr, ok)
+	}
+	for _, in := range []string{"datetime\u00a0", "date(3)\u00a0"} {
+		if tr, ok := (TypeMap{}).TypeByName(in); !ok || tr.OID != TypeNumeric {
+			t.Errorf("TypeByName(%q) = (%+v, %v), want NUMERIC", in, tr, ok)
+		}
+	}
+}

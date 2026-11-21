@@ -956,7 +956,7 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 
 	// Parameter-hint agreement (design 14 §11.4).
 	if p.ParamName != "" && p.ParamType != "" {
-		if h, ok := w.q.TypeHints[p.ParamName]; ok && !asciiEqualFold(strings.TrimSpace(h.SQLType), p.ParamType) {
+		if h, ok := w.q.TypeHints[p.ParamName]; ok && !asciiEqualFold(dialect.ASCIITrimSpace(h.SQLType), p.ParamType) {
 			return fail(w.unweavable(p, h.Span,
 				fmt.Sprintf("the query hints parameter %q as %q, but the policy declares %q", p.ParamName, h.SQLType, p.ParamType)))
 		}

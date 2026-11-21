@@ -143,6 +143,11 @@ func TestDevConnConfig_AmbientPasswordReachesOnlyLoopback(t *testing.T) {
 		{"remote ip", "postgres://u@203.0.113.7/db", false},
 		{"private ip is not loopback", "postgres://u@10.0.0.5/db", false},
 		{"localhost lookalike", "postgres://u@localhost.attacker.example/db", false},
+		// strings.EqualFold folds the long s `ſ` to `s`, so this name
+		// passed as `localhost`; it is NOT loopback to the pure-Go
+		// resolver, which sends it to DNS (search domains included).
+		{"long-s localhost lookalike", "host=localhoſt dbname=db", false},
+		{"localhost kv mixed case", "host=LocalHost dbname=db", true},
 		{"unspecified address", "postgres://u@0.0.0.0/db", false},
 		{"remote kv", "host=attacker.example dbname=db", false},
 	} {

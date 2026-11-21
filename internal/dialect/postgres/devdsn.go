@@ -11,6 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/moznion/go-sqletch/internal/dialect"
 )
 
 // The dev-database DSN policy (security audit F4, owner decision
@@ -149,7 +151,9 @@ func isLoopbackHost(host string, port uint16) bool {
 	if network, _ := pgconn.NetworkAddress(host, port); network == "unix" {
 		return true
 	}
-	if strings.EqualFold(host, "localhost") {
+	// ASCII-only: strings.EqualFold folds the long s, so `localhoſt`
+	// passed — a name the pure-Go resolver sends to DNS.
+	if dialect.ASCIIEqualFold(host, "localhost") {
 		return true
 	}
 	ip, err := netip.ParseAddr(host)
