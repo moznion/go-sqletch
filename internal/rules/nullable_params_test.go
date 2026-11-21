@@ -226,9 +226,18 @@ func TestDeriveNullableParams_MySQL(t *testing.T) {
 		{"insert values", `-- name: CreateUser :exec
 INSERT INTO users (email, nickname) VALUES (:email, :nickname);
 `, []string{"nickname"}},
-		{"case-insensitive column and table", `-- name: CreateUser :exec
-INSERT INTO Users (EMAIL, NickName) VALUES (:email, :nickname);
+		{"case-insensitive column names", `-- name: CreateUser :exec
+INSERT INTO users (EMAIL, NickName) VALUES (:email, :nickname);
 `, []string{"nickname"}},
+		// `Users` names table `users` only under lower_case_table_names=1/2
+		// (exact under 0): not a CERTAIN match, so the parameter keeps the
+		// safe plain T (design 20: facades under-report).
+		{"case-variant table name never derives", `-- name: CreateUser :exec
+INSERT INTO Users (email, nickname) VALUES (:email, :nickname);
+`, nil},
+		{"case-variant alias qualifier never derives", `-- name: SetNickname :exec
+UPDATE users AS u SET U.nickname = :nickname WHERE u.id = :id;
+`, nil},
 		{"alias-qualified set column", `-- name: SetNickname :exec
 UPDATE users AS u SET u.nickname = :nickname WHERE u.id = :id;
 `, []string{"nickname"}},

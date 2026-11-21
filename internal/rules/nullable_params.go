@@ -32,8 +32,12 @@ func DeriveNullableParams(profile dialect.LexerProfile, q *template.QueryTemplat
 		return nil
 	}
 	target := rels[0]
-	fold := dialect.FoldIdent(profile)
-	tbl := lookupFolded(cat, fold, target.Schema, target.Table)
+	// Only a CERTAIN match may make a parameter nullable (a wrong
+	// Option is a loud failure, a missed one keeps the safe plain T):
+	// relation names use the "must" key, column names the engine's key.
+	colFold := dialect.ColumnFold(profile)
+	_, relMust := dialect.RelationFolds(profile)
+	tbl := lookupFolded(cat, relMust, target.Schema, target.Table)
 	// A view column's catalog NOT NULL does not carry its base column's
 	// constraint (PostgreSQL attnotnull is always false on a view), so a
 	// view cannot vouch for nullability (design 20 §3.3).
@@ -50,7 +54,7 @@ func DeriveNullableParams(profile dialect.LexerProfile, q *template.QueryTemplat
 			if target.Alias != "" {
 				name = target.Alias
 			}
-			if fold(vt.Qualifier) != fold(name) {
+			if relMust(vt.Qualifier) != relMust(name) {
 				continue
 			}
 		}
@@ -62,7 +66,7 @@ func DeriveNullableParams(profile dialect.LexerProfile, q *template.QueryTemplat
 		}
 		nullable := false
 		for i := range tbl.Cols {
-			if fold(tbl.Cols[i].Name) == fold(vt.Column) {
+			if colFold(tbl.Cols[i].Name) == colFold(vt.Column) {
 				nullable = !tbl.Cols[i].NotNull
 				break
 			}

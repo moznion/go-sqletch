@@ -126,9 +126,13 @@ Derivation considers only parameters that are:
 ### 3.3 Column resolution
 
 The target relation is `Tree.Relations()[0]` for `INSERT`/`UPDATE`,
-resolved through the catalog with the same folding as R2/R3/R7 (F3:
-case-insensitive dialects must not miss a mixed-case column). If the
-relation or column does not resolve, the parameter stays `T`.
+resolved through the catalog with the profile's comparison keys (design
+01, `dialect.IdentFolds`): column names through the engine's column
+key, the table and any qualifier through the "must" relation key — on
+MySQL an exact match, since `Users` names table `users` only under
+lower_case_table_names=1/2 and only a CERTAIN match may make a parameter
+nullable. If the relation or column does not resolve, the parameter
+stays `T`.
 
 A target whose catalog entry has `IsView` (PostgreSQL views and
 materialized views, MySQL server-oracle views, SQLite views) also
