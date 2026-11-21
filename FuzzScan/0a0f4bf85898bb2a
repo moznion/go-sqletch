@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\na0ɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɔɖ\x89\xd1т\x94ɔɔɔɔɔɔɔɔ WHERE@filter-tree(A)")

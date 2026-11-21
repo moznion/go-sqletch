@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:B :many\nFROC@when(a=fAlse)@endGVING @if-present(a)A('+@e9d.9")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\n@choose(A)@case(A)\xf5\xae\xc6\xe2\xf5a")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("--name:A :many\n`0@choose(A)@defaultORDER \x85\x85\x85a")
