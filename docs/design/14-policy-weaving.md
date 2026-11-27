@@ -1082,11 +1082,11 @@ does not reach the inner `o`:
 
 - at the top level and in a CTE body it fails (`invalid reference to
   FROM-clause entry for table "o"`) — loud, by accident;
-- in a LATERAL subquery (§14) it resolves to a same-named relation of
-  the ENCLOSING query, the inner orders stay unscoped, and Enforce
-  credited the conjunct — a silent leak (PG 17: tenant 2's rows decided
-  the tenant-1 answer). A correlated sublink (§15) is the same hazard
-  once sublinks are scoped; the rule below covers it unchanged.
+- in a LATERAL subquery (§14) or a correlated sublink (§15) it
+  resolves to a same-named relation of the ENCLOSING query, the inner
+  orders stay unscoped, and Enforce credited the conjunct — a silent
+  leak (PG 17: tenant 2's rows decided the tenant-1 answer). The rule
+  landed before §15, so sublink cores were covered from the start.
 
 Rule: the PostgreSQL facade marks every relation inside an aliased
 join group (`RelRef.JoinAliasHidden`; a USING alias, `JOIN … USING (k)

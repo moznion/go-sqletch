@@ -310,16 +310,20 @@ func TestPolicyWeaveNoLeak_ServerGeneratorsAreLive(t *testing.T) {
 // Counterexample for design 14 §11.11 (aliased join groups). The
 // alias of `(… JOIN …) AS j` hides the member names, so the conjunct a
 // pre-§11.11 weaver spliced — `o.tenant_id = $1`, exactly the spelling
-// below — resolved to the OUTER `o` in a LATERAL subquery (a correlated
-// sublink, once scoped, is the same hazard), and the inner orders stayed
-// unscoped: tenant 2's rows (the only ones with secret 'T2') decide the
-// tenant-1 answer. Each shape must now be refused (SQLETCH125), never
+// below — resolved to the OUTER `o` in a LATERAL subquery or a
+// correlated sublink (§15), and the inner orders stayed unscoped: tenant
+// 2's rows (the only ones with secret 'T2') decide the tenant-1 answer. Each shape must now be refused (SQLETCH125), never
 // woven.
 func TestPolicyWeave_JoinAliasHidden_Counterexample(t *testing.T) {
 	eng := newPostgresLeakEngine(t)
 	d := postgresLeakDialect
 	drv := driverFor(config.Config{Dialect: d.name})
 	for _, tc := range []struct{ name, template, preFixWoven string }{
+		{
+			name:        "correlated sublink",
+			template:    "SELECT o.id AS r FROM orders AS o WHERE EXISTS (SELECT 1 FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j WHERE j.secret = 'T2')",
+			preFixWoven: "SELECT o.id AS r FROM orders AS o WHERE (o.tenant_id = $1) AND EXISTS (SELECT 1 FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j WHERE (o.tenant_id = $1) AND j.secret = 'T2')",
+		},
 		{
 			name:        "LATERAL subquery",
 			template:    "SELECT o.id AS r, l.c AS c FROM orders AS o, LATERAL (SELECT count(*) AS c FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j) AS l",

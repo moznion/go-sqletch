@@ -9,14 +9,17 @@ import (
 
 // A designated relation inside an aliased join group `(… JOIN …) AS j`
 // is hidden by the group's alias, so a conjunct qualified with its name
-// resolves to a same-named relation of an ENCLOSING query (a LATERAL
-// subquery; a correlated sublink once those are scoped) — leaving it
-// unscoped, proven on real PostgreSQL by
+// resolves to a same-named relation of an ENCLOSING query (a correlated
+// sublink, a LATERAL subquery) — leaving it unscoped, proven on real PostgreSQL by
 // TestPolicyWeave_JoinAliasHidden_Counterexample — or fails. Design 14
 // §11.11: refused everywhere a `{}` predicate binds to it, whichever
 // slot the conjunct would take.
 func TestWeave_JoinAliasHidden_Refused(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
+		{"correlated sublink, outer same-named relation", "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) AS j WHERE j.x = 1)"},
+		{"sublink, alias without AS", "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) j)"},
+		{"sublink, unaliased member", "SELECT orders.id FROM orders WHERE EXISTS (SELECT 1 FROM (orders JOIN users u ON u.id = orders.uid) AS j)"},
+		{"sublink, group on a null-extended side", "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM users u LEFT JOIN (orders o JOIN acc a ON a.id = o.aid) AS j ON j.uid = u.id)"},
 		{"LATERAL subquery, outer same-named relation", "SELECT o.id FROM orders o, LATERAL (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) AS j) l"},
 		{"LATERAL subquery, alias without AS", "SELECT o.id FROM orders o, LATERAL (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) j) l"},
 		{"LATERAL subquery, unaliased member", "SELECT orders.id FROM orders, LATERAL (SELECT 1 FROM (orders JOIN users u ON u.id = orders.uid) AS j) l"},
@@ -86,6 +89,7 @@ func TestWeave_JoinAliasHidden_Unaffected(t *testing.T) {
 // conjunct reads the OUTER relation).
 func TestEnforce_JoinAliasHidden_NeverCredited(t *testing.T) {
 	for _, body := range []string{
+		"SELECT o.id FROM orders o WHERE o.tenant_id = :tenant_id AND EXISTS (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) AS j WHERE o.tenant_id = :tenant_id)",
 		"SELECT o.id FROM orders o, LATERAL (SELECT 1 FROM (orders o JOIN users u ON u.id = o.uid) AS j WHERE o.tenant_id = :tenant_id) l WHERE o.tenant_id = :tenant_id",
 	} {
 		q := scanOne(t, "-- name: Q :many\n"+body+"\n")
