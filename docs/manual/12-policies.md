@@ -120,8 +120,10 @@ subquery (`IN (SELECT …)`, `EXISTS (…)`, a scalar subquery), a
 subquery; read by a `TABLE t`/`VALUES` operand, which has no
 `WHERE` to extend; joined with `USING`/`NATURAL` on a
 null-extended side (no `ON` expression to extend — rewrite as an
-explicit `ON`); introduced by a guarded `@if-present` join; or bound
-to a name that is not a bare identifier. Restructure the query, or
+explicit `ON`); introduced by a guarded `@if-present` join; inside a join group
+that has its own alias (`(orders o JOIN users u ON …) AS j` — the
+alias hides `o`, so drop it); or bound to a name that is not a bare
+identifier. Restructure the query, or
 opt out.
 
 ## Opting out

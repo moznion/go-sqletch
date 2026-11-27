@@ -491,8 +491,17 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, o
 		case pgquery.JoinType_JOIN_FULL:
 			leftNullable, rightNullable = true, true
 		}
+		first := len(*out)
 		collectFromItem(je.Larg, join, leftNullable, out)
 		collectFromItem(je.Rarg, mapJoinType(je.Jointype, je.IsNatural, je.Quals), rightNullable, out)
+		if je.Alias != nil {
+			// `(a JOIN b) AS j`: outside the group only j is
+			// referenceable (a USING alias, JoinUsingAlias, hides
+			// nothing).
+			for i := first; i < len(*out); i++ {
+				(*out)[i].JoinAliasHidden = true
+			}
+		}
 	case node.GetRangeSubselect() != nil:
 		rs := node.GetRangeSubselect()
 		alias := ""
