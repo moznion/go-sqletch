@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :many\na y(cAya@if-present(yazeX17i0A\x9a)x!D$(YfYy@endif@if-present(x7Xe)1")

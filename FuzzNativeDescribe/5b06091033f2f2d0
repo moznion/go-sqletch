@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- @column x:ChAr\nSELECT!--\va\x7fa\x7fa\x7fa\x7fa\x7fa\x7fa\x7fa\x7fa}a}a}a}a}a}a}a\n('')x")
