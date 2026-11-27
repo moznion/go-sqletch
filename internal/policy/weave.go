@@ -861,16 +861,16 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 	}
 	if a.hidden {
 		return fail(w.unweavable(p, w.q.HeaderSpan,
-			"a designated table appears inside a subquery or CTE body sqletch cannot scope (a WHERE/SELECT-list subquery, a WITH RECURSIVE body, or a nested position this dialect does not support)"))
+			"a designated table appears inside a subquery or CTE body sqletch cannot scope (a subquery outside a WHERE/HAVING clause, an ARRAY subquery, a WITH RECURSIVE body, or a nested position this dialect or statement kind does not support)"))
 	}
 	if !strings.Contains(p.Predicate, Placeholder) {
 		for _, occ := range a.topOcc {
 			if occ.nested {
 				// §14.1: with no relation reference, an unqualified column
-				// inside a CTE body or (LATERAL) FROM subquery may resolve to
+				// inside a CTE body, (LATERAL) FROM subquery or sublink may resolve to
 				// an outer or a different relation than the designated one.
 				return fail(w.unweavable(p, w.relSpan(occ.RelRef),
-					fmt.Sprintf("table %q is read inside a CTE body or FROM subquery, where a predicate without a `{}` placeholder cannot be bound to it", occ.Table)))
+					fmt.Sprintf("table %q is read inside a CTE body or subquery, where a predicate without a `{}` placeholder cannot be bound to it", occ.Table)))
 			}
 		}
 	}
@@ -897,6 +897,9 @@ func (w *weaver) applyActive(p *Policy, a applicability, over []string) (*WovenP
 		case !bareIdentRe.MatchString(boundName(r)):
 			return fail(w.unweavable(p, w.relSpan(r),
 				fmt.Sprintf("the name bound to the predicate placeholder (%q) is not a bare identifier", boundName(r))))
+		case strings.Contains(p.Predicate, Placeholder) && r.JoinAliasHidden:
+			return fail(w.unweavable(p, w.relSpan(r), joinAliasWhy(r.Table, boundName(r))).
+				WithHint("%s, or opt out explicitly with `-- @policy-optout: %s (reason)`", joinAliasHint, p.Name))
 		case strings.Contains(p.Predicate, Placeholder) && unquotedFoldChanges(w.profile, boundName(r)):
 			return fail(w.unweavable(p, w.relSpan(r), foldChangeWhy(boundName(r))).
 				WithHint("%s, or opt out explicitly with `-- @policy-optout: %s (reason)`", foldChangeHint, p.Name))
@@ -1028,6 +1031,14 @@ func (w *weaver) checkSetOpOccurrences(p *Policy, a applicability) (diagnostics.
 			"the cores of this statement (set-operation branches, CTE bodies, FROM subqueries) could not be located in the template (a set operator inside a construct body, or a shape sqletch does not model)"), false
 	}
 	for _, occ := range a.topOcc {
+		if occ.nested && w.constructAt(occ.Loc) {
+			// A nested query (typically a sublink) inside a construct
+			// body: the lexical split does not see into the body, and a
+			// conjunct woven there would have to inherit the construct's
+			// guards (design 14 §15.5, phase 2).
+			return w.unweavable(p, w.relSpan(occ.RelRef),
+				fmt.Sprintf("table %q is read by a subquery inside a template construct body (@if-present, @when, @choose, …), which sqletch cannot scope yet; move the subquery out of the construct, or opt out and scope it by hand", occ.Table)), false
+		}
 		if w.guardedAt(occ.Loc) {
 			// Inside a construct body (not lexed by the split); refused
 			// with the guarded-join diagnostic by the occurrence loop.
@@ -1106,6 +1117,20 @@ func (w *weaver) guardedAt(loc int) bool {
 		if loc >= fr.Start && loc < fr.End {
 			ip, ok := fr.Item.(*template.IfPresent)
 			return ok && len(ip.Guards) > 0
+		}
+	}
+	return false
+}
+
+// constructAt reports whether a rendered offset lies inside any
+// construct's emission (@if-present, @when, @choose, @in, …).
+func (w *weaver) constructAt(loc int) bool {
+	if loc < 0 {
+		return false
+	}
+	for _, fr := range w.maxR.Frags {
+		if loc >= fr.Start && loc < fr.End {
+			return true
 		}
 	}
 	return false

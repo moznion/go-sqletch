@@ -3,6 +3,7 @@ package postgres
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	pgquery "github.com/pganalyze/pg_query_go/v6"
@@ -491,8 +492,17 @@ func collectFromItem(node *pgquery.Node, join dialect.JoinType, nullable bool, o
 		case pgquery.JoinType_JOIN_FULL:
 			leftNullable, rightNullable = true, true
 		}
+		first := len(*out)
 		collectFromItem(je.Larg, join, leftNullable, out)
 		collectFromItem(je.Rarg, mapJoinType(je.Jointype, je.IsNatural, je.Quals), rightNullable, out)
+		if je.Alias != nil {
+			// `(a JOIN b) AS j`: outside the group only j is
+			// referenceable (a USING alias, JoinUsingAlias, hides
+			// nothing).
+			for i := first; i < len(*out); i++ {
+				(*out)[i].JoinAliasHidden = true
+			}
+		}
 	case node.GetRangeSubselect() != nil:
 		rs := node.GetRangeSubselect()
 		alias := ""
@@ -554,10 +564,12 @@ func (t *tree) SetOpBranches() []dialect.Tree {
 func (t *tree) HasUnresolvableProvenance() bool { return false }
 
 // NestedCores walks the statement's eligible nested positions (design
-// 14 §14): non-recursive WITH bodies that are queries, and FROM-position
-// RangeSubselects (through joins and TABLESAMPLE), recursively. A set
-// operation met anywhere is flattened into its leaf cores (larg before
-// rarg). SubLinks are never entered. RangeVar locations are absolute,
+// 14 §14, §15): non-recursive WITH bodies that are queries,
+// FROM-position RangeSubselects (through joins and TABLESAMPLE), and the
+// bodies of EXISTS/ANY/ALL/scalar SubLinks in a core's WHERE or HAVING,
+// recursively. A set operation met anywhere is flattened into its leaf
+// cores (larg before rarg). SubLinks of other kinds, and SubLinks in any
+// other clause, are never entered. RangeVar locations are absolute,
 // so every sub-facade's Relations stay located. Only a SELECT statement
 // has nested cores here: a DML statement's WITH/FROM is not walked, so
 // a designated read there stays a refused hidden read.
@@ -619,8 +631,73 @@ func (t *tree) NestedCores() []dialect.Tree {
 		for _, item := range s.FromClause {
 			fromItem(item)
 		}
+		// §15: the bodies of eligible sublinks in the core's WHERE, then
+		// its HAVING, each clause in document order.
+		for _, clause := range []*pgquery.Node{s.WhereClause, s.HavingClause} {
+			for _, sub := range eligibleSublinks(clause) {
+				query(sub, true)
+			}
+		}
 	}
 	query(sel, false)
+	return out
+}
+
+// eligibleSublinks returns the bodies of the sublinks in one WHERE or
+// HAVING expression that the policy weaver may scope (design 14 §15.1):
+// EXISTS, ANY (IN and op ANY/SOME), ALL, and scalar (EXPR) sublinks, at
+// any depth of the expression, in document order. A sublink body is not
+// entered here — its own clauses are the caller's next query — but a
+// sublink's test expression is: it is an outer-scope expression of the
+// same clause. A row comparison `(a, b) = (SELECT …)` is an EXPR
+// sublink in the raw tree and is scoped like a scalar one. Any other
+// sublink kind (ARRAY, MULTIEXPR) contributes nothing, so a designated
+// read in it stays a refused hidden read.
+func eligibleSublinks(clause *pgquery.Node) []*pgquery.SelectStmt {
+	if clause == nil {
+		return nil
+	}
+	type found struct {
+		loc  int32
+		body *pgquery.SelectStmt
+	}
+	var subs []found
+	var walk func(m protoreflect.Message)
+	walk = func(m protoreflect.Message) {
+		if sl, ok := m.Interface().(*pgquery.SubLink); ok {
+			switch sl.SubLinkType {
+			case pgquery.SubLinkType_EXISTS_SUBLINK, pgquery.SubLinkType_ANY_SUBLINK,
+				pgquery.SubLinkType_ALL_SUBLINK, pgquery.SubLinkType_EXPR_SUBLINK:
+				if body := sl.Subselect.GetSelectStmt(); body != nil {
+					subs = append(subs, found{loc: sl.Location, body: body})
+				}
+			}
+			if sl.Testexpr != nil {
+				walk(sl.Testexpr.ProtoReflect())
+			}
+			return
+		}
+		m.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
+			switch {
+			case fd.IsList() && fd.Kind() == protoreflect.MessageKind:
+				l := val.List()
+				for i := range l.Len() {
+					walk(l.Get(i).Message())
+				}
+			case fd.Kind() == protoreflect.MessageKind && !fd.IsMap():
+				walk(val.Message())
+			}
+			return true
+		})
+	}
+	walk(clause.ProtoReflect())
+	// protoreflect's Range order is unspecified; the sublink's own
+	// location fixes document order.
+	slices.SortStableFunc(subs, func(a, b found) int { return int(a.loc) - int(b.loc) })
+	out := make([]*pgquery.SelectStmt, len(subs))
+	for i, f := range subs {
+		out[i] = f.body
+	}
 	return out
 }
 

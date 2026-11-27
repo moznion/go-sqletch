@@ -1184,7 +1184,10 @@ policies:
   named *in the target query*: its alias if it has one, else the table
   name. The substituted name must be a bare identifier
   (`[A-Za-z_][A-Za-z0-9_]*`); anything needing dialect quoting is
-  rejected.
+  rejected. So is a designated relation inside a PostgreSQL join group
+  with its own alias (`(a JOIN b) AS j`): the alias hides the bound
+  name from the conjunct, which would then name an enclosing query's
+  relation (design 14 §11.11).
 - The predicate may reference only the designated relation (via `{}`)
   and its own `:param`s. It must parse as one complete boolean
   expression in the dialect (`SQLETCH303` otherwise).
@@ -1267,10 +1270,20 @@ Rules, settled deliberately (D1–D6 in the design record):
   location and must agree; the woven statement must re-parse to the
   same cores, with woven WHERE conjuncts in exactly the cores that
   needed them; any disagreement is `SQLETCH125`.
+- **On PostgreSQL, a WHERE/HAVING subquery of a SELECT is woven core
+  by core too** (settled 2026-11-21, design 14 §15): the body of an
+  `EXISTS`, `IN`, `op ANY`/`SOME`, `op ALL` or scalar subquery (a
+  sublink) anywhere in the WHERE or HAVING expression of a core above —
+  recursively — is scoped at its own `WHERE` (or its own join's `ON`)
+  under the same rules. The meaning is row-level security's: every read
+  of a designated table sees only in-scope rows, so an anti-join over
+  one may admit more outer rows, and only in-scope rows contribute
+  `NULL`s.
 - **A designated table visible only inside any other subquery is
-  rejected** (`SQLETCH125`): a WHERE/HAVING/SELECT-list/ORDER BY
-  subquery (a sublink), a `WITH RECURSIVE` body, and — on MySQL and
-  SQLite — every CTE body and FROM subquery. Loud incompleteness beats
+  rejected** (`SQLETCH125`): a SELECT-list/ORDER BY/ON/… subquery, an
+  `ARRAY` subquery, a subquery inside a construct body, any subquery of
+  an UPDATE/DELETE/INSERT, a `WITH RECURSIVE` body, and — on MySQL and
+  SQLite — every CTE body, FROM subquery, and sublink. Loud incompleteness beats
   silent incompleteness. A CTE whose *name* shadows a designated table
   is conservatively treated as touching it.
 - **A designated table introduced by a guarded (`@if-present`) join is

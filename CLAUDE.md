@@ -294,6 +294,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `update`) the policy covers makes it active whatever the outer kind
   and is refused (SQLETCH125/124) — inside `analyzeApplicability`, the
   seam Weave and Enforce share.
+- Join-group aliases (design 14 §11.11, 2026-11-27): PG `(a JOIN b) AS
+  j` hides member names, so a `{}` conjunct on a member resolves to an
+  ENCLOSING query's same-named relation (correlated sublink, LATERAL:
+  silent leak) or fails. The facade marks members
+  `RelRef.JoinAliasHidden`; Weave refuses (125) and Enforce never
+  credits (124) such an occurrence, at every level and slot.
 - Policy edits re-key only affected oracle entries (rendered SQL
   changes); the policy config must NEVER enter the cache fingerprint.
 
@@ -323,7 +329,17 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   the lexical scan also opens sublink cores. `verifySetOpWeave` asks the
   re-parsed tree which cores got a woven top-level WHERE conjunct; that
   AST check, not lexical completeness, is what stops a conjunct landing
-  in an enclosing core. Sublinks and WITH RECURSIVE stay SQLETCH125.
+  in an enclosing core. WITH RECURSIVE stays SQLETCH125.
+- Sublink weaving phase 1 (doc 14 §15, owner decision 2026-11-21,
+  PostgreSQL SELECT only): `NestedCores` also enters EXISTS / ANY (IN,
+  op ANY) / ALL / EXPR (scalar, row compare) SubLinks found anywhere in
+  a core's WHERE or HAVING expression — walking a SubLink's Testexpr,
+  never its body, from the expression walk. Other clauses, ARRAY
+  sublinks, DML, and sublinks inside construct bodies stay SQLETCH125
+  (a nested occurrence inside a construct emission is refused by
+  `checkSetOpOccurrences`). The leak fuzzer judges sublink shapes with
+  a tenant-2 influence oracle (`tenant2Influence`): markers are never
+  projected there.
 - MySQL: a set operation is StmtOther ⇒ R1 SQLETCH103 before weaving;
   admitting it is a separate decision (nullability, native oracle).
 - R1 set-operation operands (spec R1, 2026-09-29): WHERE/HAVING

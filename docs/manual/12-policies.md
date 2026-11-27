@@ -109,19 +109,51 @@ statement and the executed statement differ.
   SELECT id FROM a WHERE id > $2 ORDER BY created_at LIMIT 10
   ```
 
-  A predicate without a `{}` placeholder is not woven into a CTE body
-  or FROM subquery (`SQLETCH125`): with no relation to bind, an
-  unqualified column there could resolve to an outer relation.
+- On PostgreSQL, a **subquery in a `WHERE` or `HAVING` clause** —
+  `EXISTS (…)`, `NOT EXISTS (…)`, `x IN (…)`, `x NOT IN (…)`,
+  `x op ANY (…)`, `x op ALL (…)`, or a scalar `(SELECT …)` — is scoped
+  the same way, at its own `WHERE`, wherever it sits in the expression
+  (under `OR`, inside `CASE`, as a function argument), recursively. It
+  applies in the statement, in a set-operation operand, in a CTE body
+  or FROM subquery, and in another such subquery:
+
+  ```sql
+  -- written
+  SELECT o.id FROM orders o
+  WHERE NOT EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id)
+  -- woven
+  SELECT o.id FROM orders o
+  WHERE (o.tenant_id = $1) AND NOT EXISTS (SELECT 1 FROM order_items i WHERE (i.tenant_id = $1) AND i.order_id = o.id)
+  ```
+
+  This is the meaning row-level security gives such a query: every
+  read of a designated table sees only in-scope rows, whatever its
+  depth. Two consequences follow. An anti-join (`NOT EXISTS`,
+  `NOT IN`, `op ALL`) over a designated table sees fewer rows, so it
+  can let *more* rows of the enclosing query through. And `NULL`s come
+  only from in-scope rows: an out-of-scope `NULL` no longer turns
+  `NOT IN` / `op ALL` into UNKNOWN. A `{}` placeholder binds to the
+  subquery's own relation even when the subquery is correlated and the
+  outer query uses the same alias, because PostgreSQL resolves a
+  qualified name to the innermost scope.
+
+  A predicate without a `{}` placeholder is not woven into a CTE body,
+  FROM subquery, or subquery (`SQLETCH125`): with no relation to bind,
+  an unqualified column there could resolve to an outer relation.
 
 Positions sqletch cannot scope are rejected with `SQLETCH125` rather
-than silently skipped: a designated table inside a WHERE/SELECT-list
-subquery (`IN (SELECT …)`, `EXISTS (…)`, a scalar subquery), a
-`WITH RECURSIVE` body, or — on MySQL and SQLite — any CTE body or
-subquery; read by a `TABLE t`/`VALUES` operand, which has no
+than silently skipped: a designated table inside a subquery outside a
+`WHERE`/`HAVING` clause (the SELECT list, `ORDER BY`, a join's `ON`,
+…), an `ARRAY(SELECT …)`, a subquery inside an
+`@if-present`/`@when`/`@choose` body, any subquery of an
+`UPDATE`/`DELETE`/`INSERT`, a `WITH RECURSIVE` body, or — on MySQL and
+SQLite — any CTE body or subquery; read by a `TABLE t`/`VALUES` operand, which has no
 `WHERE` to extend; joined with `USING`/`NATURAL` on a
 null-extended side (no `ON` expression to extend — rewrite as an
-explicit `ON`); introduced by a guarded `@if-present` join; or bound
-to a name that is not a bare identifier. Restructure the query, or
+explicit `ON`); introduced by a guarded `@if-present` join; inside a join group
+that has its own alias (`(orders o JOIN users u ON …) AS j` — the
+alias hides `o`, so drop it); or bound to a name that is not a bare
+identifier. Restructure the query, or
 opt out.
 
 ## Opting out
@@ -194,8 +226,8 @@ Weaving covers what the weaver reaches; a separate enforcement pass
 proves the invariant from the compiled result itself: for every
 relation whose table a policy designates, a matching conjunct must be
 present in the query's WHERE clause — for a set operation, the WHERE
-clause of the relation's own operand; for a CTE body or FROM subquery,
-its own WHERE clause — **in every reachable shape**
+clause of the relation's own operand; for a CTE body, FROM subquery or
+WHERE/HAVING subquery, its own WHERE clause — **in every reachable shape**
 (`SQLETCH124` otherwise). It runs in the same pass the LSP uses, so a
 violation appears live in your editor.
 

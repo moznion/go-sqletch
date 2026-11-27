@@ -128,13 +128,13 @@ func TestWeave_Nested_Unweavable(t *testing.T) {
 		pol                 Policy
 	}{
 		{
-			name:    "sublink inside a CTE body",
-			body:    "WITH x AS (SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)) SELECT id FROM x",
+			name:    "SELECT-list sublink inside a CTE body",
+			body:    "WITH x AS (SELECT id, (SELECT max(id) FROM orders) AS m FROM users) SELECT id FROM x",
 			wantMsg: "subquery",
 		},
 		{
-			name:    "sublink in the outer WHERE of a statement with a CTE",
-			body:    "WITH x AS (SELECT id FROM users) SELECT id FROM x WHERE EXISTS (SELECT 1 FROM orders)",
+			name:    "ORDER BY sublink in the outer query of a statement with a CTE",
+			body:    "WITH x AS (SELECT id FROM users) SELECT id FROM x ORDER BY (SELECT max(id) FROM orders)",
 			wantMsg: "subquery",
 		},
 		{
