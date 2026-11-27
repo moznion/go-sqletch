@@ -1072,6 +1072,38 @@ in the policy path did not match any engine:
 
 Pinned by `designate_fold_test.go` and `bound_name_fold_test.go`.
 
+### 11.11 A join-group alias hides the bound name (PostgreSQL)
+
+Found 2026-11-27 reviewing §15. PostgreSQL's alias on a parenthesized
+join group, `(orders o JOIN users u ON …) AS j`, hides the member names:
+outside the group only `j` is referenceable. The core's WHERE (and any
+ON outside the group) is outside it, so the spliced `o.tenant_id = $1`
+does not reach the inner `o`:
+
+- at the top level and in a CTE body it fails (`invalid reference to
+  FROM-clause entry for table "o"`) — loud, by accident;
+- in a correlated sublink (§15) or a LATERAL subquery (§14) it resolves
+  to a same-named relation of the ENCLOSING query, the inner orders
+  stay unscoped, and Enforce credited the conjunct — a silent leak
+  (PG 17: tenant 2's rows decided the tenant-1 answer; LATERAL shipped
+  with §14).
+
+Rule: the PostgreSQL facade marks every relation inside an aliased
+join group (`RelRef.JoinAliasHidden`; a USING alias, `JOIN … USING (k)
+AS x`, hides nothing and is not marked). A designated occurrence so
+marked is refused under a `{}` predicate — SQLETCH125 in Weave,
+SQLETCH124 (never credited) in Enforce, through the shared
+`joinAliasWhy` — at every level and whatever slot the conjunct would
+take, even an ON inside the group where the name is visible: one rule
+for both passes, failing closed. The top-level case now gets a
+diagnostic instead of SQL that fails at run time. A predicate without
+`{}` is unaffected (top level only, §14.1). MySQL and SQLite cannot
+alias a join group. The compliant rewrite drops the group's alias.
+
+Pinned by `weave_joinalias_test.go`, `TestFrontend_JoinAliasHidden`,
+and the devdb counterexample
+`TestPolicyWeave_JoinAliasHidden_Counterexample`.
+
 ## 12. Mandatory acknowledgment (`require_annotation`)
 
 **Status: settled 2026-09-16 (D7).** §6.2 made *disabling* a policy

@@ -1184,7 +1184,10 @@ policies:
   named *in the target query*: its alias if it has one, else the table
   name. The substituted name must be a bare identifier
   (`[A-Za-z_][A-Za-z0-9_]*`); anything needing dialect quoting is
-  rejected.
+  rejected. So is a designated relation inside a PostgreSQL join group
+  with its own alias (`(a JOIN b) AS j`): the alias hides the bound
+  name from the conjunct, which would then name an enclosing query's
+  relation (design 14 §11.11).
 - The predicate may reference only the designated relation (via `{}`)
   and its own `:param`s. It must parse as one complete boolean
   expression in the dialect (`SQLETCH303` otherwise).

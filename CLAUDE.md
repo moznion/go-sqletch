@@ -294,6 +294,12 @@ Only `internal/dialect/postgres` may import pg_query/pgx (plus
   `update`) the policy covers makes it active whatever the outer kind
   and is refused (SQLETCH125/124) — inside `analyzeApplicability`, the
   seam Weave and Enforce share.
+- Join-group aliases (design 14 §11.11, 2026-11-27): PG `(a JOIN b) AS
+  j` hides member names, so a `{}` conjunct on a member resolves to an
+  ENCLOSING query's same-named relation (correlated sublink, LATERAL:
+  silent leak) or fails. The facade marks members
+  `RelRef.JoinAliasHidden`; Weave refuses (125) and Enforce never
+  credits (124) such an occurrence, at every level and slot.
 - Policy edits re-key only affected oracle entries (rendered SQL
   changes); the policy config must NEVER enter the cache fingerprint.
 

@@ -17,6 +17,7 @@ import (
 	"github.com/moznion/go-sqletch/internal/ast"
 	"github.com/moznion/go-sqletch/internal/config"
 	"github.com/moznion/go-sqletch/internal/devdb"
+	"github.com/moznion/go-sqletch/internal/diagnostics"
 	"github.com/moznion/go-sqletch/internal/template"
 )
 
@@ -302,6 +303,56 @@ func TestPolicyWeaveNoLeak_ServerGeneratorsAreLive(t *testing.T) {
 				t.Errorf("only %d/%d generated cases were usable on %s", usable, n, tc.d.name)
 			}
 			t.Logf("%s: usable %d/%d", tc.d.name, usable, n)
+		})
+	}
+}
+
+// Counterexample for design 14 §11.11 (aliased join groups). The
+// alias of `(… JOIN …) AS j` hides the member names, so the conjunct a
+// pre-§11.11 weaver spliced — `o.tenant_id = $1`, exactly the spelling
+// below — resolved to the OUTER `o` in a correlated sublink or a
+// LATERAL subquery, and the inner orders stayed unscoped: tenant 2's
+// rows (the only ones with secret 'T2') decide the tenant-1 answer.
+// Each shape must now be refused (SQLETCH125), never woven.
+func TestPolicyWeave_JoinAliasHidden_Counterexample(t *testing.T) {
+	eng := newPostgresLeakEngine(t)
+	d := postgresLeakDialect
+	drv := driverFor(config.Config{Dialect: d.name})
+	for _, tc := range []struct{ name, template, preFixWoven string }{
+		{
+			name:        "correlated sublink",
+			template:    "SELECT o.id AS r FROM orders AS o WHERE EXISTS (SELECT 1 FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j WHERE j.secret = 'T2')",
+			preFixWoven: "SELECT o.id AS r FROM orders AS o WHERE (o.tenant_id = $1) AND EXISTS (SELECT 1 FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j WHERE (o.tenant_id = $1) AND j.secret = 'T2')",
+		},
+		{
+			name:        "LATERAL subquery",
+			template:    "SELECT o.id AS r, l.c AS c FROM orders AS o, LATERAL (SELECT count(*) AS c FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j) AS l",
+			preFixWoven: "SELECT o.id AS r, l.c AS c FROM orders AS o, LATERAL (SELECT count(*) AS c FROM (orders AS o JOIN acc AS a ON a.id = o.acc_id) AS j WHERE (o.tenant_id = $1)) AS l WHERE (o.tenant_id = $1)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pert, err := tenant2Influence(t, d, eng, tc.preFixWoven, []any{int64(1)})
+			if err != nil {
+				t.Fatalf("pre-fix woven query fails: %v", err)
+			}
+			if pert == "" {
+				t.Fatalf("counterexample is dead: tenant 2 no longer influences the pre-fix weave\n%s", tc.preFixWoven)
+			}
+			fl, diags := template.NewScanner(drv.profile).ScanFile("q.sql", []byte("-- name: Q :many\n"+tc.template+"\n"))
+			if diagnostics.HasErrors(diags) || len(fl.Queries) != 1 {
+				t.Fatalf("scan: %+v", diags)
+			}
+			_, _, diags, err = scanChecks(drv, leakPolicies(d, 0), fl.Queries[0], 0, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused := false
+			for _, dg := range diags {
+				refused = refused || dg.Code == diagnostics.CodePolicyUnweavable
+			}
+			if !refused {
+				t.Fatalf("want SQLETCH125, got %+v", diags)
+			}
 		})
 	}
 }

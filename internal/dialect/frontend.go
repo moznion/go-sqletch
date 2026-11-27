@@ -49,6 +49,14 @@ type RelRef struct {
 	// LEFT, left of RIGHT, either side of FULL) — the nullability
 	// analysis input.
 	NullableSide bool
+	// JoinAliasHidden reports that the relation sits inside a
+	// parenthesized join group carrying its own alias (PostgreSQL
+	// `(a JOIN b) AS j`): outside that group the relation's name is not
+	// referenceable, so a qualified reference to it written in the
+	// core's WHERE resolves to a same-named relation of an ENCLOSING
+	// query level when one exists (a correlated sublink, a LATERAL
+	// subquery) — or fails. MySQL and SQLite cannot alias a join group.
+	JoinAliasHidden bool
 }
 
 // TableRef is one base-table name referenced anywhere in the
