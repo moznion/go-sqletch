@@ -111,6 +111,19 @@ func foldChangeWhy(name string) string {
 // foldChangeHint is the compliant rewrite for foldChangeWhy.
 const foldChangeHint = "use a lower-case unquoted alias for the designated table (e.g. `FROM orders AS o`); sqletch never quotes the bound name (design 14 §11.3)"
 
+// joinAliasWhy states the rule and its rationale for a designated
+// occurrence inside an aliased join group (dialect.RelRef.JoinAliasHidden,
+// design 14 §11.11); shared by SQLETCH125 and SQLETCH124. Every woven
+// position for such an occurrence is judged the same way, even an ON
+// inside the group where the name is visible: one rule for both passes,
+// failing closed.
+func joinAliasWhy(table, name string) string {
+	return fmt.Sprintf("table %q sits inside a parenthesized join group with its own alias (`(… JOIN …) AS alias`), which hides the name %q bound to the predicate placeholder; outside the group the conjunct's reference resolves to a same-named relation of an enclosing query (a correlated subquery or LATERAL subquery) — leaving this table unscoped — or fails", table, name)
+}
+
+// joinAliasHint is the compliant rewrite for joinAliasWhy.
+const joinAliasHint = "drop the join group's alias and qualify columns with the inner relations' own aliases"
+
 // lowerIdentRe is the shape required of policy names, table names,
 // and the parameter name in the config.
 var lowerIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

@@ -207,6 +207,16 @@ func Enforce(profile dialect.LexerProfile, fe dialect.Frontend, pols []Policy, q
 					WithHint("%s, or opt out with `-- @policy-optout: %s (reason)`", foldChangeHint, p.Name))
 				break
 			}
+			if hasPlaceholder && r.JoinAliasHidden {
+				// §11.11: the bound name is hidden by an aliased join group,
+				// so no conjunct built from it is proved to scope this
+				// occurrence (the weaver refuses it with SQLETCH125).
+				diags = append(diags, diagnostics.Errorf(diagnostics.CodePolicyUnscoped, q.HeaderSpan,
+					"query touches policy-designated table %q, but policy %q cannot be proved to scope it: %s",
+					r.Table, p.Name, joinAliasWhy(r.Table, boundName(r.RelRef))).
+					WithHint("%s, or opt out with `-- @policy-optout: %s (reason)`", joinAliasHint, p.Name))
+				break
+			}
 			if hasPlaceholder && unquotedFoldChanges(profile, boundName(r.RelRef)) {
 				// F7: the bound name folds to a different identifier
 				// unquoted, so no conjunct built from it scopes this
