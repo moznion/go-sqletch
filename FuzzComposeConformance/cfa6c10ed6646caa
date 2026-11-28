@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:A :one\n@if-present(\u05ee\u05f5\u05fc\u05ee\u07b5\u05fc\u05ee\u05f5\u05fc\u05ee\u07bb")

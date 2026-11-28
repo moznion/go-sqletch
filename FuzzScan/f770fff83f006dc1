@@ -1,0 +1,2 @@
+go test fuzz v1
+string("-- name:ZA :many\n#AZ@if-present(A,byy9)8\x00A\x00!")
